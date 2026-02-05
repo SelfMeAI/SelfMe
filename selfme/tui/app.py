@@ -27,16 +27,14 @@ class SelfMeApp(App):
         self.memory = MemoryStore()
         self.llm = None
         self.has_sent_message = False  # Track if user has sent any message
-        self.chat_content = ""  # Store all chat messages
 
     def compose(self) -> ComposeResult:
         """Build UI."""
         with Horizontal(id="header-container"):
             yield Static(self._logo_text(), id="logo-panel")
             yield Static(self._info_text(), id="info-panel")
-        # Scrollable chat area using Static for text selection
-        with VerticalScroll(id="chat-scroll"):
-            yield Static("", id="chat-log", markup=True)
+        # Scrollable chat area - messages will be added dynamically
+        yield VerticalScroll(id="chat-scroll")
         # Input box
         textarea = ChatInput(
             soft_wrap=True,
@@ -75,27 +73,39 @@ class SelfMeApp(App):
         try:
             self.llm = LLMClient()
         except ValueError as e:
-            self._add_message(f"[red]Error: {e}[/red]")
+            self._add_message(f"[red]Error: {e}[/red]", "error")
 
         # Disable focus on all widgets except input box
         self.query_one("#logo-panel").can_focus = False
         self.query_one("#info-panel").can_focus = False
-        self.query_one("#chat-log").can_focus = False
         self.query_one("#chat-scroll").can_focus = False
         self.query_one("#status-bar").can_focus = False
 
         textarea = self.query_one("#input-box", TextArea)
         textarea.focus()
 
-    def _add_message(self, text: str):
-        """Add a message to chat log."""
-        if self.chat_content:
-            self.chat_content += "\n"
-        self.chat_content += text
-        chat_log = self.query_one("#chat-log", Static)
-        chat_log.update(self.chat_content)
+    def _add_message(self, text: str, msg_type: str = "assistant"):
+        """Add a message to chat area.
+
+        Args:
+            text: Message text
+            msg_type: "user", "assistant", or "error"
+        """
+        chat_scroll = self.query_one("#chat-scroll", VerticalScroll)
+
+        # Create message widget with appropriate CSS class
+        if msg_type == "user":
+            msg_widget = Static(text, classes="user-message", markup=True)
+        elif msg_type == "error":
+            msg_widget = Static(text, classes="assistant-message", markup=True)
+        else:  # assistant
+            msg_widget = Static(text, classes="assistant-message", markup=True)
+
+        msg_widget.can_focus = False
+        chat_scroll.mount(msg_widget)
+
         # Auto scroll to bottom
-        self.call_after_refresh(lambda: self.query_one("#chat-scroll", VerticalScroll).scroll_end(animate=False))
+        self.call_after_refresh(lambda: chat_scroll.scroll_end(animate=False))
 
     def on_text_area_changed(self, event):
         """Handle text changes."""
@@ -128,7 +138,8 @@ class SelfMeApp(App):
             header = self.query_one("#header-container")
             header.display = False
 
-        self._add_message(f"[b]{text}[/b]")
+        # Add user message
+        self._add_message(f"[b]{text}[/b]", "user")
         self.memory.add("user", text)
         self.generate_response()
 
@@ -145,5 +156,5 @@ class SelfMeApp(App):
 
     def show_response(self, text: str):
         """Show response."""
-        self._add_message(f"[#0ea5e9]{text}[/#0ea5e9]")
+        self._add_message(text, "assistant")
         self.memory.add("assistant", text)

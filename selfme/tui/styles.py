@@ -30,10 +30,12 @@ Screen {
 }
 
 #chat-scroll {
+    width: 100%;
     height: 1fr;
     border: none;
     background: transparent;
     scrollbar-size: 0 0;
+    padding: 1 0 0 0;
 }
 
 #chat-log {
@@ -44,6 +46,7 @@ Screen {
 
 /* Input box - auto-height with heavy left border */
 #input-box {
+    width: 100%;
     height: auto;
     min-height: 3;
     max-height: 10;
@@ -74,5 +77,28 @@ Screen {
     content-align: right middle;
     padding: 0 2;
     margin: 0;
+}
+
+/* User message - same style as focused input box */
+.user-message {
+    width: 1fr;
+    height: auto;
+    border: none;
+    border-left: heavy #0ea5e9;
+    background: #0d1117;
+    color: #e6edf3;
+    padding: 1 2 1 2;
+    margin: 0 2 1 2;
+}
+
+/* Assistant message - no background, spacing */
+.assistant-message {
+    width: 1fr;
+    height: auto;
+    border: none;
+    background: transparent;
+    color: white;
+    padding: 1 2 1 2;
+    margin: 0 2 1 2;
 }
 """
