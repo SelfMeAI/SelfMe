@@ -101,4 +101,9 @@ Screen {
     padding: 1 2 1 2;
     margin: 0 2 1 2;
 }
+
+/* Clickable assistant message - add hover effect */
+.assistant-message.clickable:hover {
+    background: #0d1117;
+}
 """

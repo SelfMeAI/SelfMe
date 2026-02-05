@@ -2,7 +2,9 @@
 
 import threading
 
+import pyperclip
 from rich.markdown import Markdown
+from textual import events
 from textual.app import App, ComposeResult
 from textual.containers import Horizontal, VerticalScroll
 from textual.widgets import Static, TextArea
@@ -99,11 +101,15 @@ class SelfMeApp(App):
             msg_widget = Static(text, classes="user-message", markup=True)
         elif msg_type == "error":
             msg_widget = Static(text, classes="assistant-message", markup=True)
-        else:  # assistant - render as Markdown
+        else:  # assistant - render as Markdown and make clickable
             md = Markdown(text, code_theme="dracula")
-            msg_widget = Static(md, classes="assistant-message")
+            msg_widget = Static(md, classes="assistant-message clickable")
+            # Add raw_text attribute for copying
+            msg_widget.raw_text = text
 
-        msg_widget.can_focus = False
+        # Don't disable focus for clickable messages
+        if msg_type != "assistant":
+            msg_widget.can_focus = False
         chat_scroll.mount(msg_widget)
 
         # Auto scroll to bottom
@@ -117,6 +123,20 @@ class SelfMeApp(App):
     def on_chat_input_send_message(self, event: ChatInput.SendMessage):
         """Handle send message event from ChatInput."""
         self._send_message()
+
+    def on_click(self, event: events.Click):
+        """Handle click events globally."""
+        # Check if clicked widget has raw_text attribute
+        target = event.widget
+        while target is not None:
+            if hasattr(target, 'raw_text') and target.raw_text:
+                try:
+                    pyperclip.copy(target.raw_text)
+                    self.notify("Copied to clipboard", severity="information", timeout=2)
+                except Exception as e:
+                    self.notify(f"Copy failed: {e}", severity="error", timeout=3)
+                break
+            target = target.parent
 
     def _send_message(self):
         """Send message from textarea."""
@@ -151,8 +171,9 @@ class SelfMeApp(App):
             try:
                 # Create assistant message widget first
                 chat_scroll = self.query_one("#chat-scroll", VerticalScroll)
-                msg_widget = Static("", classes="assistant-message")
-                msg_widget.can_focus = False
+                msg_widget = Static("", classes="assistant-message clickable")
+                # Initialize raw_text for copying
+                msg_widget.raw_text = ""
 
                 # Mount the widget
                 self.call_from_thread(chat_scroll.mount, msg_widget)
@@ -164,6 +185,8 @@ class SelfMeApp(App):
                     # Render as Markdown
                     md = Markdown(full_response, code_theme="dracula")
                     self.call_from_thread(msg_widget.update, md)
+                    # Update raw_text for copying
+                    msg_widget.raw_text = full_response
                     self.call_from_thread(lambda: chat_scroll.scroll_end(animate=False))
 
                 # Save to memory
