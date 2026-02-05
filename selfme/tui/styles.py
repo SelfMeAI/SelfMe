@@ -29,13 +29,17 @@ Screen {
     content-align: left middle;
 }
 
-#chat-log {
+#chat-scroll {
     height: 1fr;
     border: none;
+    background: transparent;
+    scrollbar-size: 0 0;
+}
+
+#chat-log {
     padding: 1 2;
     background: transparent;
-    scrollbar-background: transparent;
-    scrollbar-color: #0ea5e9;
+    width: 100%;
 }
 
 /* Input box - auto-height with heavy left border */
