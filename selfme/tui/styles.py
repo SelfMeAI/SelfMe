@@ -68,14 +68,35 @@ Screen {
     background: transparent;
 }
 
-/* Status bar - fixed height, right-aligned, bottom */
-#status-bar {
+/* Status container - fixed height, bottom */
+#status-container {
     height: 1;
     width: 100%;
     background: transparent;
+    layout: horizontal;
+    padding: 0;
+    margin: 0;
+}
+
+/* Loading indicator in status bar */
+#loading-indicator {
+    width: auto;
+    height: 1;
+    background: transparent;
+    color: #0ea5e9;
+    padding: 0 1 0 2;
+    margin: 0;
+    content-align: left middle;
+}
+
+/* Status bar - fixed height, right-aligned, bottom */
+#status-bar {
+    height: 1;
+    width: 1fr;
+    background: transparent;
     color: #6e7681;
     content-align: right middle;
-    padding: 0 2;
+    padding: 0 2 0 0;
     margin: 0;
 }
 

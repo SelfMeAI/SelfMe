@@ -30,6 +30,20 @@ class SelfMeApp(App):
         self.memory = MemoryStore()
         self.llm = None
         self.has_sent_message = False  # Track if user has sent any message
+        self.loading_timer = None
+        self.loading_frame = 0
+        self.loading_chars = [
+            "▱▱▱▱▱",
+            "▰▱▱▱▱",
+            "▰▰▱▱▱",
+            "▰▰▰▱▱",
+            "▰▰▰▰▱",
+            "▰▰▰▰▰",
+            "▱▰▰▰▰",
+            "▱▱▰▰▰",
+            "▱▱▱▰▰",
+            "▱▱▱▱▰",
+        ]  # Block progress bar animation
 
     def compose(self) -> ComposeResult:
         """Build UI."""
@@ -46,8 +60,10 @@ class SelfMeApp(App):
         )
         textarea.cursor_blink = False
         yield textarea
-        # Status bar at bottom
-        yield Static(self._status_text(), id="status-bar")
+        # Status bar at bottom with loading indicator
+        with Horizontal(id="status-container"):
+            yield Static("", id="loading-indicator")
+            yield Static(self._status_text(), id="status-bar")
 
     def _logo_text(self) -> str:
         """Create logo text."""
@@ -84,8 +100,36 @@ class SelfMeApp(App):
         self.query_one("#chat-scroll").can_focus = False
         self.query_one("#status-bar").can_focus = False
 
+        # Hide loading indicator initially
+        loading = self.query_one("#loading-indicator", Static)
+        loading.display = False
+        loading.can_focus = False
+
         textarea = self.query_one("#input-box", TextArea)
         textarea.focus()
+
+    def _update_loading_animation(self):
+        """Update loading animation frame."""
+        loading = self.query_one("#loading-indicator", Static)
+        char = self.loading_chars[self.loading_frame % len(self.loading_chars)]
+        loading.update(f"[#0ea5e9]🐙 {char}[/]")
+        self.loading_frame += 1
+
+    def _start_loading(self):
+        """Start loading animation."""
+        loading = self.query_one("#loading-indicator", Static)
+        loading.display = True
+        self.loading_frame = 0
+        self._update_loading_animation()
+        self.loading_timer = self.set_interval(0.1, self._update_loading_animation)
+
+    def _stop_loading(self):
+        """Stop loading animation."""
+        if self.loading_timer:
+            self.loading_timer.stop()
+            self.loading_timer = None
+        loading = self.query_one("#loading-indicator", Static)
+        loading.display = False
 
     def _add_message(self, text: str, msg_type: str = "assistant"):
         """Add a message to chat area.
@@ -160,6 +204,9 @@ class SelfMeApp(App):
             header = self.query_one("#header-container")
             header.display = False
 
+        # Show loading indicator
+        self._start_loading()
+
         # Add user message
         self._add_message(f"[b]{text}[/b]", "user")
         self.memory.add("user", text)
@@ -209,8 +256,13 @@ class SelfMeApp(App):
                 # Save to memory
                 self.call_from_thread(self.memory.add, "assistant", full_response)
 
+                # Hide loading indicator when done
+                self.call_from_thread(self._stop_loading)
+
             except Exception as e:
                 self.call_from_thread(self._add_message, f"[red]Error: {e}[/]", "error")
+                # Hide loading indicator on error
+                self.call_from_thread(self._stop_loading)
 
         threading.Thread(target=gen, daemon=True).start()
 
