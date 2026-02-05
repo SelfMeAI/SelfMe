@@ -1,0 +1,38 @@
+[tool.poetry]
+name = "selfme"
+version = "0.1.0"
+description = "Your AI Self - Personal embodied AI agent"
+authors = ["Q1D40 <q1d40@qq.com>"]
+readme = "README.md"
+
+[tool.poetry.dependencies]
+python = "^3.10"
+textual = "^0.52.1"
+openai = "^1.35.0"
+rich = "^13.7.0"
+python-dotenv = "^1.0.0"
+pydantic = "^2.7.0"
+pydantic-settings = "^2.3.0"
+
+[tool.poetry.group.dev.dependencies]
+pytest = "^8.2.0"
+textual-dev = "^1.5.1"
+ruff = "^0.4.0"
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"
+
+[tool.poetry.scripts]
+selfme = "selfme.cli:main"
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "N", "W", "UP", "B", "C4", "SIM"]
+ignore = ["E501"]
+
+[tool.ruff.lint.pydocstyle]
+convention = "google"
