@@ -206,7 +206,7 @@ class SelfMeApp(App):
 
         # Check for exit command
         if text.lower() == "exit":
-            self.exit()
+            self.action_quit()
             return
 
         # Clear input box
