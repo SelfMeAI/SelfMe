@@ -26,15 +26,21 @@ class SelfMeApp(App):
         super().__init__()
         self.memory = MemoryStore()
         self.llm = None
+        self.has_sent_message = False  # Track if user has sent any message
 
     def compose(self) -> ComposeResult:
         """Build UI."""
         with Horizontal(id="header-container"):
             yield Static(self._logo_text(), id="logo-panel")
             yield Static(self._info_text(), id="info-panel")
+        # RichLog with mouse wheel scrolling enabled
         yield RichLog(id="chat-log", highlight=True, wrap=True, markup=True)
-        # Input box
-        textarea = ChatInput(soft_wrap=True, show_line_numbers=False, id="input-box")
+        # Input box - only focusable element with placeholder
+        textarea = ChatInput(
+            soft_wrap=True,
+            show_line_numbers=False,
+            id="input-box",
+        )
         textarea.cursor_blink = False
         yield textarea
         # Status bar at bottom
@@ -62,10 +68,6 @@ class SelfMeApp(App):
     def _status_text(self) -> str:
         return "[b]Ctrl+Enter[/b] New Line │ [b]Ctrl+C[/b] Quit"
 
-    def update_status(self):
-        """Update status bar."""
-        self.query_one("#status-bar", Static).update(self._status_text())
-
     def on_mount(self):
         """Init and focus input."""
         try:
@@ -73,30 +75,20 @@ class SelfMeApp(App):
         except ValueError as e:
             self.query_one("#chat-log", RichLog).write(f"[red]Error: {e}[/]")
 
+        # Disable focus on all widgets except input box
+        self.query_one("#logo-panel").can_focus = False
+        self.query_one("#info-panel").can_focus = False
+        self.query_one("#chat-log").can_focus = False
+        self.query_one("#status-bar").can_focus = False
+
         textarea = self.query_one("#input-box", TextArea)
-        textarea.text = "Type message and press Enter"
-        textarea.add_class("is-empty")
+        textarea.text = ""
         textarea.focus()
 
     def on_text_area_changed(self, event):
         """Handle text changes."""
-        textarea = event.text_area
-        current_text = textarea.text
-
-        if textarea.has_class("is-empty"):
-            if current_text != "Type message and press Enter":
-                textarea.remove_class("is-empty")
-                # Extract user input
-                user_text = current_text.replace("Type message and press Enter", "")
-                textarea.text = user_text
-                # Move cursor to end
-                if user_text:
-                    lines = user_text.split("\n")
-                    textarea.cursor_location = (len(lines) - 1, len(lines[-1]))
-        else:
-            if not current_text.strip():
-                textarea.text = "Type message and press Enter"
-                textarea.add_class("is-empty")
+        # No special handling needed, just let user type naturally
+        pass
 
     def on_chat_input_send_message(self, event: ChatInput.SendMessage):
         """Handle send message event from ChatInput."""
@@ -105,35 +97,27 @@ class SelfMeApp(App):
     def _send_message(self):
         """Send message from textarea."""
         textarea = self.query_one("#input-box", TextArea)
-
-        # Skip if placeholder
-        if textarea.has_class("is-empty"):
-            return
-
         text = textarea.text.strip()
+
         if not text:
             return
 
-        # Clear and reset placeholder
-        textarea.text = "Type message and press Enter"
-        textarea.add_class("is-empty")
-
-        if text == "c":
-            self.memory.clear()
-            self.query_one("#chat-log", RichLog).clear()
-            self.query_one("#chat-log", RichLog).write("[dim]Chat cleared[/dim]")
-            self.update_status()
+        # Check for exit command
+        if text.lower() == "exit":
+            self.exit()
             return
 
-        if text == "?":
-            self.query_one("#chat-log", RichLog).write(
-                "[dim]Commands: c=clear, ?=help, Ctrl+C=quit, Enter=send, Ctrl+Enter=newline[/dim]"
-            )
-            return
+        # Clear input box
+        textarea.text = ""
+
+        # Hide header on first message
+        if not self.has_sent_message:
+            self.has_sent_message = True
+            header = self.query_one("#header-container")
+            header.display = False
 
         self.query_one("#chat-log", RichLog).write(f"[b]{text}[/b]\n")
         self.memory.add("user", text)
-        self.update_status()
         self.generate_response()
 
     def generate_response(self):
@@ -151,4 +135,3 @@ class SelfMeApp(App):
         """Show response."""
         self.query_one("#chat-log", RichLog).write(f"[#0ea5e9]{text}[/#0ea5e9]\n")
         self.memory.add("assistant", text)
-        self.update_status()

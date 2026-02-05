@@ -12,6 +12,11 @@ class ChatInput(TextArea):
 
         pass
 
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+        # Set placeholder text
+        self.placeholder = "Type message and press Enter"
+
     async def _on_key(self, event) -> None:
         """Override key handling to intercept Enter."""
         # Check for Ctrl+Enter (multiple key combinations for cross-platform support)

@@ -17,14 +17,14 @@ Screen {
 #logo-panel {
     width: 20;
     height: 100%;
-    padding: 1 2;
+    padding: 1 2 1 4;
     color: #0ea5e9;
 }
 
 #info-panel {
     width: 1fr;
     height: 100%;
-    padding: 1;
+    padding: 1 4 1 2;
     color: #0ea5e9;
     content-align: left middle;
 }
@@ -59,12 +59,6 @@ Screen {
 
 #input-box .text-area--cursor-line {
     background: transparent;
-}
-
-/* Placeholder styles */
-#input-box.is-empty {
-    color: #6e7681;
-    text-style: italic;
 }
 
 /* Status bar - fixed height, right-aligned, bottom */
