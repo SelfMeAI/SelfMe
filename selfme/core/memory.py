@@ -2,7 +2,6 @@
 
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import Optional
 
 
 @dataclass
@@ -37,7 +36,7 @@ class MemoryStore:
         """Get recent n messages."""
         return self.messages[-n:]
 
-    def to_llm_format(self, n: Optional[int] = None) -> list[dict]:
+    def to_llm_format(self, n: int | None = None) -> list[dict]:
         """
         Convert to LLM API format.
 

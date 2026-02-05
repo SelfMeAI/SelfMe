@@ -1,6 +1,6 @@
 """LLM client wrapper supporting OpenAI and Anthropic protocols."""
 
-from typing import Iterator
+from collections.abc import Iterator
 
 from selfme.config import settings
 
@@ -40,7 +40,7 @@ class LLMClient:
             raise ImportError(
                 "Anthropic protocol requires the SDK:\n"
                 "pip install anthropic"
-            )
+            ) from None
 
         self.client = anthropic.Anthropic(
             api_key=self.api_key,
@@ -62,10 +62,10 @@ class LLMClient:
                 result = self._chat_anthropic(messages)
             else:
                 result = self._chat_openai(messages)
-            
+
             # Consume generator and return complete string
             return "".join(result)
-            
+
         except Exception as e:
             return f"[Error] LLM call failed: {e}"
 
