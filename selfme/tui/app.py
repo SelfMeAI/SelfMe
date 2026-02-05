@@ -2,6 +2,7 @@
 
 import threading
 
+from rich.markdown import Markdown
 from textual.app import App, ComposeResult
 from textual.containers import Horizontal, VerticalScroll
 from textual.widgets import Static, TextArea
@@ -98,8 +99,9 @@ class SelfMeApp(App):
             msg_widget = Static(text, classes="user-message", markup=True)
         elif msg_type == "error":
             msg_widget = Static(text, classes="assistant-message", markup=True)
-        else:  # assistant
-            msg_widget = Static(text, classes="assistant-message", markup=True)
+        else:  # assistant - render as Markdown
+            md = Markdown(text, code_theme="dracula")
+            msg_widget = Static(md, classes="assistant-message")
 
         msg_widget.can_focus = False
         chat_scroll.mount(msg_widget)
@@ -144,13 +146,31 @@ class SelfMeApp(App):
         self.generate_response()
 
     def generate_response(self):
-        """Generate response."""
+        """Generate streaming response with Markdown rendering."""
         def gen():
             try:
-                response = self.llm.chat(self.memory.to_llm_format(n=10))
-                self.call_from_thread(self.show_response, response)
+                # Create assistant message widget first
+                chat_scroll = self.query_one("#chat-scroll", VerticalScroll)
+                msg_widget = Static("", classes="assistant-message")
+                msg_widget.can_focus = False
+
+                # Mount the widget
+                self.call_from_thread(chat_scroll.mount, msg_widget)
+
+                # Stream response
+                full_response = ""
+                for chunk in self.llm.chat_stream(self.memory.to_llm_format(n=10)):
+                    full_response += chunk
+                    # Render as Markdown
+                    md = Markdown(full_response, code_theme="dracula")
+                    self.call_from_thread(msg_widget.update, md)
+                    self.call_from_thread(lambda: chat_scroll.scroll_end(animate=False))
+
+                # Save to memory
+                self.call_from_thread(self.memory.add, "assistant", full_response)
+
             except Exception as e:
-                self.call_from_thread(self.show_response, f"[red]Error: {e}[/]")
+                self.call_from_thread(self._add_message, f"[red]Error: {e}[/]", "error")
 
         threading.Thread(target=gen, daemon=True).start()
 
