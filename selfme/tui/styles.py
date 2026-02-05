@@ -99,11 +99,22 @@ Screen {
     background: transparent;
     color: white;
     padding: 1 2 1 2;
-    margin: 0 2 1 2;
+    margin: 0 2 0 2;
 }
 
 /* Clickable assistant message - add hover effect */
 .assistant-message.clickable:hover {
     background: #0d1117;
+}
+
+/* Message metadata - model and time info */
+.message-meta {
+    width: 1fr;
+    height: auto;
+    border: none;
+    background: transparent;
+    color: #6e7681;
+    padding: 0 2 0 2;
+    margin: 0 2 1 2;
 }
 """

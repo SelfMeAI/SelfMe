@@ -167,8 +167,12 @@ class SelfMeApp(App):
 
     def generate_response(self):
         """Generate streaming response with Markdown rendering."""
+        import time
+
         def gen():
             try:
+                start_time = time.time()
+
                 # Create assistant message widget first
                 chat_scroll = self.query_one("#chat-scroll", VerticalScroll)
                 msg_widget = Static("", classes="assistant-message clickable")
@@ -188,6 +192,19 @@ class SelfMeApp(App):
                     # Update raw_text for copying
                     msg_widget.raw_text = full_response
                     self.call_from_thread(lambda: chat_scroll.scroll_end(animate=False))
+
+                # Calculate response time
+                elapsed_time = time.time() - start_time
+
+                # Add metadata info below the message
+                meta_widget = Static(
+                    f"[dim]🐙 {settings.llm_model} · {elapsed_time:.1f}s[/dim]",
+                    classes="message-meta",
+                    markup=True
+                )
+                meta_widget.can_focus = False
+                self.call_from_thread(chat_scroll.mount, meta_widget)
+                self.call_from_thread(lambda: chat_scroll.scroll_end(animate=False))
 
                 # Save to memory
                 self.call_from_thread(self.memory.add, "assistant", full_response)
