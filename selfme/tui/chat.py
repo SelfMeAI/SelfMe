@@ -1,14 +1,27 @@
-"""聊天界面组件."""
+"""Chat interface components."""
+
+from threading import Thread
 
 from textual.containers import Vertical
-from textual.widgets import Input, RichLog, Static
+from textual.message import Message
+from textual.widgets import Input, RichLog
 
+from selfme.config import settings
 from selfme.core.llm import LLMClient
 from selfme.core.memory import MemoryStore
 
 
+class TokenMessage(Message):
+    """Streaming token message."""
+    
+    def __init__(self, token: str, is_done: bool = False) -> None:
+        self.token = token
+        self.is_done = is_done
+        super().__init__()
+
+
 class ChatContainer(Vertical):
-    """聊天容器组件."""
+    """Chat container component."""
 
     DEFAULT_CSS = """
     ChatContainer {
@@ -30,20 +43,6 @@ class ChatContainer(Vertical):
     #chat-input:focus {
         border: tall $primary;
     }
-
-    .user-message {
-        color: $text;
-        background: $primary-darken-3;
-        padding: 0 1;
-        margin: 0 0 1 0;
-    }
-
-    .assistant-message {
-        color: $text;
-        background: $surface-darken-1;
-        padding: 0 1;
-        margin: 0 0 1 0;
-    }
     """
 
     def __init__(self):
@@ -51,84 +50,106 @@ class ChatContainer(Vertical):
         self.memory = MemoryStore()
         self.llm = None
         self.is_generating = False
+        self.current_response = ""
 
     def compose(self):
-        """构建组件."""
-        # 聊天历史显示区
+        """Build components."""
         yield RichLog(id="chat-history", highlight=True, wrap=True)
-        # 输入框
-        yield Input(placeholder="输入消息，按 Enter 发送...", id="chat-input")
+        yield Input(placeholder="Type message and press Enter...", id="chat-input")
 
     def on_mount(self):
-        """组件挂载时初始化."""
+        """Initialize on component mount."""
         try:
             self.llm = LLMClient()
             self.add_system_message(
-                f"🦞 欢迎回来，七道师！\n"
-                f"🐙 SelfMe v0.1.0 已就绪\n"
-                f"[dim]模型: {self.llm.model}[/dim]"
+                f"🦞 Welcome back!\n"
+                f"🐙 SelfMe v{settings.app_version} is ready\n"
+                f"[dim]Model: {self.llm.model}[/dim]"
             )
         except ValueError as e:
-            self.add_system_message(f"⚠️ 初始化失败: {e}\n请检查 .env 文件中的 OPENAI_API_KEY")
+            self.add_system_message(f"⚠️ Initialization failed: {e}\nPlease check LLM_API_KEY in .env file")
 
     def on_input_submitted(self, event: Input.Submitted):
-        """处理输入提交."""
+        """Handle input submission."""
         if not event.value.strip() or self.is_generating:
             return
 
         user_message = event.value.strip()
-
-        # 清空输入框
         input_widget = self.query_one("#chat-input", Input)
         input_widget.value = ""
 
-        # 添加用户消息
         self.add_user_message(user_message)
-
-        # 调用 LLM 生成回复
-        self.generate_response(user_message)
+        self.start_generation(user_message)
 
     def add_user_message(self, content: str):
-        """添加用户消息到显示区."""
+        """Add user message to display."""
         history = self.query_one("#chat-history", RichLog)
-        history.write(f"[b]你:[/b] {content}")
+        history.write(f"[b]You:[/b] {content}")
         self.memory.add("user", content)
 
-    def add_assistant_message(self, content: str):
-        """添加助手消息到显示区."""
-        history = self.query_one("#chat-history", RichLog)
-        history.write(f"[b]🐙:[/b] {content}")
-        self.memory.add("assistant", content)
-
     def add_system_message(self, content: str):
-        """添加系统消息."""
+        """Add system message."""
         history = self.query_one("#chat-history", RichLog)
         history.write(f"[dim]{content}[/dim]")
 
-    def generate_response(self, user_message: str):
-        """生成 LLM 回复 (流式)."""
+    def start_generation(self, user_message: str):
+        """Start generating response."""
         if not self.llm:
             return
 
         self.is_generating = True
+        self.current_response = ""
+
+        messages = self.memory.to_llm_format(n=10)
+
+        # Run LLM streaming in background thread
+        def generate_in_thread():
+            try:
+                for token in self.llm.chat_stream(messages):
+                    self.post_message(TokenMessage(token))
+                self.post_message(TokenMessage("", is_done=True))
+            except Exception as e:
+                self.post_message(TokenMessage(f"[Error: {e}]", is_done=True))
+
+        thread = Thread(target=generate_in_thread, daemon=True)
+        thread.start()
+
+    def on_token_message(self, message: TokenMessage):
+        """Handle streaming token."""
         history = self.query_one("#chat-history", RichLog)
 
-        # 获取完整上下文
-        messages = self.memory.to_llm_format(n=10)  # 最近10条作为上下文
+        if message.is_done:
+            # Complete, save to memory
+            self.memory.add("assistant", self.current_response)
+            self.is_generating = False
+            self.current_response = ""
+        else:
+            # Append token and refresh display
+            self.current_response += message.token
+            
+            # Batch update: every 3 tokens or punctuation
+            if len(self.current_response) % 3 == 0 or message.token in ".!?，。！？":
+                self.refresh_chat_display(history)
 
-        # 流式生成，收集完整响应
-        full_response = ""
-        for token in self.llm.chat(messages, stream=True):
-            full_response += token
-
-        # 一次性显示完整回复
-        history.write(f"[b]🐙:[/b] {full_response}")
-        self.memory.add("assistant", full_response)
-        self.is_generating = False
+    def refresh_chat_display(self, history: RichLog):
+        """Refresh chat display (including streaming response)."""
+        # Clear and rewrite all content
+        history.clear()
+        
+        # Write historical messages
+        for msg in self.memory.messages:
+            if msg.role == "user":
+                history.write(f"[b]You:[/b] {msg.content}")
+            elif msg.role == "assistant":
+                history.write(f"[b]🐙:[/b] {msg.content}")
+        
+        # Write generating response
+        if self.is_generating:
+            history.write(f"[b]🐙:[/b] {self.current_response}")
 
     def clear_chat(self):
-        """清空对话."""
+        """Clear chat."""
         self.memory.clear()
         history = self.query_one("#chat-history", RichLog)
         history.clear()
-        self.add_system_message("🗑️ 对话已清空")
+        self.add_system_message("🗑️ Chat cleared")

@@ -1,63 +1,136 @@
-"""LLM 调用封装 - 通用 OpenAI 兼容 API."""
+"""LLM client wrapper supporting OpenAI and Anthropic protocols."""
 
 from typing import Iterator
-
-from openai import OpenAI
 
 from selfme.config import settings
 
 
 class LLMClient:
-    """LLM 客户端，支持任意 OpenAI 兼容 API (Kimi, OpenAI, Azure, 本地等)."""
+    """LLM client supporting multiple API protocols."""
 
     def __init__(self):
-        if not settings.openai_api_key:
+        if not settings.llm_api_key:
             raise ValueError(
-                "OPENAI_API_KEY not set. Please check your .env file.\n"
-                "默认使用 Kimi: https://platform.moonshot.cn/"
+                "LLM_API_KEY not set. Please check your .env file."
             )
 
-        self.client = OpenAI(
-            api_key=settings.openai_api_key,
-            base_url=settings.openai_base_url,
-        )
-        self.model = settings.openai_model
+        self.base_url = settings.llm_base_url
+        self.model = settings.llm_model
+        self.api_key = settings.llm_api_key
+        self.protocol = settings.llm_protocol
 
-    def chat(self, messages: list[dict], stream: bool = True) -> Iterator[str] | str:
+        if self.protocol == "anthropic":
+            self._init_anthropic()
+        else:
+            self._init_openai()
+
+    def _init_openai(self):
+        """Initialize OpenAI protocol client."""
+        from openai import OpenAI
+        self.client = OpenAI(
+            api_key=self.api_key,
+            base_url=self.base_url,
+        )
+
+    def _init_anthropic(self):
+        """Initialize Anthropic protocol client."""
+        try:
+            import anthropic
+        except ImportError:
+            raise ImportError(
+                "Anthropic protocol requires the SDK:\n"
+                "pip install anthropic"
+            )
+
+        self.client = anthropic.Anthropic(
+            api_key=self.api_key,
+            base_url=self.base_url,
+        )
+
+    def chat(self, messages: list[dict]) -> str:
         """
-        发送聊天请求.
+        Send chat request and return complete response.
 
         Args:
-            messages: 消息列表，格式 [{"role": "user", "content": "..."}, ...]
-            stream: 是否流式返回
+            messages: List of messages in format [{"role": "user", "content": "..."}, ...]
 
         Returns:
-            流式返回时: 生成器，每次 yield 一个 token
-            非流式返回时: 完整响应字符串
+            Complete response string
         """
         try:
-            response = self.client.chat.completions.create(
-                model=self.model,
-                messages=messages,
-                stream=stream,
-                temperature=0.7,
-            )
-
-            if stream:
-                for chunk in response:
-                    if chunk.choices and chunk.choices[0].delta.content:
-                        yield chunk.choices[0].delta.content
+            if self.protocol == "anthropic":
+                result = self._chat_anthropic(messages)
             else:
-                return response.choices[0].message.content
-
+                result = self._chat_openai(messages)
+            
+            # Consume generator and return complete string
+            return "".join(result)
+            
         except Exception as e:
-            error_msg = f"[错误] LLM 调用失败: {e}"
-            if stream:
-                yield error_msg
-            else:
-                return error_msg
+            return f"[Error] LLM call failed: {e}"
 
-    def chat_simple(self, message: str) -> Iterator[str]:
-        """简单对话，单条消息，返回流式响应."""
+    def chat_stream(self, messages: list[dict]) -> Iterator[str]:
+        """
+        Send streaming chat request.
+
+        Args:
+            messages: List of messages
+
+        Yields:
+            Each token string
+        """
+        try:
+            if self.protocol == "anthropic":
+                yield from self._chat_anthropic(messages)
+            else:
+                yield from self._chat_openai(messages)
+        except Exception as e:
+            yield f"[Error] LLM call failed: {e}"
+
+    def _chat_openai(self, messages: list[dict]) -> Iterator[str]:
+        """OpenAI protocol streaming call."""
+        response = self.client.chat.completions.create(
+            model=self.model,
+            messages=messages,
+            stream=True,
+            temperature=0.7,
+        )
+
+        for chunk in response:
+            if chunk.choices and chunk.choices[0].delta.content:
+                yield chunk.choices[0].delta.content
+
+    def _chat_anthropic(self, messages: list[dict]) -> Iterator[str]:
+        """Anthropic protocol streaming call."""
+        # Convert message format
+        system = ""
+        anthropic_messages = []
+
+        for msg in messages:
+            if msg["role"] == "system":
+                system = msg["content"]
+            else:
+                anthropic_messages.append({
+                    "role": msg["role"],
+                    "content": msg["content"],
+                })
+
+        kwargs = {
+            "model": self.model,
+            "messages": anthropic_messages,
+            "max_tokens": 4096,
+            "stream": True,
+        }
+        if system:
+            kwargs["system"] = system
+
+        response = self.client.messages.create(**kwargs)
+
+        for chunk in response:
+            if chunk.type == "content_block_delta" and chunk.delta.text:
+                yield chunk.delta.text
+
+    def chat_simple(self, message: str) -> str:
+        """Simple chat with single message, returns complete response."""
         messages = [{"role": "user", "content": message}]
-        yield from self.chat(messages, stream=True)
+        return self.chat(messages)

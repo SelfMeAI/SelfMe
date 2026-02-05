@@ -1,4 +1,4 @@
-"""TUI 主应用."""
+"""TUI main application."""
 
 from textual.app import App, ComposeResult
 from textual.containers import Horizontal, Vertical
@@ -9,7 +9,7 @@ from selfme.tui.chat import ChatContainer
 
 
 class SelfMeApp(App):
-    """SelfMe TUI 主应用."""
+    """SelfMe TUI main application."""
 
     CSS = """
     Screen {
@@ -42,33 +42,33 @@ class SelfMeApp(App):
     """
 
     BINDINGS = [
-        ("q", "quit", "退出"),
-        ("c", "clear_chat", "清空对话"),
+        ("q", "quit", "Quit"),
+        ("c", "clear_chat", "Clear Chat"),
     ]
 
     def compose(self) -> ComposeResult:
-        """构建界面."""
+        """Build interface."""
         yield Header(show_clock=True)
 
         with Horizontal(id="main-container"):
-            # 侧边栏 (后续放记忆时间线)
+            # Sidebar (for memory timeline in future versions)
             with Vertical(id="sidebar"):
                 yield Static(f"🐙 {settings.app_name}\nv{settings.app_version}", classes="title")
-                yield Static("侧边栏\n(记忆时间线\n后续版本)", id="sidebar-content")
+                yield Static("Sidebar\n(Memory timeline\ncoming in future versions)", id="sidebar-content")
 
-            # 聊天区域
+            # Chat area
             with Vertical(id="chat-area"):
                 yield ChatContainer()
 
         yield Footer()
 
     def action_clear_chat(self):
-        """清空对话动作."""
+        """Clear chat action."""
         chat = self.query_one(ChatContainer)
         chat.clear_chat()
 
 
 def run_app():
-    """启动 TUI 应用."""
+    """Launch TUI application."""
     app = SelfMeApp()
     app.run()

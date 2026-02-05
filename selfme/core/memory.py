@@ -7,48 +7,48 @@ from typing import Optional
 
 @dataclass
 class Message:
-    """单条消息."""
+    """Single message."""
 
-    role: str  # "user" or "assistant" or "system"
+    role: str  # "user", "assistant", or "system"
     content: str
     timestamp: datetime = field(default_factory=datetime.now)
     id: str = field(default_factory=lambda: datetime.now().strftime("%Y%m%d%H%M%S%f"))
 
 
 class MemoryStore:
-    """内存对话存储 (v0.1 简化版)."""
+    """In-memory conversation storage (v0.1 simplified version)."""
 
     def __init__(self, max_messages: int = 100):
         self.messages: list[Message] = []
         self.max_messages = max_messages
 
     def add(self, role: str, content: str) -> Message:
-        """添加消息."""
+        """Add message."""
         msg = Message(role=role, content=content)
         self.messages.append(msg)
 
-        # 限制消息数量，防止内存无限增长
+        # Limit message count to prevent unbounded memory growth
         if len(self.messages) > self.max_messages:
             self.messages = self.messages[-self.max_messages :]
 
         return msg
 
     def get_recent(self, n: int = 10) -> list[Message]:
-        """获取最近 n 条消息."""
+        """Get recent n messages."""
         return self.messages[-n:]
 
     def to_llm_format(self, n: Optional[int] = None) -> list[dict]:
         """
-        转换为 LLM API 格式.
+        Convert to LLM API format.
 
         Args:
-            n: 最近 n 条，None 表示全部
+            n: Recent n messages, None for all
         """
         messages = self.get_recent(n) if n else self.messages
         return [{"role": m.role, "content": m.content} for m in messages]
 
     def clear(self):
-        """清空记忆."""
+        """Clear memory."""
         self.messages = []
 
     def __len__(self) -> int:

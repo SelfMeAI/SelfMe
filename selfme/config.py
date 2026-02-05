@@ -6,25 +6,25 @@ from pathlib import Path
 from dotenv import load_dotenv
 from pydantic_settings import BaseSettings
 
-# 加载 .env 文件
+# Load .env file
 load_dotenv()
 
 
 class Settings(BaseSettings):
-    """应用配置."""
+    """Application settings."""
 
-    # LLM API 配置 (通用 OpenAI 兼容格式)
-    # 默认使用 Kimi，但可配置其他服务 (OpenAI, Azure, 本地模型等)
-    openai_api_key: str = ""
-    openai_base_url: str = "https://api.moonshot.cn/v1"  # 默认 Kimi
-    openai_model: str = "kimi-k2-5"  # 默认模型
+    # LLM API Configuration (supports OpenAI / Anthropic protocols)
+    llm_protocol: str = "openai"  # openai | anthropic
+    llm_api_key: str = ""
+    llm_base_url: str = ""
+    llm_model: str = "gpt-4"  # e.g., gpt-4, kimi-k2-5, claude-3-opus, etc.
 
-    # 应用配置
+    # Application settings
     app_name: str = "SelfMe"
     app_version: str = "0.1.0"
     debug: bool = False
 
-    # 数据目录
+    # Data directory
     data_dir: Path = Path.home() / ".selfme"
 
     class Config:
@@ -33,9 +33,9 @@ class Settings(BaseSettings):
 
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
-        # 确保数据目录存在
+        # Ensure data directory exists
         self.data_dir.mkdir(parents=True, exist_ok=True)
 
 
-# 全局配置实例
+# Global settings instance
 settings = Settings()

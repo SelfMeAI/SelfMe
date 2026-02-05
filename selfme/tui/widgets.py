@@ -1,10 +1,10 @@
-"""自定义 TUI 组件."""
+"""Custom TUI widgets."""
 
 from textual.widgets import Static
 
 
 class Logo(Static):
-    """Logo 显示组件."""
+    """Logo display component."""
 
     DEFAULT_CSS = """
     Logo {
