@@ -75,7 +75,7 @@ Screen {
     background: transparent;
     layout: horizontal;
     padding: 0;
-    margin: 0;
+    margin: 0 0 1 0;
 }
 
 /* Loading indicator in status bar */
