@@ -38,6 +38,8 @@ venv.bak/
 *.swo
 *~
 .DS_Store
+Thumbs.db
+nul
 
 # Testing
 .pytest_cache/
@@ -48,4 +50,5 @@ htmlcov/
 
 # SelfMe specific
 .selfme/
+.claude/
 *.log

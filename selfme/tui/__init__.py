@@ -1,1 +1,1 @@
-"""TUI components for SelfMe."""
+"""TUI components (deprecated, using Rich CLI instead)."""

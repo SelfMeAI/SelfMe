@@ -1,6 +1,6 @@
-"""SelfMe 包入口 - 支持 python -m selfme."""
+"""SelfMe package entry - supports python -m selfme."""
 
-from selfme.cli import main
+from selfme.cli import run_app
 
 if __name__ == "__main__":
-    main()
+    run_app()
