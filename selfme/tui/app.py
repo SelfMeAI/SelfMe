@@ -25,6 +25,20 @@ class SelfMeApp(App):
         ("ctrl+c", "quit", "Quit"),
     ]
 
+    def action_quit(self):
+        """Show goodbye message before quitting."""
+        import asyncio
+
+        # Show goodbye message in chat area
+        self._add_message("👋 Goodbye!", "assistant")
+
+        # Wait a bit then exit
+        async def delayed_exit():
+            await asyncio.sleep(1)
+            self.exit()
+
+        asyncio.create_task(delayed_exit())
+
     def __init__(self):
         super().__init__()
         self.memory = MemoryStore()
