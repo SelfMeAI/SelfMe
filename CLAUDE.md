@@ -24,7 +24,9 @@ cp .env.example .env
 poetry run selfme
 
 # Run the Web UI application
-poetry run selfme-web
+poetry run selfme --web
+# or use short form
+poetry run selfme -w
 
 # Alternative entry points
 poetry run python -m selfme

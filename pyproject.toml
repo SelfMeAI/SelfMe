@@ -30,7 +30,6 @@ build-backend = "poetry.core.masonry.api"
 
 [tool.poetry.scripts]
 selfme = "selfme.cli:main"
-selfme-web = "selfme.web.app:main"
 
 [tool.ruff]
 line-length = 100

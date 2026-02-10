@@ -19,7 +19,17 @@
       </svg>
     </button>
 
-    <ChatInput @send="handleSend" :disabled="isStreaming" />
+    <!-- Queue display -->
+    <div v-if="messageQueue.length > 0" class="queue-container">
+      <div class="queue-header">
+        📋 Queued ({{ messageQueue.length }})
+      </div>
+      <div class="queue-message">
+        ▸ {{ messageQueue[0] }}
+      </div>
+    </div>
+
+    <ChatInput @send="handleSend" @stop="handleStop" :disabled="false" :is-streaming="isStreaming" :is-queuing="messageQueue.length > 0" />
   </div>
 </template>
 
@@ -36,10 +46,14 @@ const props = defineProps({
   isStreaming: {
     type: Boolean,
     default: false
+  },
+  messageQueue: {
+    type: Array,
+    default: () => []
   }
 })
 
-const emit = defineEmits(['send', 'scroll-to-bottom'])
+const emit = defineEmits(['send', 'scroll-to-bottom', 'stop'])
 
 const messagesRef = ref(null)
 const showScrollButton = ref(false)
@@ -50,11 +64,21 @@ let scrollTimeout = null
 const scrollToBottom = (smooth = true) => {
   if (!messagesRef.value) return
 
+  // Save current focused element
+  const activeElement = document.activeElement
+
   isUserScrolling = false
   messagesRef.value.scrollTo({
     top: messagesRef.value.scrollHeight,
     behavior: smooth ? 'smooth' : 'auto'
   })
+
+  // Restore focus if it was on an input/textarea
+  if (activeElement && (activeElement.tagName === 'TEXTAREA' || activeElement.tagName === 'INPUT')) {
+    requestAnimationFrame(() => {
+      activeElement.focus()
+    })
+  }
 
   setTimeout(() => {
     showScrollButton.value = false
@@ -91,10 +115,18 @@ const handleSend = (text) => {
   emit('send', text)
 }
 
+// Handle stop generation
+const handleStop = () => {
+  emit('stop')
+}
+
 // Watch messages and auto-scroll only if user is at bottom
 watch(() => props.messages, () => {
   nextTick(() => {
     if (!messagesRef.value) return
+
+    // Save current focused element
+    const activeElement = document.activeElement
 
     // Check if user is at bottom
     const threshold = 100
@@ -104,6 +136,13 @@ watch(() => props.messages, () => {
     // Only auto-scroll if user is at bottom or not manually scrolling
     if (isAtBottom || !isUserScrolling) {
       scrollToBottom(false)
+    }
+
+    // Restore focus if it was on an input/textarea
+    if (activeElement && (activeElement.tagName === 'TEXTAREA' || activeElement.tagName === 'INPUT')) {
+      requestAnimationFrame(() => {
+        activeElement.focus()
+      })
     }
   })
 }, { deep: true })
@@ -211,5 +250,34 @@ onUnmounted(() => {
   width: 16px;
   height: 16px;
   fill: #ffffff;
+}
+
+.queue-container {
+  position: absolute;
+  bottom: 110px;
+  left: 24px;
+  background: rgba(30, 58, 95, 0.95);
+  border: 1px solid #1e3a5f;
+  border-radius: 8px;
+  padding: 12px 16px;
+  max-width: 600px;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+  z-index: 10;
+}
+
+.queue-header {
+  color: #8b949e;
+  font-size: 13px;
+  margin-bottom: 6px;
+  font-weight: 500;
+}
+
+.queue-message {
+  color: #e6edf3;
+  font-size: 14px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 550px;
 }
 </style>
