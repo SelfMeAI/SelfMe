@@ -61,6 +61,7 @@ class SelfMeApp(App):
         self.is_generating = False  # Track if currently generating response
         self.cancel_generation = False  # Flag to cancel generation
         self.generation_thread = None  # Track the generation thread
+        self.message_queue = []  # Queue for messages sent during generation
 
     def compose(self) -> ComposeResult:
         """Build UI."""
@@ -74,6 +75,8 @@ class SelfMeApp(App):
             yield Static(self._welcome_text(), id="welcome-panel")
         # Scrollable chat area - messages will be added dynamically
         yield VerticalScroll(id="chat-scroll")
+        # Message queue container (hidden by default)
+        yield VerticalScroll(id="queue-container")
         # Input box
         textarea = ChatInput(
             soft_wrap=True,
@@ -130,6 +133,7 @@ class SelfMeApp(App):
         self.query_one("#model-panel").can_focus = False
         self.query_one("#welcome-panel").can_focus = False
         self.query_one("#chat-scroll").can_focus = False
+        self.query_one("#queue-container").can_focus = False
         self.query_one("#status-bar").can_focus = False
 
         # Hide loading indicator initially
@@ -245,6 +249,12 @@ class SelfMeApp(App):
             header = self.query_one("#header-container")
             header.display = False
 
+        # If currently generating, add to queue
+        if self.is_generating:
+            self.message_queue.append(text)
+            self._update_queue_display()
+            return
+
         # Show loading indicator
         self._start_loading()
 
@@ -252,6 +262,51 @@ class SelfMeApp(App):
         self._add_message(f"[b]{text}[/b]", "user")
         self.memory.add("user", text)
         self.generate_response()
+
+    def _update_queue_display(self):
+        """Update the queue display."""
+        queue_container = self.query_one("#queue-container", VerticalScroll)
+
+        # Clear existing queue items
+        queue_container.remove_children()
+
+        if self.message_queue:
+            # Show queue container
+            queue_container.display = True
+
+            # Add queue header
+            header = Static(
+                f"[dim]📋 Queued ({len(self.message_queue)}):[/dim]",
+                classes="queued-message"
+            )
+            header.can_focus = False
+            queue_container.mount(header)
+
+            # Show the first message in queue (next to be processed)
+            next_msg = self.message_queue[0]
+            msg_widget = Static(
+                f"[dim]▸[/dim] {next_msg}",
+                classes="queued-message"
+            )
+            msg_widget.can_focus = False
+            queue_container.mount(msg_widget)
+        else:
+            # Hide queue container if empty
+            queue_container.display = False
+
+    def _process_next_message(self):
+        """Process the next message in the queue."""
+        if self.message_queue:
+            text = self.message_queue.pop(0)
+            self._update_queue_display()
+
+            # Show loading indicator
+            self._start_loading()
+
+            # Add user message
+            self._add_message(f"[b]{text}[/b]", "user")
+            self.memory.add("user", text)
+            self.generate_response()
 
     def generate_response(self):
         """Generate streaming response with Markdown rendering."""
@@ -318,10 +373,16 @@ class SelfMeApp(App):
                 # Hide loading indicator when done
                 self.call_from_thread(self._stop_loading)
 
+                # Process next message in queue if any
+                self.call_from_thread(self._process_next_message)
+
             except Exception as e:
                 self.call_from_thread(self._add_message, f"[red]Error: {e}[/]", "error")
                 # Hide loading indicator on error
                 self.call_from_thread(self._stop_loading)
+
+                # Process next message in queue even on error
+                self.call_from_thread(self._process_next_message)
 
         threading.Thread(target=gen, daemon=True).start()
 

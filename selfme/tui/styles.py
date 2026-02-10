@@ -71,6 +71,19 @@ Screen {
     padding: 1 0 0 0;
 }
 
+/* Message queue container */
+#queue-container {
+    width: 100%;
+    height: auto;
+    max-height: 6;
+    border: none;
+    background: transparent;
+    scrollbar-size: 0 0;
+    padding: 0;
+    margin: 0 2 0 2;
+    display: none;
+}
+
 #chat-log {
     padding: 1 2;
     background: transparent;
@@ -170,5 +183,17 @@ Screen {
     color: #6e7681;
     padding: 0 2 0 2;
     margin: 0 2 1 2;
+}
+
+/* Queued message style */
+.queued-message {
+    width: 1fr;
+    height: auto;
+    border: none;
+    border-left: heavy #6e7681;
+    background: #0d1117;
+    color: #6e7681;
+    padding: 1 2 1 2;
+    margin: 0 0 1 0;
 }
 """
