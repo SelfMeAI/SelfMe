@@ -58,6 +58,9 @@ class SelfMeApp(App):
             "▱▱▱▰▰",
             "▱▱▱▱▰",
         ]  # Block progress bar animation
+        self.is_generating = False  # Track if currently generating response
+        self.cancel_generation = False  # Flag to cancel generation
+        self.generation_thread = None  # Track the generation thread
 
     def compose(self) -> ComposeResult:
         """Build UI."""
@@ -141,7 +144,7 @@ class SelfMeApp(App):
         """Update loading animation frame."""
         loading = self.query_one("#loading-indicator", Static)
         char = self.loading_chars[self.loading_frame % len(self.loading_chars)]
-        loading.update(f"[#0ea5e9]🐙 {char}[/]")
+        loading.update(f"[#0ea5e9]🐙 {char}[/] [dim]·[/dim] [dim]Press Esc to cancel[/dim]")
         self.loading_frame += 1
 
     def _start_loading(self):
@@ -149,6 +152,8 @@ class SelfMeApp(App):
         loading = self.query_one("#loading-indicator", Static)
         loading.display = True
         self.loading_frame = 0
+        self.is_generating = True
+        self.cancel_generation = False
         self._update_loading_animation()
         self.loading_timer = self.set_interval(0.1, self._update_loading_animation)
 
@@ -159,6 +164,8 @@ class SelfMeApp(App):
             self.loading_timer = None
         loading = self.query_one("#loading-indicator", Static)
         loading.display = False
+        self.is_generating = False
+        self.cancel_generation = False
 
     def _add_message(self, text: str, msg_type: str = "assistant"):
         """Add a message to chat area.
@@ -192,6 +199,11 @@ class SelfMeApp(App):
         """Handle text changes."""
         # No special handling needed, just let user type naturally
         pass
+
+    def on_key(self, event: events.Key):
+        """Handle key press events."""
+        if event.key == "escape" and self.is_generating:
+            self.cancel_generation = True
 
     def on_chat_input_send_message(self, event: ChatInput.SendMessage):
         """Handle send message event from ChatInput."""
@@ -260,7 +272,13 @@ class SelfMeApp(App):
 
                 # Stream response
                 full_response = ""
+                cancelled = False
                 for chunk in self.llm.chat_stream(self.memory.to_llm_format(n=10)):
+                    # Check if generation was cancelled
+                    if self.cancel_generation:
+                        cancelled = True
+                        break
+
                     full_response += chunk
                     # Render as Markdown
                     md = Markdown(full_response, code_theme="dracula")
@@ -269,21 +287,33 @@ class SelfMeApp(App):
                     msg_widget.raw_text = full_response
                     self.call_from_thread(lambda: chat_scroll.scroll_end(animate=False))
 
-                # Calculate response time
-                elapsed_time = time.time() - start_time
+                # Only save and show metadata if not cancelled
+                if not cancelled:
+                    # Calculate response time
+                    elapsed_time = time.time() - start_time
 
-                # Add metadata info below the message
-                meta_widget = Static(
-                    f"[dim]🐙 {settings.llm_model} · {elapsed_time:.1f}s[/dim]",
-                    classes="message-meta",
-                    markup=True
-                )
-                meta_widget.can_focus = False
-                self.call_from_thread(chat_scroll.mount, meta_widget)
-                self.call_from_thread(lambda: chat_scroll.scroll_end(animate=False))
+                    # Add metadata info below the message
+                    meta_widget = Static(
+                        f"[dim]🐙 {settings.llm_model} · {elapsed_time:.1f}s[/dim]",
+                        classes="message-meta",
+                        markup=True
+                    )
+                    meta_widget.can_focus = False
+                    self.call_from_thread(chat_scroll.mount, meta_widget)
+                    self.call_from_thread(lambda: chat_scroll.scroll_end(animate=False))
 
-                # Save to memory
-                self.call_from_thread(self.memory.add, "assistant", full_response)
+                    # Save to memory
+                    self.call_from_thread(self.memory.add, "assistant", full_response)
+                else:
+                    # If cancelled, add a cancelled indicator
+                    cancel_widget = Static(
+                        "[dim italic]🚫 Cancelled[/dim italic]",
+                        classes="message-meta",
+                        markup=True
+                    )
+                    cancel_widget.can_focus = False
+                    self.call_from_thread(chat_scroll.mount, cancel_widget)
+                    self.call_from_thread(lambda: chat_scroll.scroll_end(animate=False))
 
                 # Hide loading indicator when done
                 self.call_from_thread(self._stop_loading)
