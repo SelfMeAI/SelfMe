@@ -16,6 +16,8 @@ python-dotenv = "^1.0.0"
 pydantic = "^2.7.0"
 pydantic-settings = "^2.3.0"
 pyperclip = "^1.8.2"
+fastapi = "^0.115.0"
+uvicorn = {extras = ["standard"], version = "^0.32.0"}
 
 [tool.poetry.group.dev.dependencies]
 pytest = "^8.2.0"
@@ -28,6 +30,7 @@ build-backend = "poetry.core.masonry.api"
 
 [tool.poetry.scripts]
 selfme = "selfme.cli:main"
+selfme-web = "selfme.web.app:main"
 
 [tool.ruff]
 line-length = 100

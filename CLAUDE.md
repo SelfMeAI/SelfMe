@@ -23,10 +23,33 @@ cp .env.example .env
 # Run the TUI application
 poetry run selfme
 
+# Run the Web UI application
+poetry run selfme-web
+
 # Alternative entry points
 poetry run python -m selfme
 python selfme/cli.py  # Direct execution
 ```
+
+### Frontend Development (Web UI)
+```bash
+# Navigate to frontend directory
+cd selfme/web/frontend
+
+# Install dependencies (first time only)
+pnpm install
+
+# Development mode with hot reload
+pnpm run dev
+
+# Build for production (REQUIRED after any frontend changes)
+pnpm run build
+```
+
+**CRITICAL: Frontend Build Rules**
+- **ALWAYS** run `pnpm run build` after modifying any frontend code
+- Build artifacts in `selfme/web/dist/` are **NOT** git-ignored and **MUST** be committed
+- **ALWAYS** clean up temporary/backup files (e.g., `*_old.vue`, `*_new.vue`, `*_backup.*`) after use
 
 ### Code Quality
 ```bash
