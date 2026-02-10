@@ -9,24 +9,57 @@ Screen {
 }
 
 #header-container {
-    height: 10;
+    height: auto;
     border: solid #0ea5e9;
     margin: 1 2 0 2;
+    layout: vertical;
+}
+
+#logo-row {
+    width: 100%;
+    height: auto;
+    layout: horizontal;
+    align: center middle;
 }
 
 #logo-panel {
-    width: 20;
-    height: 100%;
-    padding: 1 2 1 4;
+    width: auto;
+    height: auto;
+    padding: 1 0 1 2;
     color: #0ea5e9;
+    content-align: center top;
+}
+
+#version-panel {
+    width: auto;
+    height: auto;
+    padding: 6 2 1 2;
+    color: #6e7681;
+    content-align: left top;
+}
+
+#model-panel {
+    width: 100%;
+    height: auto;
+    padding: 0 2 0 2;
+    color: #0ea5e9;
+    content-align: center middle;
+}
+
+#welcome-panel {
+    width: 100%;
+    height: auto;
+    padding: 1 2 1 2;
+    color: #0ea5e9;
+    content-align: center middle;
 }
 
 #info-panel {
-    width: 1fr;
-    height: 100%;
-    padding: 1 4 1 2;
+    width: 100%;
+    height: auto;
+    padding: 0 2 1 2;
     color: #0ea5e9;
-    content-align: left middle;
+    content-align: center middle;
 }
 
 #chat-scroll {

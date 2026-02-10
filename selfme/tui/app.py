@@ -61,9 +61,14 @@ class SelfMeApp(App):
 
     def compose(self) -> ComposeResult:
         """Build UI."""
-        with Horizontal(id="header-container"):
-            yield Static(self._logo_text(), id="logo-panel")
-            yield Static(self._info_text(), id="info-panel")
+        from textual.containers import Vertical
+
+        with Vertical(id="header-container"):
+            with Horizontal(id="logo-row"):
+                yield Static(self._logo_text(), id="logo-panel")
+                yield Static(self._version_text(), id="version-panel")
+            yield Static(self._model_text(), id="model-panel")
+            yield Static(self._welcome_text(), id="welcome-panel")
         # Scrollable chat area - messages will be added dynamically
         yield VerticalScroll(id="chat-scroll")
         # Input box
@@ -81,22 +86,30 @@ class SelfMeApp(App):
 
     def _logo_text(self) -> str:
         """Create logo text."""
-        return """  [#0ea5e9]████████[/#0ea5e9]
- [#0ea5e9]██████████[/]
- [#0ea5e9]██[/]  ░░  [#0ea5e9]██[/]
-  [#0ea5e9]████████[/#0ea5e9]
- [#0ea5e9]██[/]  [#0ea5e9]██[/]  [#0ea5e9]██[/]
-[#0ea5e9]█ ██[/]    [#0ea5e9]██ █[/]
-[#0ea5e9]█ ██[/]    [#0ea5e9]██ █[/]"""
+        return """[#0ea5e9]  ███████╗███████╗██╗     ███████╗███╗   ███╗███████╗
+  ██╔════╝██╔════╝██║     ██╔════╝████╗ ████║██╔════╝
+  ███████╗█████╗  ██║     █████╗  ██╔████╔██║█████╗
+  ╚════██║██╔══╝  ██║     ██╔══╝  ██║╚██╔╝██║██╔══╝
+  ███████║███████╗███████╗██║     ██║ ╚═╝ ██║███████╗
+  ╚══════╝╚══════╝╚══════╝╚═╝     ╚═╝     ╚═╝╚══════╝[/]"""
 
     def _info_text(self) -> str:
         """Create info text."""
-        return f"""[#0ea5e9]SelfMe[/] v{settings.app_version}
+        return f"""[dim]v{settings.app_version}[/]  │  [dim]Model[/dim] [#0ea5e9]{settings.llm_model}[/]
 
-[dim]Model:[/dim]     [#0ea5e9]{settings.llm_model}[/]
-[dim]Protocol:[/dim]  [#0ea5e9]{settings.llm_protocol}[/]
+[#0ea5e9]✨ Welcome back![/]"""
 
-[dim]Welcome back![/dim]"""
+    def _version_text(self) -> str:
+        """Create version text."""
+        return f"[#8b949e]v{settings.app_version}[/]"
+
+    def _model_text(self) -> str:
+        """Create model info text."""
+        return f"[dim]Model[/dim] [#0ea5e9]{settings.llm_model}[/]"
+
+    def _welcome_text(self) -> str:
+        """Create welcome text."""
+        return "[bold #0ea5e9]✨ Welcome back![/]"
 
     def _status_text(self) -> str:
         return "[b]Ctrl+Enter[/b] New Line │ [b]Ctrl+C[/b] Quit"
@@ -110,7 +123,9 @@ class SelfMeApp(App):
 
         # Disable focus on all widgets except input box
         self.query_one("#logo-panel").can_focus = False
-        self.query_one("#info-panel").can_focus = False
+        self.query_one("#version-panel").can_focus = False
+        self.query_one("#model-panel").can_focus = False
+        self.query_one("#welcome-panel").can_focus = False
         self.query_one("#chat-scroll").can_focus = False
         self.query_one("#status-bar").can_focus = False
 
