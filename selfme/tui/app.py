@@ -62,9 +62,12 @@ class SelfMeApp(App):
         self.message_queue = []
         self.current_response = ""
         self.current_msg_widget = None
+        self.is_connected = True  # Connection status
+        self.reconnect_task = None  # Reconnection task
 
     def compose(self) -> ComposeResult:
         """Build UI."""
+        yield Static("", id="connection-status")  # Connection status banner (outside header)
         with Vertical(id="header-container"):
             with Horizontal(id="logo-row"):
                 yield Static(self._logo_text(), id="logo-panel")
@@ -110,11 +113,7 @@ class SelfMeApp(App):
 
     async def on_mount(self):
         """Init and focus input."""
-        try:
-            self.client = GatewayClient(self.gateway_url)
-            await self.client.connect()
-        except Exception as e:
-            self._add_message(f"[red]Error connecting to gateway: {e}[/red]", "error")
+        await self._connect_to_gateway()
 
         # Disable focus on all widgets except input box
         self.query_one("#logo-panel").can_focus = False
@@ -124,6 +123,7 @@ class SelfMeApp(App):
         self.query_one("#chat-scroll").can_focus = False
         self.query_one("#queue-container").can_focus = False
         self.query_one("#status-bar").can_focus = False
+        self.query_one("#connection-status").can_focus = False
 
         loading = self.query_one("#loading-indicator", Static)
         loading.display = False
@@ -131,6 +131,54 @@ class SelfMeApp(App):
 
         textarea = self.query_one("#input-box", TextArea)
         textarea.focus()
+
+    async def _connect_to_gateway(self):
+        """Connect to Gateway with error handling."""
+        try:
+            self.client = GatewayClient(self.gateway_url)
+            await self.client.connect()
+            # Set disconnect callback
+            self.client.on_disconnect = self._on_gateway_disconnect
+            self.is_connected = True
+            self._update_connection_status()
+        except Exception as e:
+            self.is_connected = False
+            self._update_connection_status()
+            # Start reconnection attempts
+            if not self.reconnect_task or self.reconnect_task.done():
+                self.reconnect_task = asyncio.create_task(self._reconnect_loop())
+
+    def _on_gateway_disconnect(self):
+        """Handle Gateway disconnection."""
+        self.is_connected = False
+        self._update_connection_status()
+        # Start reconnection attempts
+        if not self.reconnect_task or self.reconnect_task.done():
+            self.reconnect_task = asyncio.create_task(self._reconnect_loop())
+
+    async def _reconnect_loop(self):
+        """Continuously try to reconnect to Gateway."""
+        while not self.is_connected:
+            await asyncio.sleep(3)
+            try:
+                self.client = GatewayClient(self.gateway_url)
+                await self.client.connect()
+                # Set disconnect callback
+                self.client.on_disconnect = self._on_gateway_disconnect
+                self.is_connected = True
+                self._update_connection_status()
+            except Exception:
+                pass  # Keep trying
+
+    def _update_connection_status(self):
+        """Update connection status banner."""
+        status_widget = self.query_one("#connection-status", Static)
+        if self.is_connected:
+            status_widget.update("")
+            status_widget.display = False
+        else:
+            status_widget.update("[on #d97706] 🔌 Gateway disconnected. Reconnecting... [/]")
+            status_widget.display = True
 
     def _update_loading_animation(self):
         """Update loading animation frame."""

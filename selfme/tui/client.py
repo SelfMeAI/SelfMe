@@ -28,6 +28,7 @@ class GatewayClient:
         self.on_chunk: Callable[[str], None] | None = None
         self.on_complete: Callable[[dict], None] | None = None
         self.on_error: Callable[[str], None] | None = None
+        self.on_disconnect: Callable[[], None] | None = None  # Callback for disconnection
 
     def _create_session_sync(self) -> str:
         """Create a new session synchronously.
@@ -90,6 +91,9 @@ class GatewayClient:
             if self.on_error:
                 self.on_error(str(e))
             self._clear_callbacks()
+            # Notify disconnection
+            if self.on_disconnect:
+                self.on_disconnect()
 
     def _clear_callbacks(self):
         """Clear current callbacks."""

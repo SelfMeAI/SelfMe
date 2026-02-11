@@ -8,6 +8,16 @@ Screen {
     padding: 0;
 }
 
+#connection-status {
+    width: 100%;
+    height: auto;
+    padding: 0 2 0 2;
+    color: #ffffff;
+    background: #d97706;
+    content-align: center middle;
+    display: none;
+}
+
 #header-container {
     height: auto;
     border: solid #0ea5e9;
