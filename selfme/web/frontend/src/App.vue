@@ -30,6 +30,7 @@ const config = ref({ version: '', model: 'Loading...' })
 const messages = ref([])
 const isStreaming = ref(false)
 const messageQueue = ref([])  // Message queue
+const isConnected = ref(true)  // Connection status - start as true to avoid flash on page load
 let ws = null
 let sessionId = null
 let currentMessage = null
@@ -77,6 +78,7 @@ const connectWebSocket = async () => {
 
   ws.onopen = () => {
     console.log('Connected to server')
+    isConnected.value = true
   }
 
   ws.onmessage = (event) => {
@@ -86,10 +88,12 @@ const connectWebSocket = async () => {
 
   ws.onerror = (error) => {
     console.error('Connection error:', error)
+    isConnected.value = false
   }
 
   ws.onclose = () => {
     console.log('Disconnected from server, reconnecting...')
+    isConnected.value = false
     setTimeout(() => connectWebSocket(), 3000)
   }
 }
@@ -289,5 +293,54 @@ onMounted(() => {
   height: 100vh;
   display: flex;
   flex-direction: column;
+}
+
+.connection-banner {
+  background: linear-gradient(135deg, #f59e0b 0%, #d97706 100%);
+  color: #ffffff;
+  padding: 12px 24px;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.2);
+  z-index: 1000;
+  animation: slideDown 0.3s ease;
+}
+
+@keyframes slideDown {
+  from {
+    transform: translateY(-100%);
+    opacity: 0;
+  }
+  to {
+    transform: translateY(0);
+    opacity: 1;
+  }
+}
+
+.banner-content {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  font-size: 14px;
+  font-weight: 500;
+}
+
+.status-icon {
+  font-size: 18px;
+  animation: pulse 2s ease-in-out infinite;
+}
+
+@keyframes pulse {
+  0%, 100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.6;
+  }
+}
+
+.status-text {
+  letter-spacing: 0.3px;
 }
 </style>
