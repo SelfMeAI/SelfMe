@@ -114,11 +114,25 @@ def run_gateway(host: str = "localhost", port: int = 8000):
     from selfme.config import settings
     from selfme.gateway.app import app
 
-    print(f"Starting SelfMe Gateway on http://{host}:{port}")
-    print(f"Model: {settings.llm_model} ({settings.llm_protocol})")
-    print("Press Ctrl+C to stop")
+    # Beautiful startup banner with ASCII art
+    print("\n")
+    print("  ███████╗███████╗██╗     ███████╗███╗   ███╗███████╗")
+    print("  ██╔════╝██╔════╝██║     ██╔════╝████╗ ████║██╔════╝")
+    print("  ███████╗█████╗  ██║     █████╗  ██╔████╔██║█████╗  ")
+    print("  ╚════██║██╔══╝  ██║     ██╔══╝  ██║╚██╔╝██║██╔══╝  ")
+    print("  ███████║███████╗███████╗██║     ██║ ╚═╝ ██║███████╗")
+    print("  ╚══════╝╚══════╝╚══════╝╚═╝     ╚═╝     ╚═╝╚══════╝")
+    print()
+    print("  🚀 Gateway Server")
+    print("  " + "─" * 50)
+    print(f"  📡 Address:  http://{host}:{port}")
+    print(f"  🤖 Model:    {settings.llm_model}")
+    print(f"  📦 Version:  {settings.app_version}")
+    print("  " + "─" * 50)
+    print("  Press Ctrl+C to stop")
+    print()
 
-    uvicorn.run(app, host=host, port=port)
+    uvicorn.run(app, host=host, port=port, log_level="info")
 
 
 def run_tui(gateway_url: str = "http://localhost:8000", auto_start: bool = True):
@@ -205,15 +219,30 @@ def run_web(gateway_url: str = "http://localhost:8000", auto_start: bool = True,
         print(f"Gateway not running at {gateway_url}")
         print("Please start gateway first: selfme gateway")
         sys.exit(1)
-    else:
-        print(f"✓ Connected to gateway at {gateway_url}")
 
     # Set environment variable for frontend
     os.environ["VITE_GATEWAY_URL"] = gateway_url
 
-    print(f"Starting Web UI on http://localhost:{port}")
-    print(f"Gateway: {gateway_url}")
-    print("Press Ctrl+C to stop")
+    # Beautiful startup banner with ASCII art
+    from selfme.config import settings
+
+    print("\n")
+    print("  ███████╗███████╗██╗     ███████╗███╗   ███╗███████╗")
+    print("  ██╔════╝██╔════╝██║     ██╔════╝████╗ ████║██╔════╝")
+    print("  ███████╗█████╗  ██║     █████╗  ██╔████╔██║█████╗  ")
+    print("  ╚════██║██╔══╝  ██║     ██╔══╝  ██║╚██╔╝██║██╔══╝  ")
+    print("  ███████║███████╗███████╗██║     ██║ ╚═╝ ██║███████╗")
+    print("  ╚══════╝╚══════╝╚══════╝╚═╝     ╚═╝     ╚═╝╚══════╝")
+    print()
+    print("  🌐 Web UI")
+    print("  " + "─" * 50)
+    print(f"  🖥️  Web UI:   http://localhost:{port}")
+    print(f"  📡 Gateway:  {gateway_url}")
+    print(f"  🤖 Model:    {settings.llm_model}")
+    print(f"  📦 Version:  {settings.app_version}")
+    print("  " + "─" * 50)
+    print("  Press Ctrl+C to stop")
+    print()
 
     # Run Web UI
     try:
