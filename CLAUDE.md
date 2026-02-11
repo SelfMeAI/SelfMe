@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-SelfMe is a personal AI agent with a chat interface built using Textual (TUI framework). It supports multiple LLM protocols (OpenAI and Anthropic) through a unified client abstraction.
+SelfMe is a personal AI agent with a Gateway architecture. It supports multiple LLM protocols (OpenAI and Anthropic) through a unified client abstraction. The Gateway handles all LLM interactions, while TUI and Web UI act as clients connecting to the Gateway via WebSocket.
 
 ## Development Commands
 
@@ -20,17 +20,23 @@ cp .env.example .env
 
 ### Running the Application
 ```bash
-# Run the TUI application
+# Show help
 poetry run selfme
 
-# Run the Web UI application
-poetry run selfme --web
-# or use short form
-poetry run selfme -w
+# Run TUI (auto-starts Gateway)
+poetry run selfme tui
 
-# Alternative entry points
-poetry run python -m selfme
-python selfme/cli.py  # Direct execution
+# Run Web UI (auto-starts Gateway)
+poetry run selfme web
+
+# Run Gateway only
+poetry run selfme gateway
+
+# Advanced options
+poetry run selfme tui --no-auto                    # Don't auto-start Gateway
+poetry run selfme tui --gateway-url http://remote:8000  # Connect to remote Gateway
+poetry run selfme gateway --port 8000              # Custom port
+poetry run selfme web --web-port 8080              # Custom Web UI port
 ```
 
 ### Frontend Development (Web UI)

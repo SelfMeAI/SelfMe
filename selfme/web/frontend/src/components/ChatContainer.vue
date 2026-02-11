@@ -89,7 +89,7 @@ const scrollToBottom = (smooth = true) => {
 const checkScrollPosition = () => {
   if (!messagesRef.value) return
 
-  const threshold = 100
+  const threshold = 200  // Increased threshold
   const { scrollHeight, scrollTop, clientHeight } = messagesRef.value
   const isAtBottom = scrollHeight - scrollTop - clientHeight < threshold
 
@@ -128,8 +128,8 @@ watch(() => props.messages, () => {
     // Save current focused element
     const activeElement = document.activeElement
 
-    // Check if user is at bottom
-    const threshold = 100
+    // Check if user is at bottom (increased threshold for faster scrolling)
+    const threshold = 200
     const { scrollHeight, scrollTop, clientHeight } = messagesRef.value
     const isAtBottom = scrollHeight - scrollTop - clientHeight < threshold
 
@@ -154,7 +154,7 @@ watch(() => props.isStreaming, (newVal) => {
     nextTick(() => {
       if (!messagesRef.value) return
 
-      const threshold = 100
+      const threshold = 200  // Increased threshold
       const { scrollHeight, scrollTop, clientHeight } = messagesRef.value
       const isAtBottom = scrollHeight - scrollTop - clientHeight < threshold
 

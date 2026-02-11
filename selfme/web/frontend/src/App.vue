@@ -12,19 +12,22 @@
 </template>
 
 <script setup>
-import { ref, onMounted, onUnmounted } from 'vue'
+import { ref, onMounted, onUnmounted, nextTick } from 'vue'
 import NavBar from './components/NavBar.vue'
 import ChatContainer from './components/ChatContainer.vue'
+import { GATEWAY_URL } from './config.js'
 
 const config = ref({ version: '', model: 'Loading...' })
 const messages = ref([])
 const isStreaming = ref(false)
 const messageQueue = ref([])  // Message queue
 let ws = null
+let sessionId = null
 let currentMessage = null
 let updateTimer = null
 let pendingContent = ''
 let lastUpdateTime = 0
+let isProcessingQueue = false  // Flag to prevent duplicate queue processing
 
 // Load config
 const loadConfig = async () => {
@@ -37,11 +40,30 @@ const loadConfig = async () => {
   }
 }
 
-// Connect WebSocket
-const connectWebSocket = () => {
-  const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
-  const wsUrl = `${protocol}//${window.location.host}/ws`
+// Create session
+const createSession = async () => {
+  try {
+    const response = await fetch(`${GATEWAY_URL}/api/sessions`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({})
+    })
+    const data = await response.json()
+    sessionId = data.session_id
+    return sessionId
+  } catch (error) {
+    console.error('Failed to create session:', error)
+    throw error
+  }
+}
 
+// Connect WebSocket
+const connectWebSocket = async () => {
+  if (!sessionId) {
+    await createSession()
+  }
+
+  const wsUrl = `${GATEWAY_URL.replace('http', 'ws')}/ws/${sessionId}`
   ws = new WebSocket(wsUrl)
 
   ws.onopen = () => {
@@ -59,7 +81,7 @@ const connectWebSocket = () => {
 
   ws.onclose = () => {
     console.log('Disconnected from server, reconnecting...')
-    setTimeout(connectWebSocket, 3000)
+    setTimeout(() => connectWebSocket(), 3000)
   }
 }
 
@@ -87,7 +109,11 @@ const handleMessage = (data) => {
     if (currentMessage) {
       const index = messages.value.indexOf(currentMessage)
       if (index !== -1) {
-        messages.value[index] = { ...currentMessage, streaming: false }
+        messages.value[index] = {
+          ...currentMessage,
+          streaming: false,
+          metadata: '🚫 Cancelled'
+        }
       }
       currentMessage = null
       pendingContent = ''
@@ -120,11 +146,11 @@ const handleMessage = (data) => {
       pendingContent += chunk
     }
 
-    // Throttle updates: update at most every 100ms
+    // Throttle updates: update at most every 50ms for smoother scrolling
     const now = Date.now()
     const timeSinceLastUpdate = now - lastUpdateTime
 
-    if (timeSinceLastUpdate >= 100) {
+    if (timeSinceLastUpdate >= 50) {
       // Enough time has passed, update immediately
       updateMessageContent()
       if (updateTimer) {
@@ -133,7 +159,7 @@ const handleMessage = (data) => {
       }
     } else if (!updateTimer) {
       // Schedule an update for the remaining time
-      const remainingTime = 100 - timeSinceLastUpdate
+      const remainingTime = 50 - timeSinceLastUpdate
       updateTimer = setTimeout(() => {
         updateMessageContent()
         updateTimer = null
@@ -152,7 +178,14 @@ const handleMessage = (data) => {
     if (currentMessage) {
       const index = messages.value.indexOf(currentMessage)
       if (index !== -1) {
-        messages.value[index] = { ...currentMessage, streaming: false }
+        // Save metadata from complete message
+        const metadata = data.metadata || {}
+        const metadataText = `🐙 ${metadata.model || config.value.model} · ${metadata.response_time || 0}s`
+        messages.value[index] = {
+          ...currentMessage,
+          streaming: false,
+          metadata: metadataText
+        }
       }
       currentMessage = null
       pendingContent = ''
@@ -165,32 +198,52 @@ const handleMessage = (data) => {
 }
 
 // Send message
-const sendMessage = (text) => {
+const sendMessage = (text, fromQueue = false) => {
   if (!text.trim() || !ws || ws.readyState !== WebSocket.OPEN) {
     return
   }
 
-  // If currently streaming, add to queue
-  if (isStreaming.value) {
+  // If currently streaming AND not from queue, add to queue
+  if (isStreaming.value && !fromQueue) {
     messageQueue.value.push(text)
     return
   }
+
+  // Set streaming flag FIRST before adding message
+  isStreaming.value = true
 
   messages.value.push({
     role: 'user',
     content: text
   })
 
-  ws.send(JSON.stringify({ message: text }))
-  isStreaming.value = true
+  ws.send(JSON.stringify({ action: 'send_message', content: text }))
 }
 
 // Process next message in queue
 const processNextMessage = () => {
-  if (messageQueue.value.length > 0 && !isStreaming.value) {
-    const nextMessage = messageQueue.value.shift()
-    sendMessage(nextMessage)
+  // Prevent duplicate processing
+  if (isProcessingQueue) {
+    return
   }
+
+  // Check if we can process (not streaming and has messages)
+  if (isStreaming.value || messageQueue.value.length === 0) {
+    return
+  }
+
+  isProcessingQueue = true
+
+  // Use nextTick to ensure state is settled before processing
+  nextTick(() => {
+    // Double-check conditions after nextTick
+    if (messageQueue.value.length > 0 && !isStreaming.value) {
+      const nextMessage = messageQueue.value.shift()
+      sendMessage(nextMessage, true)
+      // Only reset after sendMessage sets isStreaming = true
+    }
+    isProcessingQueue = false
+  })
 }
 
 // Stop generation
@@ -199,7 +252,7 @@ const stopGeneration = () => {
     return
   }
 
-  ws.send(JSON.stringify({ type: 'cancel' }))
+  ws.send(JSON.stringify({ action: 'cancel' }))
 }
 
 onMounted(() => {

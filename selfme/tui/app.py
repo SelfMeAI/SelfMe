@@ -1,17 +1,16 @@
 """SelfMe TUI application."""
 
-import threading
+import asyncio
 
 import pyperclip
 from rich.markdown import Markdown
 from textual import events
 from textual.app import App, ComposeResult
-from textual.containers import Horizontal, VerticalScroll
+from textual.containers import Horizontal, Vertical, VerticalScroll
 from textual.widgets import Static, TextArea
 
 from selfme.config import settings
-from selfme.core.llm import LLMClient
-from selfme.core.memory import MemoryStore
+from selfme.tui.client import GatewayClient
 from selfme.tui.styles import DEFAULT_CSS
 from selfme.tui.widgets import ChatInput
 
@@ -27,23 +26,23 @@ class SelfMeApp(App):
 
     def action_quit(self):
         """Show goodbye message before quitting."""
-        import asyncio
-
         # Show goodbye message in chat area
         self._add_message("👋 Goodbye!", "assistant")
 
         # Wait a bit then exit
         async def delayed_exit():
             await asyncio.sleep(1)
+            if self.client:
+                await self.client.disconnect()
             self.exit()
 
         asyncio.create_task(delayed_exit())
 
-    def __init__(self):
+    def __init__(self, gateway_url: str = "http://localhost:8000"):
         super().__init__()
-        self.memory = MemoryStore()
-        self.llm = None
-        self.has_sent_message = False  # Track if user has sent any message
+        self.gateway_url = gateway_url
+        self.client: GatewayClient | None = None
+        self.has_sent_message = False
         self.loading_timer = None
         self.loading_frame = 0
         self.loading_chars = [
@@ -57,27 +56,23 @@ class SelfMeApp(App):
             "▱▱▰▰▰",
             "▱▱▱▰▰",
             "▱▱▱▱▰",
-        ]  # Block progress bar animation
-        self.is_generating = False  # Track if currently generating response
-        self.cancel_generation = False  # Flag to cancel generation
-        self.generation_thread = None  # Track the generation thread
-        self.message_queue = []  # Queue for messages sent during generation
+        ]
+        self.is_generating = False
+        self.cancel_generation = False
+        self.message_queue = []
+        self.current_response = ""
+        self.current_msg_widget = None
 
     def compose(self) -> ComposeResult:
         """Build UI."""
-        from textual.containers import Vertical
-
         with Vertical(id="header-container"):
             with Horizontal(id="logo-row"):
                 yield Static(self._logo_text(), id="logo-panel")
                 yield Static(self._version_text(), id="version-panel")
             yield Static(self._model_text(), id="model-panel")
             yield Static(self._welcome_text(), id="welcome-panel")
-        # Scrollable chat area - messages will be added dynamically
         yield VerticalScroll(id="chat-scroll")
-        # Message queue container (hidden by default)
         yield VerticalScroll(id="queue-container")
-        # Input box
         textarea = ChatInput(
             soft_wrap=True,
             show_line_numbers=False,
@@ -85,7 +80,6 @@ class SelfMeApp(App):
         )
         textarea.cursor_blink = False
         yield textarea
-        # Status bar at bottom with loading indicator
         with Horizontal(id="status-container"):
             yield Static("", id="loading-indicator")
             yield Static(self._status_text(), id="status-bar")
@@ -98,12 +92,6 @@ class SelfMeApp(App):
   ╚════██║██╔══╝  ██║     ██╔══╝  ██║╚██╔╝██║██╔══╝
   ███████║███████╗███████╗██║     ██║ ╚═╝ ██║███████╗
   ╚══════╝╚══════╝╚══════╝╚═╝     ╚═╝     ╚═╝╚══════╝[/]"""
-
-    def _info_text(self) -> str:
-        """Create info text."""
-        return f"""[dim]v{settings.app_version}[/]  │  [dim]Model[/dim] [#0ea5e9]{settings.llm_model}[/]
-
-[#0ea5e9]✨ Welcome back![/]"""
 
     def _version_text(self) -> str:
         """Create version text."""
@@ -118,14 +106,15 @@ class SelfMeApp(App):
         return "[bold #0ea5e9]✨ Welcome back![/]"
 
     def _status_text(self) -> str:
-        return "[b]Ctrl+Enter[/b] New Line │ [b]Ctrl+C[/b] Quit"
+        return "[b]Ctrl+Enter[/b] New Line │ [b]Esc[/b] Cancel │ [b]Ctrl+C[/b] Quit"
 
-    def on_mount(self):
+    async def on_mount(self):
         """Init and focus input."""
         try:
-            self.llm = LLMClient()
-        except ValueError as e:
-            self._add_message(f"[red]Error: {e}[/red]", "error")
+            self.client = GatewayClient(self.gateway_url)
+            await self.client.connect()
+        except Exception as e:
+            self._add_message(f"[red]Error connecting to gateway: {e}[/red]", "error")
 
         # Disable focus on all widgets except input box
         self.query_one("#logo-panel").can_focus = False
@@ -136,7 +125,6 @@ class SelfMeApp(App):
         self.query_one("#queue-container").can_focus = False
         self.query_one("#status-bar").can_focus = False
 
-        # Hide loading indicator initially
         loading = self.query_one("#loading-indicator", Static)
         loading.display = False
         loading.can_focus = False
@@ -148,7 +136,7 @@ class SelfMeApp(App):
         """Update loading animation frame."""
         loading = self.query_one("#loading-indicator", Static)
         char = self.loading_chars[self.loading_frame % len(self.loading_chars)]
-        loading.update(f"[#0ea5e9]🐙 {char}[/] [dim]·[/dim] [dim]Press Esc to cancel[/dim]")
+        loading.update(f"[#0ea5e9]🐙 {char}[/]")
         self.loading_frame += 1
 
     def _start_loading(self):
@@ -172,42 +160,29 @@ class SelfMeApp(App):
         self.cancel_generation = False
 
     def _add_message(self, text: str, msg_type: str = "assistant"):
-        """Add a message to chat area.
-
-        Args:
-            text: Message text
-            msg_type: "user", "assistant", or "error"
-        """
+        """Add a message to chat area."""
         chat_scroll = self.query_one("#chat-scroll", VerticalScroll)
 
-        # Create message widget with appropriate CSS class
         if msg_type == "user":
             msg_widget = Static(text, classes="user-message", markup=True)
         elif msg_type == "error":
             msg_widget = Static(text, classes="assistant-message", markup=True)
-        else:  # assistant - render as Markdown and make clickable
+        else:
             md = Markdown(text, code_theme="dracula")
             msg_widget = Static(md, classes="assistant-message clickable")
-            # Add raw_text attribute for copying
             msg_widget.raw_text = text
 
-        # Don't disable focus for clickable messages
         if msg_type != "assistant":
             msg_widget.can_focus = False
         chat_scroll.mount(msg_widget)
 
-        # Auto scroll to bottom
         self.call_after_refresh(lambda: chat_scroll.scroll_end(animate=False))
-
-    def on_text_area_changed(self, event):
-        """Handle text changes."""
-        # No special handling needed, just let user type naturally
-        pass
 
     def on_key(self, event: events.Key):
         """Handle key press events."""
         if event.key == "escape" and self.is_generating:
             self.cancel_generation = True
+            asyncio.create_task(self._cancel_generation())
 
     def on_chat_input_send_message(self, event: ChatInput.SendMessage):
         """Handle send message event from ChatInput."""
@@ -215,10 +190,9 @@ class SelfMeApp(App):
 
     def on_click(self, event: events.Click):
         """Handle click events globally."""
-        # Check if clicked widget has raw_text attribute
         target = event.widget
         while target is not None:
-            if hasattr(target, 'raw_text') and target.raw_text:
+            if hasattr(target, "raw_text") and target.raw_text:
                 try:
                     pyperclip.copy(target.raw_text)
                     self.notify("Copied to clipboard", severity="information", timeout=2)
@@ -235,63 +209,44 @@ class SelfMeApp(App):
         if not text:
             return
 
-        # Check for exit command
         if text.lower() == "exit":
             self.action_quit()
             return
 
-        # Clear input box
         textarea.text = ""
 
-        # Hide header on first message
         if not self.has_sent_message:
             self.has_sent_message = True
             header = self.query_one("#header-container")
             header.display = False
 
-        # If currently generating, add to queue
         if self.is_generating:
             self.message_queue.append(text)
             self._update_queue_display()
             return
 
-        # Show loading indicator
         self._start_loading()
-
-        # Add user message
         self._add_message(f"[b]{text}[/b]", "user")
-        self.memory.add("user", text)
-        self.generate_response()
+        asyncio.create_task(self._send_to_gateway(text))
 
     def _update_queue_display(self):
         """Update the queue display."""
         queue_container = self.query_one("#queue-container", VerticalScroll)
-
-        # Clear existing queue items
         queue_container.remove_children()
 
         if self.message_queue:
-            # Show queue container
             queue_container.display = True
-
-            # Add queue header
             header = Static(
-                f"[dim]📋 Queued ({len(self.message_queue)}):[/dim]",
-                classes="queued-message"
+                f"[dim]📋 Queued ({len(self.message_queue)}):[/dim]", classes="queued-message"
             )
             header.can_focus = False
             queue_container.mount(header)
 
-            # Show the first message in queue (next to be processed)
             next_msg = self.message_queue[0]
-            msg_widget = Static(
-                f"[dim]▸[/dim] {next_msg}",
-                classes="queued-message"
-            )
+            msg_widget = Static(f"[dim]▸[/dim] {next_msg}", classes="queued-message")
             msg_widget.can_focus = False
             queue_container.mount(msg_widget)
         else:
-            # Hide queue container if empty
             queue_container.display = False
 
     def _process_next_message(self):
@@ -299,94 +254,70 @@ class SelfMeApp(App):
         if self.message_queue:
             text = self.message_queue.pop(0)
             self._update_queue_display()
-
-            # Show loading indicator
             self._start_loading()
-
-            # Add user message
             self._add_message(f"[b]{text}[/b]", "user")
-            self.memory.add("user", text)
-            self.generate_response()
+            asyncio.create_task(self._send_to_gateway(text))
 
-    def generate_response(self):
-        """Generate streaming response with Markdown rendering."""
-        import time
+    async def _send_to_gateway(self, content: str):
+        """Send message to gateway and handle response."""
+        if not self.client:
+            self._add_message("[red]Not connected to gateway[/red]", "error")
+            self._stop_loading()
+            return
 
-        def gen():
-            try:
-                start_time = time.time()
+        # Create message widget for streaming
+        chat_scroll = self.query_one("#chat-scroll", VerticalScroll)
+        self.current_msg_widget = Static("", classes="assistant-message clickable")
+        self.current_msg_widget.raw_text = ""
+        chat_scroll.mount(self.current_msg_widget)
+        self.current_response = ""
 
-                # Create assistant message widget first
-                chat_scroll = self.query_one("#chat-scroll", VerticalScroll)
-                msg_widget = Static("", classes="assistant-message clickable")
-                # Initialize raw_text for copying
-                msg_widget.raw_text = ""
+        def on_chunk(chunk: str):
+            """Handle response chunk."""
+            self.current_response += chunk
+            md = Markdown(self.current_response, code_theme="dracula")
+            self.current_msg_widget.update(md)
+            self.current_msg_widget.raw_text = self.current_response
+            chat_scroll.scroll_end(animate=False)
 
-                # Mount the widget
-                self.call_from_thread(chat_scroll.mount, msg_widget)
+        def on_complete(metadata: dict):
+            """Handle completion."""
+            # Add metadata
+            meta_widget = Static(
+                f"[dim]🐙 {settings.llm_model} · {metadata.get('response_time', 0)}s[/dim]",
+                classes="message-meta",
+                markup=True,
+            )
+            meta_widget.can_focus = False
+            chat_scroll.mount(meta_widget)
+            chat_scroll.scroll_end(animate=False)
 
-                # Stream response
-                full_response = ""
-                cancelled = False
-                for chunk in self.llm.chat_stream(self.memory.to_llm_format(n=10)):
-                    # Check if generation was cancelled
-                    if self.cancel_generation:
-                        cancelled = True
-                        break
+            self._stop_loading()
+            self._process_next_message()
 
-                    full_response += chunk
-                    # Render as Markdown
-                    md = Markdown(full_response, code_theme="dracula")
-                    self.call_from_thread(msg_widget.update, md)
-                    # Update raw_text for copying
-                    msg_widget.raw_text = full_response
-                    self.call_from_thread(lambda: chat_scroll.scroll_end(animate=False))
+        def on_error(error: str):
+            """Handle error."""
+            if error == "Cancelled":
+                cancel_widget = Static(
+                    "[dim italic]🚫 Cancelled[/dim italic]",
+                    classes="message-meta",
+                    markup=True,
+                )
+                cancel_widget.can_focus = False
+                chat_scroll.mount(cancel_widget)
+                chat_scroll.scroll_end(animate=False)
+            else:
+                self._add_message(f"[red]Error: {error}[/red]", "error")
 
-                # Only save and show metadata if not cancelled
-                if not cancelled:
-                    # Calculate response time
-                    elapsed_time = time.time() - start_time
+            self._stop_loading()
+            self._process_next_message()
 
-                    # Add metadata info below the message
-                    meta_widget = Static(
-                        f"[dim]🐙 {settings.llm_model} · {elapsed_time:.1f}s[/dim]",
-                        classes="message-meta",
-                        markup=True
-                    )
-                    meta_widget.can_focus = False
-                    self.call_from_thread(chat_scroll.mount, meta_widget)
-                    self.call_from_thread(lambda: chat_scroll.scroll_end(animate=False))
+        try:
+            await self.client.send_message(content, on_chunk, on_complete, on_error)
+        except Exception as e:
+            on_error(str(e))
 
-                    # Save to memory
-                    self.call_from_thread(self.memory.add, "assistant", full_response)
-                else:
-                    # If cancelled, add a cancelled indicator
-                    cancel_widget = Static(
-                        "[dim italic]🚫 Cancelled[/dim italic]",
-                        classes="message-meta",
-                        markup=True
-                    )
-                    cancel_widget.can_focus = False
-                    self.call_from_thread(chat_scroll.mount, cancel_widget)
-                    self.call_from_thread(lambda: chat_scroll.scroll_end(animate=False))
-
-                # Hide loading indicator when done
-                self.call_from_thread(self._stop_loading)
-
-                # Process next message in queue if any
-                self.call_from_thread(self._process_next_message)
-
-            except Exception as e:
-                self.call_from_thread(self._add_message, f"[red]Error: {e}[/]", "error")
-                # Hide loading indicator on error
-                self.call_from_thread(self._stop_loading)
-
-                # Process next message in queue even on error
-                self.call_from_thread(self._process_next_message)
-
-        threading.Thread(target=gen, daemon=True).start()
-
-    def show_response(self, text: str):
-        """Show response."""
-        self._add_message(text, "assistant")
-        self.memory.add("assistant", text)
+    async def _cancel_generation(self):
+        """Cancel current generation."""
+        if self.client:
+            await self.client.cancel_generation()

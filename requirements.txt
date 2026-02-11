@@ -13,6 +13,7 @@ pyperclip>=1.8.2
 # Web UI
 fastapi>=0.115.0
 uvicorn[standard]>=0.32.0
+websockets>=13.0
 
 # Development dependencies (optional)
 # pytest>=8.2.0

@@ -1,5 +1,5 @@
 """SelfMe Web UI module."""
 
-from selfme.web.app import app, main
+from selfme.web.app import app
 
-__all__ = ["app", "main"]
+__all__ = ["app"]
