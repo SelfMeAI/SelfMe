@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-SelfMe is a personal AI agent with a Gateway architecture. It supports multiple LLM protocols (OpenAI and Anthropic) through a unified client abstraction. The Gateway handles all LLM interactions, while TUI and Web UI act as clients connecting to the Gateway via WebSocket.
+SelfMe is a personal AI agent with a Gateway architecture. It supports multiple LLM protocols (OpenAI and Anthropic) through a unified client abstraction. The Gateway handles all LLM interactions, while TUI, Web UI, and Desktop clients connect to the Gateway via WebSocket.
 
 ## Development Commands
 
@@ -55,9 +55,39 @@ pnpm run build
 ```
 
 **CRITICAL: Frontend Build Rules**
+- **ALWAYS** use `pnpm` for all frontend dependencies (Web UI and Desktop)
 - **ALWAYS** run `pnpm run build` after modifying any frontend code
 - Build artifacts in `selfme/web/dist/` are **NOT** git-ignored and **MUST** be committed
+- **Desktop app**: After modifying frontend, MUST copy to desktop: `cp -r selfme/web/dist/* selfme/desktop/dist/`
 - **ALWAYS** clean up temporary/backup files (e.g., `*_old.vue`, `*_new.vue`, `*_backup.*`) after use
+
+### Desktop Development
+```bash
+# Navigate to desktop directory
+cd selfme/desktop
+
+# Install dependencies (first time only)
+pnpm install
+
+# Development mode
+pnpm start
+
+# Build for production
+pnpm run build              # Build for current platform
+pnpm run build:win          # Build for Windows
+pnpm run build:mac          # Build for macOS
+pnpm run build:linux        # Build for Linux
+```
+
+**Desktop Build Process:**
+1. Build Web UI: `cd selfme/web/frontend && pnpm run build`
+2. Copy to desktop: `cp -r selfme/web/dist/* selfme/desktop/dist/`
+3. Build desktop app: `cd selfme/desktop && pnpm run build`
+
+**IMPORTANT: After ANY frontend modification:**
+- MUST rebuild Web UI: `pnpm run build`
+- MUST copy to desktop: `cp -r selfme/web/dist/* selfme/desktop/dist/`
+4. Or use the build script: `cd selfme/desktop && ./build.sh` (or `build.bat` on Windows)
 
 ### Code Quality
 ```bash
@@ -224,20 +254,67 @@ selfme/
 
 ## Dependencies
 
+**Python (Backend):**
 - **Textual**: TUI framework
 - **Rich**: Text formatting (used by Textual)
+- **FastAPI**: Web framework for Gateway and Web UI
+- **Uvicorn**: ASGI server
+- **WebSockets**: WebSocket support
 - **OpenAI SDK**: For OpenAI-compatible APIs
 - **Anthropic SDK**: For Claude API (optional, only if using anthropic protocol)
 - **pydantic + pydantic-settings**: Configuration management
 - **python-dotenv**: Environment variable loading
 - **httpx**: HTTP client (dependency of OpenAI/Anthropic SDKs)
 
+**Frontend (Web UI & Desktop):**
+- **Vue.js 3**: Frontend framework
+- **Vite**: Build tool
+- **Marked**: Markdown rendering
+- **Highlight.js**: Code syntax highlighting
+
+**Desktop:**
+- **Electron**: Desktop application framework
+- **electron-builder**: Build and packaging tool
+
 ## File Organization Guidelines
 
-- `cli.py`: Keep minimal - only entry point logic
+- `cli.py`: Entry point for CLI commands (tui, web, gateway)
 - `core/`: Business logic that doesn't depend on UI
-- `tui/`: All Textual-related UI code
-- Never import `tui` modules from `core` modules (maintain separation of concerns)
+- `gateway/`: Gateway server (FastAPI + WebSocket)
+- `tui/`: Terminal UI (Textual)
+- `web/`: Web UI (FastAPI + Vue.js)
+- `desktop/`: Desktop application (Electron + Web UI)
+- Never import `tui` or `web` modules from `core` modules (maintain separation of concerns)
+
+## Desktop Application
+
+The desktop application is built with Electron and uses the same Web UI as the browser version.
+
+**Key Features:**
+- Portable configuration file (`config.json` in app directory)
+- Auto-starts local Gateway if configured URL is localhost
+- Connects to remote Gateway if configured
+- Cross-platform (Windows/macOS/Linux)
+
+**Configuration (`config.json`):**
+```json
+{
+  "gateway_url": "http://localhost:8000",
+  "window": {
+    "width": 1200,
+    "height": 800
+  }
+}
+```
+
+**Build Process:**
+1. Build Web UI: `cd selfme/web/frontend && pnpm run build`
+2. Copy to desktop: `cp -r selfme/web/dist/* selfme/desktop/dist/`
+3. Build desktop app: `cd selfme/desktop && npm run build`
+
+**Development:**
+- Run in dev mode: `cd selfme/desktop && npm start`
+- Requires Gateway to be running separately
 
 ## Known Limitations
 

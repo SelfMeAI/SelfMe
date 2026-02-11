@@ -63,3 +63,4 @@ yarn-error.log*
 # Frontend dev
 .vite/
 .cache/
+.claude-notes.md

@@ -39,14 +39,23 @@ let pendingContent = ''
 let lastUpdateTime = 0
 let isProcessingQueue = false  // Flag to prevent duplicate queue processing
 
-// Load config
+// Load config from Gateway
 const loadConfig = async () => {
   try {
-    const response = await fetch('/api/config')
+    // Try to get config from Gateway /health endpoint
+    const response = await fetch(`${GATEWAY_URL}/health`)
     const data = await response.json()
-    config.value = data
+    config.value = {
+      version: data.version || '0.1.0',
+      model: data.model || 'Unknown'
+    }
   } catch (error) {
     console.error('Failed to load config:', error)
+    // Fallback to default values
+    config.value = {
+      version: '0.1.0',
+      model: 'Disconnected'
+    }
   }
 }
 

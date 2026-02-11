@@ -1,0 +1,7 @@
+{
+  "gateway_url": "http://localhost:8000",
+  "window": {
+    "width": 1200,
+    "height": 800
+  }
+}
