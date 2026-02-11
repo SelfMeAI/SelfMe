@@ -62,10 +62,13 @@ const loadConfig = async () => {
 // Create session
 const createSession = async () => {
   try {
+    // Detect if running in Electron (Desktop) or browser (Web)
+    const clientType = window.electronAPI?.isDesktop ? 'desktop' : 'web'
+
     const response = await fetch(`${GATEWAY_URL}/api/sessions`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ metadata: { client_type: 'web' } })
+      body: JSON.stringify({ metadata: { client_type: clientType } })
     })
     const data = await response.json()
     sessionId = data.session_id

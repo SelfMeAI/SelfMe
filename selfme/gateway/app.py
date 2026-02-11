@@ -33,7 +33,7 @@ def log_success(message: str):
 def log_warning(message: str):
     """Log warning message with timestamp and color."""
     timestamp = datetime.now().strftime("%H:%M:%S")
-    console.print(f"[dim]{timestamp}[/dim] [yellow]⚠️  {message}[/yellow]")
+    console.print(f"[dim]{timestamp}[/dim] [yellow]🔔 {message}[/yellow]")
 
 
 def log_error(message: str):
@@ -89,9 +89,11 @@ async def create_session(request: CreateSessionRequest):
     # Log session creation with client type
     client_type = session.metadata.get("client_type", "unknown")
     if client_type == "tui":
-        log_info(f"💻 TUI session created: [cyan]{session.id[:8]}[/cyan]")
+        log_info(f"📟 TUI session created: [cyan]{session.id[:8]}[/cyan]")
     elif client_type == "web":
         log_info(f"🌐 Web session created: [cyan]{session.id[:8]}[/cyan]")
+    elif client_type == "desktop":
+        log_info(f"💻 Desktop session created: [cyan]{session.id[:8]}[/cyan]")
     else:
         log_info(f"Session created: [cyan]{session.id[:8]}[/cyan]")
 
