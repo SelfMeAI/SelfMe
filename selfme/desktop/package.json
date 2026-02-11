@@ -19,7 +19,10 @@
     "files": [
       "main.js",
       "preload.js",
-      "dist/**/*"
+      "dist/**/*",
+      "icon.png",
+      "icon.ico",
+      "icon.icns"
     ],
     "extraResources": [
       {
