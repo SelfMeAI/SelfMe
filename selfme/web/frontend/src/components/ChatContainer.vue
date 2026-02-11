@@ -67,7 +67,11 @@ const scrollToBottom = (smooth = true) => {
   // Save current focused element
   const activeElement = document.activeElement
 
+  // When user clicks the button, disable user scrolling flag immediately
+  // so auto-scroll can take over during streaming
   isUserScrolling = false
+  showScrollButton.value = false
+
   messagesRef.value.scrollTo({
     top: messagesRef.value.scrollHeight,
     behavior: smooth ? 'smooth' : 'auto'
@@ -79,10 +83,6 @@ const scrollToBottom = (smooth = true) => {
       activeElement.focus()
     })
   }
-
-  setTimeout(() => {
-    showScrollButton.value = false
-  }, 300)
 }
 
 // Check scroll position

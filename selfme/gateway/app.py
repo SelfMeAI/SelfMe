@@ -155,8 +155,16 @@ async def websocket_endpoint(websocket: WebSocket, session_id: str):
                     # Set cancel flag for thread to check
                     active_cancel_flags[session_id] = True
                     # Cancel the asyncio task
-                    active_tasks[session_id].cancel()
-                    # Send cancellation confirmation immediately
+                    task = active_tasks[session_id]
+                    task.cancel()
+                    # Wait for task to actually finish before confirming cancellation
+                    try:
+                        await task
+                    except asyncio.CancelledError:
+                        pass  # Expected when task is cancelled
+                    except Exception:
+                        pass  # Ignore other errors during cancellation
+                    # Send cancellation confirmation after task is fully stopped
                     await websocket.send_json(
                         {
                             "type": "cancelled",
@@ -284,6 +292,11 @@ async def generate_response(websocket: WebSocket, session, session_id: str):
 
         # Add to memory
         session.memory.add("assistant", full_response)
+
+        # Check cancellation one final time before sending complete
+        # This prevents race condition where cancel happens right before completion
+        if active_cancel_flags.get(session_id, False):
+            raise asyncio.CancelledError
 
         # Remove from active tasks BEFORE sending complete to prevent race condition
         if session_id in active_tasks:

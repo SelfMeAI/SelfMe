@@ -1,6 +1,15 @@
 <template>
   <div class="app-container">
     <NavBar :version="config.version" :model="config.model" />
+
+    <!-- Connection status banner -->
+    <div v-if="!isConnected" class="connection-banner">
+      <div class="banner-content">
+        <span class="status-icon">⚠️</span>
+        <span class="status-text">Gateway disconnected. Reconnecting...</span>
+      </div>
+    </div>
+
     <ChatContainer
       :messages="messages"
       :is-streaming="isStreaming"

@@ -4,7 +4,7 @@
       ref="inputRef"
       v-model="message"
       class="input-box"
-      placeholder="Type your message. Press Enter to send"
+      :placeholder="isStreaming ? 'Press Esc to stop • Enter to queue message' : 'Type your message. Press Enter to send'"
       rows="1"
       :disabled="disabled"
       @keydown="handleKeydown"
