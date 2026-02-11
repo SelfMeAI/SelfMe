@@ -246,7 +246,7 @@ def run_web(gateway_url: str = "http://localhost:8000", auto_start: bool = True,
 
     # Run Web UI
     try:
-        uvicorn.run(app, host="0.0.0.0", port=port)
+        uvicorn.run(app, host="0.0.0.0", port=port, access_log=False, log_level="warning")
     finally:
         # Clean up: terminate auto-started Gateway
         if gateway_process:
