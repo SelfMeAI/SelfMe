@@ -132,7 +132,7 @@ def run_gateway(host: str = "localhost", port: int = 8000):
     print("  Press Ctrl+C to stop")
     print()
 
-    uvicorn.run(app, host=host, port=port, log_level="info")
+    uvicorn.run(app, host=host, port=port, access_log=False, log_level="error")
 
 
 def run_tui(gateway_url: str = "http://localhost:8000", auto_start: bool = True):

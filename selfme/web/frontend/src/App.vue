@@ -56,7 +56,7 @@ const createSession = async () => {
     const response = await fetch(`${GATEWAY_URL}/api/sessions`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({})
+      body: JSON.stringify({ metadata: { client_type: 'web' } })
     })
     const data = await response.json()
     sessionId = data.session_id

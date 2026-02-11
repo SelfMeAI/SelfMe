@@ -36,7 +36,11 @@ class GatewayClient:
         Returns:
             The session ID.
         """
-        response = httpx.post(f"{self.gateway_url}/api/sessions", json={}, timeout=10)
+        response = httpx.post(
+            f"{self.gateway_url}/api/sessions",
+            json={"metadata": {"client_type": "tui"}},
+            timeout=10,
+        )
         response.raise_for_status()
         return response.json()["session_id"]
 

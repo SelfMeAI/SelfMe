@@ -2,15 +2,45 @@
 
 import asyncio
 import time
+from datetime import datetime
 from typing import Any
 
 from fastapi import FastAPI, HTTPException, WebSocket
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
+from rich.console import Console
 
 from selfme.config import settings
 
 from .manager import SessionManager
+
+# Console for colored logging
+console = Console()
+
+
+def log_info(message: str):
+    """Log info message with timestamp and color."""
+    timestamp = datetime.now().strftime("%H:%M:%S")
+    console.print(f"[dim]{timestamp}[/dim] [blue]ℹ️  {message}[/blue]")
+
+
+def log_success(message: str):
+    """Log success message with timestamp and color."""
+    timestamp = datetime.now().strftime("%H:%M:%S")
+    console.print(f"[dim]{timestamp}[/dim] [green]✅ {message}[/green]")
+
+
+def log_warning(message: str):
+    """Log warning message with timestamp and color."""
+    timestamp = datetime.now().strftime("%H:%M:%S")
+    console.print(f"[dim]{timestamp}[/dim] [yellow]⚠️  {message}[/yellow]")
+
+
+def log_error(message: str):
+    """Log error message with timestamp and color."""
+    timestamp = datetime.now().strftime("%H:%M:%S")
+    console.print(f"[dim]{timestamp}[/dim] [red]❌ {message}[/red]")
+
 
 app = FastAPI(title="SelfMe Gateway", version="0.1.0")
 
@@ -56,6 +86,15 @@ async def create_session(request: CreateSessionRequest):
     if request.metadata:
         session.metadata.update(request.metadata)
 
+    # Log session creation with client type
+    client_type = session.metadata.get("client_type", "unknown")
+    if client_type == "tui":
+        log_info(f"💻 TUI session created: [cyan]{session.id[:8]}[/cyan]")
+    elif client_type == "web":
+        log_info(f"🌐 Web session created: [cyan]{session.id[:8]}[/cyan]")
+    else:
+        log_info(f"Session created: [cyan]{session.id[:8]}[/cyan]")
+
     return {
         "session_id": session.id,
         "created_at": session.created_at.isoformat(),
@@ -84,6 +123,8 @@ async def delete_session(session_id: str):
     success = session_manager.delete_session(session_id)
     if not success:
         raise HTTPException(status_code=404, detail="Session not found")
+
+    log_info(f"Session deleted: [cyan]{session_id[:8]}[/cyan]")
 
     return {"status": "deleted"}
 
@@ -131,6 +172,10 @@ async def websocket_endpoint(websocket: WebSocket, session_id: str):
                 if not content:
                     continue
 
+                # Log message received
+                preview = content[:50] + "..." if len(content) > 50 else content
+                log_info(f"Message received: \"{preview}\" [dim](session: {session_id[:8]})[/dim]")
+
                 # Send user message confirmation
                 await websocket.send_json(
                     {
@@ -164,6 +209,9 @@ async def websocket_endpoint(websocket: WebSocket, session_id: str):
                         pass  # Expected when task is cancelled
                     except Exception:
                         pass  # Ignore other errors during cancellation
+
+                    log_warning(f"Generation cancelled [dim](session: {session_id[:8]})[/dim]")
+
                     # Send cancellation confirmation after task is fully stopped
                     await websocket.send_json(
                         {
@@ -200,6 +248,10 @@ async def generate_response(websocket: WebSocket, session, session_id: str):
     full_response = ""
     cancelled = False
     completed = False  # Track if we've sent completion/cancellation message
+    token_count = 0
+
+    # Log generation start
+    log_info(f"Generating response... [dim](model: {settings.llm_model})[/dim]")
 
     try:
         # Get recent messages (context window)
@@ -242,6 +294,7 @@ async def generate_response(websocket: WebSocket, session, session_id: str):
                 # Wait for chunk with timeout to allow cancellation check
                 chunk = await asyncio.wait_for(chunk_queue.get(), timeout=0.1)
                 full_response += chunk
+                token_count += len(chunk.split())  # Rough token estimate
 
                 # Check if WebSocket is still connected
                 if websocket.client_state != WebSocketState.CONNECTED:
@@ -271,6 +324,7 @@ async def generate_response(websocket: WebSocket, session, session_id: str):
         while not chunk_queue.empty():
             chunk = await chunk_queue.get()
             full_response += chunk
+            token_count += len(chunk.split())  # Rough token estimate
 
             if websocket.client_state == WebSocketState.CONNECTED:
                 await websocket.send_json(
@@ -308,6 +362,12 @@ async def generate_response(websocket: WebSocket, session, session_id: str):
         if websocket.client_state == WebSocketState.CONNECTED and not completed:
             completed = True  # Mark as completed to prevent duplicate messages
             elapsed = time.time() - start_time
+
+            # Log successful completion
+            log_success(
+                f"Response completed: [cyan]{token_count:,}[/cyan] tokens in [cyan]{elapsed:.1f}s[/cyan]"
+            )
+
             await websocket.send_json(
                 {
                     "type": "complete",
@@ -323,6 +383,9 @@ async def generate_response(websocket: WebSocket, session, session_id: str):
         raise
 
     except Exception as e:
+        # Log error
+        log_error(f"Generation error: {str(e)}")
+
         # Only try to send error if WebSocket is still connected
         if websocket.client_state == WebSocketState.CONNECTED:
             await websocket.send_json(
@@ -350,6 +413,6 @@ async def startup_event():
             await asyncio.sleep(300)  # Every 5 minutes
             count = session_manager.cleanup_inactive(timeout_seconds=3600)
             if count > 0:
-                print(f"Cleaned up {count} inactive sessions")
+                log_info(f"Cleaned up [cyan]{count}[/cyan] inactive sessions")
 
     asyncio.create_task(cleanup_task())
