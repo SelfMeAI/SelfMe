@@ -40,6 +40,7 @@ SelfMe uses a Gateway architecture:
 - **Gateway**: Central server handling all LLM interactions
 - **TUI Client**: Terminal interface connecting to Gateway
 - **Web Client**: Browser interface connecting to Gateway
+- **Desktop Client**: Electron-based desktop application
 
 The Gateway auto-starts when you run TUI or Web UI, so you don't need to manage it manually.
 
@@ -65,9 +66,9 @@ poetry run selfme gateway --port 8000              # Custom Gateway port
 poetry run selfme web --web-port 8080              # Custom Web UI port
 ```
 
-## Two Interfaces
+## Three Interfaces
 
-### 🖥️ TUI (Terminal UI)
+### 📟 TUI (Terminal UI)
 - Keyboard-driven interface
 - Lightweight and fast
 - Perfect for terminal lovers
@@ -80,16 +81,25 @@ poetry run selfme web --web-port 8080              # Custom Web UI port
 - Visit: http://localhost:8080
 - Auto-starts Gateway
 
+### 💻 Desktop App
+- Electron-based desktop application
+- Native app experience
+- Cross-platform (Windows/macOS/Linux)
+- Portable configuration
+- Auto-connects to Gateway
+
 ## Tech Stack
 
 - Python 3.10+ | Textual | FastAPI | WebSocket | OpenAI/Anthropic API
 - Frontend: Vue 3 + Vite
+- Desktop: Electron
 
 ## Features (WIP)
 
 - [x] Gateway Architecture
 - [x] TUI Chat Interface
 - [x] Web Chat Interface
+- [x] Desktop Application
 - [x] Streaming Response
 - [x] Multi-protocol Support (OpenAI/Anthropic)
 - [x] Message Queue
