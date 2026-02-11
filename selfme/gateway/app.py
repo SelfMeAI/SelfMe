@@ -210,7 +210,7 @@ async def websocket_endpoint(websocket: WebSocket, session_id: str):
                     except Exception:
                         pass  # Ignore other errors during cancellation
 
-                    log_warning(f"🚫 Generation cancelled [dim](session: {session_id[:8]})[/dim]")
+                    log_warning(f"Generation cancelled [dim](session: {session_id[:8]})[/dim]")
 
                     # Send cancellation confirmation after task is fully stopped
                     await websocket.send_json(
