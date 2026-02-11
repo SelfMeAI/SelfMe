@@ -132,6 +132,7 @@ function createWindow() {
   mainWindow = new BrowserWindow({
     width: windowConfig.width,
     height: windowConfig.height,
+    autoHideMenuBar: true,
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
       contextIsolation: true,
@@ -156,54 +157,27 @@ function createWindow() {
 
 // Show connection error dialog
 async function showConnectionError(gatewayUrl) {
-  const isLocal = isLocalhost(gatewayUrl);
-
   const options = {
     type: 'error',
     title: 'Gateway Connection Failed',
-    message: `Cannot connect to Gateway:\n${gatewayUrl}`,
-    buttons: isLocal
-      ? ['Start Local Gateway', 'Open Config', 'Retry', 'Exit']
-      : ['Open Config', 'Retry', 'Exit'],
-    defaultId: 0,
-    cancelId: isLocal ? 3 : 2
+    message: `Cannot connect to Gateway:\n${gatewayUrl}\n\nPlease start Gateway manually and retry.`,
+    buttons: ['Open Config', 'Retry', 'Exit'],
+    defaultId: 1,
+    cancelId: 2
   };
 
   const { response } = await dialog.showMessageBox(options);
 
-  if (isLocal) {
-    if (response === 0) {
-      // Start Local Gateway
-      try {
-        await startLocalGateway();
-        createWindow();
-      } catch (error) {
-        await dialog.showErrorBox('Failed to Start Gateway', error.message);
-        app.quit();
-      }
-    } else if (response === 1) {
-      // Open Config
-      shell.openPath(getConfigPath());
-      app.quit();
-    } else if (response === 2) {
-      // Retry
-      await initializeApp();
-    } else {
-      // Exit
-      app.quit();
-    }
+  if (response === 0) {
+    // Open Config
+    shell.openPath(getConfigPath());
+    app.quit();
+  } else if (response === 1) {
+    // Retry
+    await initializeApp();
   } else {
-    if (response === 0) {
-      // Open Config
-      shell.openPath(getConfigPath());
-      app.quit();
-    } else if (response === 1) {
-      // Retry
-      await initializeApp();
-    } else {
-      // Exit
-      app.quit();
-    }
+    // Exit
+    app.quit();
   }
 }
 

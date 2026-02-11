@@ -82,12 +82,12 @@ pnpm run build:linux        # Build for Linux
 **Desktop Build Process:**
 1. Build Web UI: `cd selfme/web/frontend && pnpm run build`
 2. Copy to desktop: `cp -r selfme/web/dist/* selfme/desktop/dist/`
-3. Build desktop app: `cd selfme/desktop && pnpm run build`
+3. Build desktop app: User builds manually (network-intensive, not automated)
 
 **IMPORTANT: After ANY frontend modification:**
 - MUST rebuild Web UI: `pnpm run build`
 - MUST copy to desktop: `cp -r selfme/web/dist/* selfme/desktop/dist/`
-4. Or use the build script: `cd selfme/desktop && ./build.sh` (or `build.bat` on Windows)
+- Desktop packaging is done manually by user (use `build.sh` or `build.bat`)
 
 ### Code Quality
 ```bash
