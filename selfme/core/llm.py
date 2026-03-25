@@ -127,7 +127,7 @@ class LLMClient:
         response = self.client.messages.create(**kwargs)
 
         for chunk in response:
-            if chunk.type == "content_block_delta" and chunk.delta.text:
+            if chunk.type == "content_block_delta" and chunk.delta.type == "text_delta":
                 yield chunk.delta.text
 
     def chat_simple(self, message: str) -> str:

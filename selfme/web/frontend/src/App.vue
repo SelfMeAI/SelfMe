@@ -242,6 +242,18 @@ const sendMessage = (text, fromQueue = false) => {
     content: text
   })
 
+  // Create placeholder assistant bubble immediately for loading animation
+  const placeholder = {
+    role: 'assistant',
+    content: '',
+    streaming: true,
+    placeholder: true
+  }
+  messages.value.push(placeholder)
+  currentMessage = placeholder
+  pendingContent = ''
+  lastUpdateTime = Date.now()
+
   ws.send(JSON.stringify({ action: 'send_message', content: text }))
 }
 

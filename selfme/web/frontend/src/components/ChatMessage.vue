@@ -1,7 +1,10 @@
 <template>
   <div class="message-wrapper" :class="`message-wrapper-${message.role}`">
     <div class="message" :class="[message.role, { streaming: message.streaming }]">
-      <div class="message-content" v-html="renderedContent"></div>
+      <div v-if="message.streaming && !message.content" class="typing-indicator">
+        <span></span><span></span><span></span>
+      </div>
+      <div v-else class="message-content" v-html="renderedContent"></div>
     </div>
     <div v-if="message.metadata" class="message-meta">
       {{ formattedMetadata }}
@@ -255,8 +258,35 @@ const formattedMetadata = computed(() => {
   margin: 12px 0;
 }
 
+.typing-indicator {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 0;
+}
+
+.typing-indicator span {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background-color: #0ea5e9;
+  animation: typing-dot 1.4s ease-in-out infinite;
+}
+
+.typing-indicator span:nth-child(2) {
+  animation-delay: 0.2s;
+}
+
+.typing-indicator span:nth-child(3) {
+  animation-delay: 0.4s;
+}
+
+@keyframes typing-dot {
+  0%, 60%, 100% { opacity: 0.3; transform: scale(0.8); }
+  30% { opacity: 1; transform: scale(1); }
+}
+
 .message-meta {
-  color: #6e7681;
   font-size: 13.5px;
   margin-top: 6px;
   padding-left: 8px;
