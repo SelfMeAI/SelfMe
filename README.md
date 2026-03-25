@@ -4,6 +4,12 @@
 
 🚧 **Early Development** - Work in progress
 
+## Requirements
+
+- Python 3.10+
+- Node.js v20
+- pnpm
+
 ## Quick Start
 
 ```bash
@@ -86,7 +92,17 @@ poetry run selfme web --web-port 8080              # Custom Web UI port
 - Native app experience
 - Cross-platform (Windows/macOS/Linux)
 - Portable configuration
-- Auto-connects to Gateway
+- Requires Gateway to be running manually
+
+```bash
+# Start Gateway first
+poetry run selfme gateway
+
+# Then start Desktop
+cd selfme/desktop
+pnpm install  # first time only
+pnpm start
+```
 
 ## Tech Stack
 
