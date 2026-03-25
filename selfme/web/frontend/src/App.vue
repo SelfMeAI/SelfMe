@@ -197,7 +197,7 @@ const handleMessage = (data) => {
       if (index !== -1) {
         // Save metadata from complete message
         const metadata = data.metadata || {}
-        const metadataText = `🐙 ${metadata.model || config.value.model} · ${metadata.response_time || 0}s`
+        const metadataText = `🐙 ${metadata.response_time || 0}s · ↑${metadata.input_tokens || 0} ↓${metadata.output_tokens || 0} · ${metadata.model || config.value.model}`
         messages.value[index] = {
           ...currentMessage,
           streaming: false,

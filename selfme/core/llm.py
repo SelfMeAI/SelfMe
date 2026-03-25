@@ -18,6 +18,7 @@ class LLMClient:
         self.model = settings.llm_model
         self.api_key = settings.llm_api_key
         self.protocol = settings.llm_protocol
+        self.last_usage: dict | None = None  # Stores usage after last stream
 
         if self.protocol == "anthropic":
             self._init_anthropic()
@@ -126,9 +127,19 @@ class LLMClient:
 
         response = self.client.messages.create(**kwargs)
 
+        self.last_usage = None
+        input_tokens = 0
+        output_tokens = 0
+
         for chunk in response:
-            if chunk.type == "content_block_delta" and chunk.delta.type == "text_delta":
+            if chunk.type == "message_start" and chunk.message.usage:
+                input_tokens = chunk.message.usage.input_tokens
+            elif chunk.type == "message_delta" and chunk.usage:
+                output_tokens = chunk.usage.output_tokens
+            elif chunk.type == "content_block_delta" and chunk.delta.type == "text_delta":
                 yield chunk.delta.text
+
+        self.last_usage = {"input_tokens": input_tokens, "output_tokens": output_tokens}
 
     def chat_simple(self, message: str) -> str:
         """Simple chat with single message, returns complete response."""

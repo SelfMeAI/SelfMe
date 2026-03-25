@@ -331,8 +331,10 @@ class SelfMeApp(App):
         def on_complete(metadata: dict):
             """Handle completion."""
             # Add metadata
+            input_tokens = metadata.get('input_tokens', 0)
+            output_tokens = metadata.get('output_tokens', 0)
             meta_widget = Static(
-                f"[dim]🐙 {settings.llm_model} · {metadata.get('response_time', 0)}s[/dim]",
+                f"[dim]🐙 {metadata.get('response_time', 0)}s · ↑{input_tokens} ↓{output_tokens} · {settings.llm_model}[/dim]",
                 classes="message-meta",
                 markup=True,
             )

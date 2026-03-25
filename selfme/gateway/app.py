@@ -365,6 +365,9 @@ async def generate_response(websocket: WebSocket, session, session_id: str):
             completed = True  # Mark as completed to prevent duplicate messages
             elapsed = time.time() - start_time
 
+            # Get usage from LLM client
+            usage = session.llm_client.last_usage or {}
+
             # Log successful completion
             log_success(
                 f"Response completed: [cyan]{token_count:,}[/cyan] tokens in [cyan]{elapsed:.1f}s[/cyan]"
@@ -376,6 +379,8 @@ async def generate_response(websocket: WebSocket, session, session_id: str):
                     "metadata": {
                         "response_time": round(elapsed, 2),
                         "model": settings.llm_model,
+                        "input_tokens": usage.get("input_tokens", 0),
+                        "output_tokens": usage.get("output_tokens", 0),
                     },
                 }
             )

@@ -288,6 +288,7 @@ const formattedMetadata = computed(() => {
 }
 
 .message-meta {
+  color: #6e7681;
   font-size: 13.5px;
   margin-top: 6px;
   padding-left: 8px;
