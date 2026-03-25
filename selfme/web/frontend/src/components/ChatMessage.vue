@@ -128,11 +128,12 @@ const formattedMetadata = computed(() => {
 .message.assistant.streaming {
   opacity: 0.85;
   animation: pulse 1.5s ease-in-out infinite;
+  border-left: 2px solid #0ea5e9;
 }
 
 @keyframes pulse {
-  0%, 100% { opacity: 0.85; }
-  50% { opacity: 1; }
+  0%, 100% { opacity: 0.7; border-left-color: rgba(14, 165, 233, 0.3); }
+  50% { opacity: 1; border-left-color: #0ea5e9; }
 }
 
 .message-content {

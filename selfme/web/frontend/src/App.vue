@@ -161,15 +161,7 @@ const handleMessage = (data) => {
     }
 
     const chunk = data.content
-    if (chunk.includes('\n\n---\n*')) {
-      const parts = chunk.split('\n\n---\n*')
-      pendingContent += parts[0]
-      if (parts[1]) {
-        currentMessage.metadata = parts[1].replace(/\*$/, '').trim()
-      }
-    } else {
-      pendingContent += chunk
-    }
+    pendingContent += chunk
 
     // Throttle updates: update at most every 50ms for smoother scrolling
     const now = Date.now()
