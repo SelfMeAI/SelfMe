@@ -63,3 +63,8 @@ yarn-error.log*
 # Frontend dev
 .vite/
 .cache/
+.next/
+dist/
+dist-renderer/
+dist-electron/
+*.tsbuildinfo

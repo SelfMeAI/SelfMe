@@ -1,130 +1,97 @@
 # SelfMe
 
-> Your AI Self - A personal embodied AI agent
+> Your AI Self
 
-🚧 **Early Development** - Work in progress
+当前仓库已经完成 Phase 0 的主迁移，后续工作进入 `Phase 0 收尾 / 重塑`。
 
-## Requirements
+## 当前结构
 
-- Python 3.10+
-- Node.js v20
-- pnpm
-
-## Quick Start
-
-```bash
-# Install
-poetry install
-
-# Configure
-cp .env.example .env
-# Edit .env and add your LLM_API_KEY
-
-# Show help
-poetry run selfme
-
-# Run TUI
-poetry run selfme tui
-
-# Run Web UI
-poetry run selfme web
+```text
+apps/
+  gateway/
+  web/
+  desktop/
+  tui/
+packages/
+  chat-ui/
+  protocol/
+scripts/
+  smoke/
+docs/
+  phase-0-checklist.md
 ```
 
-### First Time Setup (Web UI)
+## 技术栈
 
-If you want to modify the frontend or the dist folder is missing:
+| 层级 | 技术 |
+|------|------|
+| Gateway | Fastify + TypeScript |
+| LLM 调用 | OpenAI SDK + Anthropic 协议 |
+| Web UI | Next.js + React + TypeScript |
+| Desktop | Electron + React + TypeScript |
+| TUI | Ink + React + TypeScript |
+
+## 快速开始
 
 ```bash
-cd selfme/web/frontend
 pnpm install
-pnpm run build
+cp .env.example .env
 ```
 
-## Architecture
+## 启动
 
-SelfMe uses a Gateway architecture:
-- **Gateway**: Central server handling all LLM interactions
-- **TUI Client**: Terminal interface connecting to Gateway
-- **Web Client**: Browser interface connecting to Gateway
-- **Desktop Client**: Electron-based desktop application
-
-The Gateway auto-starts when you run TUI or Web UI, so you don't need to manage it manually.
-
-## Commands
+### Gateway
 
 ```bash
-# Show help
-poetry run selfme
-
-# Start TUI (auto-starts Gateway)
-poetry run selfme tui
-
-# Start Web UI (auto-starts Gateway)
-poetry run selfme web
-
-# Start Gateway only
-poetry run selfme gateway
-
-# Advanced options
-poetry run selfme tui --no-auto                    # Don't auto-start Gateway
-poetry run selfme tui --gateway-url http://remote:8000  # Connect to remote Gateway
-poetry run selfme gateway --port 8000              # Custom Gateway port
-poetry run selfme web --web-port 8080              # Custom Web UI port
+pnpm dev:gateway
 ```
 
-## Three Interfaces
+默认地址：
 
-### 📟 TUI (Terminal UI)
-- Keyboard-driven interface
-- Lightweight and fast
-- Perfect for terminal lovers
-- Auto-starts Gateway
+- HTTP: `http://localhost:8000`
+- WebSocket: `ws://localhost:8000/ws`
 
-### 🌐 Web UI
-- Browser-based interface
-- Real-time WebSocket streaming
-- Easy to share and access
-- Visit: http://localhost:8080
-- Auto-starts Gateway
-
-### 💻 Desktop App
-- Electron-based desktop application
-- Native app experience
-- Cross-platform (Windows/macOS/Linux)
-- Portable configuration
-- Requires Gateway to be running manually
+### Web
 
 ```bash
-# Start Gateway first
-poetry run selfme gateway
-
-# Then start Desktop
-cd selfme/desktop
-pnpm install  # first time only
-pnpm start
+pnpm dev:web
 ```
 
-## Tech Stack
+### Desktop
 
-- Python 3.10+ | Textual | FastAPI | WebSocket | OpenAI/Anthropic API
-- Frontend: Vue 3 + Vite
-- Desktop: Electron
+```bash
+pnpm dev:desktop
+```
 
-## Features (WIP)
+需要拆分调试时：
 
-- [x] Gateway Architecture
-- [x] TUI Chat Interface
-- [x] Web Chat Interface
-- [x] Desktop Application
-- [x] Streaming Response
-- [x] Multi-protocol Support (OpenAI/Anthropic)
-- [x] Message Queue
-- [x] Cancel Generation
-- [x] Auto-start Gateway
-- [x] Multi-client Support
-- [ ] Persistent Memory
-- [ ] Self-Evolution
+```bash
+pnpm dev:desktop:renderer
+pnpm dev:desktop:main
+```
 
----
+### TUI
 
-Powered by 🦞 & 🐙
+```bash
+pnpm dev:tui
+```
+
+## 验证
+
+Gateway 协议烟测：
+
+```bash
+pnpm --filter @selfme/gateway build
+pnpm smoke:gateway
+```
+
+这套烟测会验证：
+
+- `/health` 基础状态
+- Modern WebSocket 会话绑定
+- Modern WebSocket 流式完成
+- Modern WebSocket 取消
+
+## 当前重点
+
+当前所有收尾任务见 [docs/phase-0-checklist.md](/Users/q1d40/Documents/Work/selfme/git/SelfMe/docs/phase-0-checklist.md)。
