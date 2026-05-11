@@ -109,6 +109,16 @@ function bindSession(input: { sessions: SessionStore; sessionId: string }): Sess
   return record.summary;
 }
 
+function summarizeMessagePreview(content: string): string {
+  const normalized = content.replace(/\s+/g, " ").trim();
+
+  if (normalized.length <= 64) {
+    return normalized;
+  }
+
+  return `${normalized.slice(0, 61)}...`;
+}
+
 async function handleChatSend(input: {
   connection: WsConnection;
   sessions: SessionStore;
@@ -134,7 +144,12 @@ async function handleChatSend(input: {
 
   activeRecord.memory.append("user", input.content);
   activeRecord.summary.messageCount = activeRecord.memory.list().length;
-  logInfo(`Message received: "${input.content.slice(0, 50)}${input.content.length > 50 ? "..." : ""}" (${input.session.sessionId.slice(0, 8)})`);
+  logInfo("Message received", {
+    session: input.session.sessionId.slice(0, 8),
+    request: input.requestId ?? "-",
+    chars: input.content.length,
+    preview: summarizeMessagePreview(input.content)
+  });
 
   sendAccepted(input.connection, {
     sessionId: activeRecord.summary.sessionId,
@@ -145,7 +160,12 @@ async function handleChatSend(input: {
   input.currentAbortControllerRef.current = new AbortController();
   const startedAt = Date.now();
   let fullContent = "";
-  logInfo(`Generating response (${input.llm.getModel()})`);
+  logInfo("Generation started", {
+    session: activeRecord.summary.sessionId.slice(0, 8),
+    request: input.requestId ?? "-",
+    protocol: input.llm.getProtocol(),
+    model: input.llm.getModel()
+  });
 
   function finalizeCancelledResponse(): void {
     if (fullContent) {
@@ -157,7 +177,12 @@ async function handleChatSend(input: {
       sessionId: activeRecord.summary.sessionId,
       requestId: input.requestId
     });
-    logWarning(`Generation cancelled (${activeRecord.summary.sessionId.slice(0, 8)})`);
+    logWarning("Generation cancelled", {
+      session: activeRecord.summary.sessionId.slice(0, 8),
+      request: input.requestId ?? "-",
+      elapsed_s: Number(((Date.now() - startedAt) / 1000).toFixed(2)),
+      partial_chars: fullContent.length
+    });
     input.currentAbortControllerRef.current = undefined;
   }
 
@@ -204,7 +229,14 @@ async function handleChatSend(input: {
       model: input.llm.getModel()
     }
   });
-  logSuccess(`Response completed in ${Number(((Date.now() - startedAt) / 1000).toFixed(2))}s (${activeRecord.summary.sessionId.slice(0, 8)})`);
+  logSuccess("Response completed", {
+    session: activeRecord.summary.sessionId.slice(0, 8),
+    request: input.requestId ?? "-",
+    elapsed_s: Number(((Date.now() - startedAt) / 1000).toFixed(2)),
+    model: input.llm.getModel(),
+    input_tokens: input.llm.getLastUsage()?.inputTokens ?? 0,
+    output_tokens: input.llm.getLastUsage()?.outputTokens ?? 0
+  });
 }
 
 function registerSocketRoute(input: {
@@ -289,7 +321,10 @@ function registerSocketRoute(input: {
             });
           }
         } catch (error) {
-          logError(error instanceof Error ? error.message : "Unknown error");
+          logError("Gateway runtime error", {
+            session: currentSession?.sessionId?.slice(0, 8) ?? "-",
+            error: error instanceof Error ? error.message : "Unknown error"
+          });
           sendError(connection, {
             code: "GATEWAY_RUNTIME_ERROR",
             message: error instanceof Error ? error.message : "Unknown error",

@@ -41,7 +41,7 @@ export function useGatewayChat() {
   const gatewayWsBaseUrl = process.env.SELFME_GATEWAY_WS_URL ?? gatewayHttpUrl.replace(/^http/, "ws");
 
   const [config, setConfig] = useState<TuiConfig>({
-    version: "2026.4.21",
+    version: "2026.5.11",
     model: "Loading..."
   });
   const [messages, setMessages] = useState<TuiMessage[]>([]);
@@ -58,6 +58,7 @@ export function useGatewayChat() {
   const configRef = useRef(config);
   const shouldReconnectRef = useRef(true);
   const sessionReadyRef = useRef(false);
+  const reconnectNoticeShownRef = useRef(false);
 
   const updateAssistantContent = useCallback((delta: string) => {
     if (!currentAssistantIdRef.current) {
@@ -166,12 +167,12 @@ export function useGatewayChat() {
       const data = (await response.json()) as { version?: string; model?: string };
 
       setConfig({
-        version: data.version ?? "2026.4.21",
+        version: data.version ?? "2026.5.11",
         model: data.model ?? "Unknown"
       });
     } catch {
       setConfig({
-        version: "2026.4.21",
+        version: "2026.5.11",
         model: "Disconnected"
       });
     }
@@ -198,6 +199,7 @@ export function useGatewayChat() {
 
       socket.on("open", () => {
         setConnected(true);
+        reconnectNoticeShownRef.current = false;
         socket.send(
           JSON.stringify({
             type: "session.attach",
@@ -271,14 +273,17 @@ export function useGatewayChat() {
     } catch (error) {
       setConnected(false);
       sessionReadyRef.current = false;
-      setMessages((current) => [
-        ...current,
-        {
-          id: createMessageId("system"),
-          role: "system",
-          content: `Gateway unavailable: ${error instanceof Error ? error.message : "Unknown error"}`
-        }
-      ]);
+      if (!reconnectNoticeShownRef.current) {
+        reconnectNoticeShownRef.current = true;
+        setMessages((current) => [
+          ...current,
+          {
+            id: createMessageId("system"),
+            role: "system",
+            content: `Gateway unavailable: ${error instanceof Error ? error.message : "Unknown error"}`
+          }
+        ]);
+      }
 
       if (reconnectTimerRef.current) {
         clearTimeout(reconnectTimerRef.current);

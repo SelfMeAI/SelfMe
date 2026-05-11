@@ -1,40 +1,141 @@
 import path from "node:path";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 
-import { config as loadDotenv } from "dotenv";
+import {
+  DEFAULT_GATEWAY_HOST,
+  DEFAULT_GATEWAY_PORT
+} from "@selfme/protocol";
 
-const currentDir = path.dirname(fileURLToPath(import.meta.url));
+const currentDir = typeof __dirname === "string"
+  ? __dirname
+  : path.dirname(fileURLToPath(import.meta.url));
 const workspaceRoot = path.resolve(currentDir, "../../..");
 
-loadDotenv({
-  path: path.join(workspaceRoot, ".env")
-});
+interface StoredAppConfigFile {
+  gatewayHost?: string;
+  gatewayPort?: number;
+}
+
+interface RootPackageJson {
+  version?: string;
+}
+
+function readJsonFile<T>(filePath: string): T | null {
+  try {
+    const raw = readFileSync(filePath, "utf-8");
+    return JSON.parse(raw) as T;
+  } catch {
+    return null;
+  }
+}
+
+function readCliOption(name: string): string | undefined {
+  const exactIndex = process.argv.findIndex((argument) => argument === name);
+
+  if (exactIndex >= 0) {
+    return process.argv[exactIndex + 1];
+  }
+
+  const prefix = `${name}=`;
+  const prefixedArgument = process.argv.find((argument) => argument.startsWith(prefix));
+
+  return prefixedArgument ? prefixedArgument.slice(prefix.length) : undefined;
+}
+
+function resolveSelfMeRoot(): string {
+  const cliRoot = readCliOption("--selfme-root");
+
+  if (!cliRoot) {
+    return path.join(workspaceRoot, ".selfme");
+  }
+
+  return cliRoot.endsWith(".selfme") ? cliRoot : path.join(cliRoot, ".selfme");
+}
+
+function isDesktopManagedRuntime(): boolean {
+  return readCliOption("--managed-client") === "desktop";
+}
+
+function normalizeAppConfig(input: StoredAppConfigFile | null): { gatewayHost: string; gatewayPort: number } {
+  const gatewayHost = input?.gatewayHost?.trim() || DEFAULT_GATEWAY_HOST;
+  const gatewayPort = typeof input?.gatewayPort === "number" && Number.isFinite(input.gatewayPort)
+    ? input.gatewayPort
+    : DEFAULT_GATEWAY_PORT;
+
+  return {
+    gatewayHost,
+    gatewayPort
+  };
+}
+
+function resolveGatewayHost(input: string): string {
+  const cliHost = readCliOption("--gateway-host")?.trim();
+
+  if (cliHost) {
+    return cliHost;
+  }
+
+  return input;
+}
+
+function resolveGatewayPort(input: number): number {
+  const cliPort = readCliOption("--gateway-port");
+
+  if (!cliPort) {
+    return input;
+  }
+
+  const parsedPort = Number(cliPort);
+  return Number.isFinite(parsedPort) ? parsedPort : input;
+}
+
+function materializeAppConfig(appConfigPath: string): { gatewayHost: string; gatewayPort: number } {
+  const stored = readJsonFile<StoredAppConfigFile>(appConfigPath);
+  const normalized = normalizeAppConfig(stored);
+
+  if (!existsSync(appConfigPath)) {
+    mkdirSync(path.dirname(appConfigPath), {
+      recursive: true
+    });
+
+    writeFileSync(appConfigPath, `${JSON.stringify(normalized, null, 2)}\n`, "utf-8");
+  }
+
+  return normalized;
+}
+
+function readAppVersion(): string {
+  const injectedVersion = process.env.SELFME_APP_VERSION?.trim();
+
+  if (injectedVersion) {
+    return injectedVersion;
+  }
+
+  const rootPackage = readJsonFile<RootPackageJson>(path.join(workspaceRoot, "package.json"));
+  return rootPackage?.version?.trim() || "0.0.0";
+}
 
 export interface GatewayConfig {
   host: string;
   port: number;
-  defaultLlmProtocol: string;
-  defaultLlmApiKey: string;
-  defaultLlmBaseUrl?: string;
-  defaultLlmModel: string;
   appVersion: string;
-  localConfigPath: string;
-  localSecretsPath: string;
-  legacyModelConfigPath: string;
+  appConfigPath: string;
+  localSettingsPath: string;
 }
 
-// 这里集中读取最终版 Gateway 配置，只保留一套 LLM_* 命名。
 export function loadConfig(): GatewayConfig {
+  const selfmeConfigRoot = resolveSelfMeRoot();
+  const appConfigPath = path.join(selfmeConfigRoot, "app.json");
+  const appConfig = isDesktopManagedRuntime()
+    ? normalizeAppConfig(null)
+    : materializeAppConfig(appConfigPath);
+
   return {
-    host: process.env.GATEWAY_HOST ?? "0.0.0.0",
-    port: Number(process.env.GATEWAY_PORT ?? "8000"),
-    defaultLlmProtocol: process.env.LLM_PROTOCOL ?? "openai",
-    defaultLlmApiKey: process.env.LLM_API_KEY ?? "",
-    defaultLlmBaseUrl: process.env.LLM_BASE_URL ?? undefined,
-    defaultLlmModel: process.env.LLM_MODEL ?? "gpt-4.1-mini",
-    appVersion: process.env.APP_VERSION ?? "2026.4.21",
-    localConfigPath: path.join(workspaceRoot, ".selfme", "config.json"),
-    localSecretsPath: path.join(workspaceRoot, ".selfme", "secrets.json"),
-    legacyModelConfigPath: path.join(workspaceRoot, ".selfme", "gateway.json")
+    host: resolveGatewayHost(appConfig.gatewayHost),
+    port: resolveGatewayPort(appConfig.gatewayPort),
+    appVersion: readAppVersion(),
+    appConfigPath,
+    localSettingsPath: path.join(selfmeConfigRoot, "settings.json")
   };
 }

@@ -24,7 +24,10 @@ export const registerSessionRoutes: FastifyPluginAsync<{
       metadata: body.metadata ?? {}
     });
     record.summary.messageCount = record.memory.list().length;
-    logInfo(`${record.summary.clientType.toUpperCase()} session created: ${record.summary.sessionId.slice(0, 8)}`);
+    logInfo("Session created", {
+      client: record.summary.clientType,
+      session: record.summary.sessionId.slice(0, 8)
+    });
 
     return {
       session: record.summary

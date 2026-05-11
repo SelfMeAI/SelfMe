@@ -69,7 +69,7 @@ export function ModelSettingsPanel({
       <div className="settings-panel-header">
         <div className="settings-panel-kicker">Model settings</div>
         <h1 className="settings-panel-title">Provider, endpoint, and credentials.</h1>
-        <p className="settings-panel-copy">Only the active runtime settings live here. API keys are kept in the local secrets file and only a masked summary is shown after save.</p>
+        <p className="settings-panel-copy">Only the active runtime settings live here. The local settings file stores provider, endpoint, model, and API key together, while the UI only shows a masked key summary.</p>
       </div>
 
       <div className="settings-summary">
@@ -167,17 +167,6 @@ export function ModelSettingsPanel({
               : "No key is stored yet. Add one here to enable authenticated requests."}
           </span>
         </label>
-
-        <div className="settings-storage-grid">
-          <div className="settings-storage-card">
-            <span className="settings-field-label">Config file</span>
-            <div className="settings-storage-path">{settings?.configPath || "Loading config path..."}</div>
-          </div>
-          <div className="settings-storage-card">
-            <span className="settings-field-label">Secrets file</span>
-            <div className="settings-storage-path">{settings?.secretsPath || "Loading secrets path..."}</div>
-          </div>
-        </div>
 
         {error ? <div className="settings-feedback settings-feedback-error">{error}</div> : null}
         {notice ? <div className="settings-feedback settings-feedback-success">{notice}</div> : null}

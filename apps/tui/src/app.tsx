@@ -26,22 +26,25 @@ function MessageBlock(input: {
   metadata?: string;
   streaming?: boolean;
 }) {
-  const accent = input.role === "user" ? "cyan" : input.role === "error" ? "red" : input.role === "system" ? "yellow" : "white";
-  const label = input.role === "user" ? "YOU" : input.role === "error" ? "ERR" : input.role === "system" ? "SYS" : "AI";
+  if (input.role === "user") {
+    return (
+      <Box flexDirection="column" marginBottom={1} width="100%">
+        <Box borderStyle="round" borderColor="cyan" paddingX={1} width="100%">
+          <Text color="cyan">{input.content}</Text>
+        </Box>
+      </Box>
+    );
+  }
+
+  const accent = input.role === "error" ? "red" : input.role === "system" ? "yellow" : "white";
 
   return (
-    <Box flexDirection="column" marginBottom={1}>
-      <Box>
-        <Text color={accent}>▌ </Text>
-        <Text bold color={accent}>
-          {label}
-        </Text>
-      </Box>
-      <Box marginLeft={2}>
-        <Text>{input.content || (input.streaming ? "…" : "")}</Text>
+    <Box flexDirection="column" marginBottom={1} width="100%">
+      <Box borderStyle="round" borderColor={input.role === "assistant" ? "gray" : accent} paddingX={1} width="100%">
+        <Text color={accent}>{input.content || (input.streaming ? "…" : "")}</Text>
       </Box>
       {input.metadata ? (
-        <Box marginLeft={2}>
+        <Box marginLeft={1}>
           <Text dimColor>{input.metadata}</Text>
         </Box>
       ) : null}
@@ -49,11 +52,126 @@ function MessageBlock(input: {
   );
 }
 
-function handleBufferInput(input: string, key: Key, update: (next: string | ((current: string) => string)) => void): "submit" | "cancel" | "noop" {
+function formatDirectory(input: string): string {
+  const home = process.env.HOME;
+
+  if (home && input.startsWith(home)) {
+    return `~${input.slice(home.length) || "/"}`;
+  }
+
+  return input;
+}
+
+function insertAt(input: string, value: string, index: number): string {
+  return `${input.slice(0, index)}${value}${input.slice(index)}`;
+}
+
+function deleteBackward(input: string, index: number): { next: string; cursor: number } {
+  if (index <= 0) {
+    return { next: input, cursor: 0 };
+  }
+
+  return {
+    next: `${input.slice(0, index - 1)}${input.slice(index)}`,
+    cursor: index - 1
+  };
+}
+
+function deleteForward(input: string, index: number): { next: string; cursor: number } {
+  if (index >= input.length) {
+    return { next: input, cursor: index };
+  }
+
+  return {
+    next: `${input.slice(0, index)}${input.slice(index + 1)}`,
+    cursor: index
+  };
+}
+
+function getLineStartIndexes(input: string): number[] {
+  const indexes = [0];
+
+  for (let index = 0; index < input.length; index += 1) {
+    if (input[index] === "\n") {
+      indexes.push(index + 1);
+    }
+  }
+
+  return indexes;
+}
+
+function getCursorLineColumn(input: string, cursor: number): { line: number; column: number } {
+  const lines = input.slice(0, cursor).split("\n");
+  const line = lines.length - 1;
+  const column = lines.at(-1)?.length ?? 0;
+
+  return { line, column };
+}
+
+function moveCursorVertical(input: string, cursor: number, direction: -1 | 1): number {
+  const lineStarts = getLineStartIndexes(input);
+  const lines = input.split("\n");
+  const current = getCursorLineColumn(input, cursor);
+  const nextLine = current.line + direction;
+
+  if (nextLine < 0 || nextLine >= lines.length) {
+    return cursor;
+  }
+
+  const nextColumn = Math.min(current.column, lines[nextLine]?.length ?? 0);
+  return lineStarts[nextLine] + nextColumn;
+}
+
+function renderBufferWithCursor(buffer: string, cursor: number) {
+  const lines = buffer.length > 0 ? buffer.split("\n") : [""];
+  let consumed = 0;
+
+  return lines.map((line, lineIndex) => {
+    const isLastLine = lineIndex === lines.length - 1;
+    const lineStart = consumed;
+    const lineEnd = lineStart + line.length;
+    const cursorOnLine = cursor >= lineStart && cursor <= lineEnd;
+    const cursorColumn = cursorOnLine ? cursor - lineStart : -1;
+
+    consumed += line.length + (isLastLine ? 0 : 1);
+
+    if (!cursorOnLine) {
+      return (
+        <Text key={`line-${lineIndex}`}>
+          {line}
+        </Text>
+      );
+    }
+
+    const before = line.slice(0, cursorColumn);
+    const currentChar = line[cursorColumn] ?? " ";
+    const after = line.slice(cursorColumn + (cursorColumn < line.length ? 1 : 0));
+
+    return (
+      <Box key={`line-${lineIndex}`}>
+        <Text>{before}</Text>
+        <Text backgroundColor="cyan" color="black">
+          {currentChar}
+        </Text>
+        <Text>{after}</Text>
+      </Box>
+    );
+  });
+}
+
+function handleBufferInput(
+  input: string,
+  key: Key,
+  buffer: string,
+  cursor: number,
+  updateBuffer: (next: string) => void,
+  updateCursor: (next: number) => void
+): "submit" | "cancel" | "noop" {
   const isCtrlEnter = key.ctrl && key.return;
 
   if (isCtrlEnter) {
-    update((current) => `${current}\n`);
+    updateBuffer(insertAt(buffer, "\n", cursor));
+    updateCursor(cursor + 1);
     return "noop";
   }
 
@@ -62,12 +180,42 @@ function handleBufferInput(input: string, key: Key, update: (next: string | ((cu
   }
 
   if (key.backspace || key.delete) {
-    update((current) => current.slice(0, -1));
+    const result = deleteBackward(buffer, cursor);
+    updateBuffer(result.next);
+    updateCursor(result.cursor);
+    return "noop";
+  }
+
+  if (key.leftArrow) {
+    updateCursor(Math.max(0, cursor - 1));
+    return "noop";
+  }
+
+  if (key.rightArrow) {
+    updateCursor(Math.min(buffer.length, cursor + 1));
+    return "noop";
+  }
+
+  if (key.upArrow) {
+    updateCursor(moveCursorVertical(buffer, cursor, -1));
+    return "noop";
+  }
+
+  if (key.downArrow) {
+    updateCursor(moveCursorVertical(buffer, cursor, 1));
+    return "noop";
+  }
+
+  if (key.ctrl && input === "d") {
+    const result = deleteForward(buffer, cursor);
+    updateBuffer(result.next);
+    updateCursor(result.cursor);
     return "noop";
   }
 
   if (!key.ctrl && !key.meta) {
-    update((current) => `${current}${input}`);
+    updateBuffer(insertAt(buffer, input, cursor));
+    updateCursor(cursor + input.length);
   }
 
   return "noop";
@@ -88,8 +236,10 @@ export function App() {
     addLocalSystemMessage
   } = useGatewayChat();
   const [buffer, setBuffer] = useState("");
+  const [cursor, setCursor] = useState(0);
   const [loadingIndex, setLoadingIndex] = useState(0);
   const [isExiting, setIsExiting] = useState(false);
+  const directory = useMemo(() => formatDirectory(process.cwd()), []);
 
   useEffect(() => {
     if (!isGenerating) {
@@ -117,7 +267,7 @@ export function App() {
       return;
     }
 
-    const result = handleBufferInput(input, key, setBuffer);
+    const result = handleBufferInput(input, key, buffer, cursor, setBuffer, setCursor);
 
     if (result !== "submit") {
       return;
@@ -125,6 +275,7 @@ export function App() {
 
     const content = buffer.trim();
     setBuffer("");
+    setCursor(0);
 
     if (!content) {
       return;
@@ -155,6 +306,7 @@ export function App() {
   }, [disconnect, exit, isExiting]);
 
   const visibleMessages = useMemo(() => messages.slice(-14), [messages]);
+  const footerText = `${config.model} · ${directory}${connected ? "" : " · Gateway disconnected"}`;
 
   return (
     <Box flexDirection="column" paddingX={1} paddingY={0}>
@@ -166,23 +318,33 @@ export function App() {
         </Box>
       ) : null}
 
-      {!hasSentMessage ? (
-        <Box borderStyle="round" borderColor="cyan" flexDirection="column" paddingX={1} paddingY={0} marginBottom={1}>
-          <Logo />
-          <Box marginTop={1}>
-            <Text dimColor>v{config.version}</Text>
-          </Box>
-          <Box>
-            <Text dimColor>Model </Text>
-            <Text color="cyan">{config.model}</Text>
-          </Box>
-          <Box marginTop={1}>
-            <Text bold color="cyan">
-              ✨ Welcome back!
-            </Text>
-          </Box>
+      <Box borderStyle="round" borderColor="cyan" flexDirection="column" paddingX={1} paddingY={0} marginBottom={1}>
+        {!hasSentMessage ? <Logo /> : null}
+        <Box marginTop={hasSentMessage ? 0 : 1}>
+          <Text bold color="cyan">
+            Terminal-first SelfMe workspace
+          </Text>
         </Box>
-      ) : null}
+        {!hasSentMessage ? (
+          <>
+            <Box>
+              <Text dimColor>v{config.version}</Text>
+            </Box>
+            <Box>
+              <Text dimColor>Model </Text>
+              <Text color="cyan">{config.model}</Text>
+            </Box>
+            <Box>
+              <Text dimColor>Directory </Text>
+              <Text color="white">{directory}</Text>
+            </Box>
+          </>
+        ) : (
+          <Box>
+            <Text dimColor>{`v${config.version} · ${config.model} · ${directory}`}</Text>
+          </Box>
+        )}
+      </Box>
 
       <Box flexDirection="column" flexGrow={1}>
         {visibleMessages.map((message) => (
@@ -197,25 +359,27 @@ export function App() {
       </Box>
 
       {queue.length > 0 ? (
-        <Box marginBottom={1} borderStyle="round" borderColor="gray" paddingX={1}>
-          <Text dimColor>📋 Queued ({queue.length})</Text>
+        <Box marginBottom={1} borderStyle="round" borderColor="gray" paddingX={1} width="100%">
+          <Text dimColor>Queue {queue.length}</Text>
           <Text> </Text>
           <Text dimColor>{queue[0]}</Text>
         </Box>
       ) : null}
 
-      <Box borderStyle="round" borderColor={isGenerating ? "cyan" : "gray"} paddingX={1} flexDirection="column">
-        <Text dimColor>{isGenerating ? "Press Esc to stop • Ctrl+Enter for new line" : "Type message • Enter to send • Ctrl+Enter new line"}</Text>
-        {buffer ? (
-          <Text>{buffer}</Text>
-        ) : (
-          <Text dimColor>Type message and press Enter</Text>
+      <Box borderStyle="round" borderColor={isGenerating ? "cyan" : "gray"} paddingX={1} paddingY={0} flexDirection="column" width="100%">
+        {buffer ? renderBufferWithCursor(buffer, cursor) : (
+          <Box>
+            <Text backgroundColor="cyan" color="black">
+              {" "}
+            </Text>
+            <Text dimColor> Write a message</Text>
+          </Box>
         )}
       </Box>
 
       <Box marginTop={1} justifyContent="space-between">
         <Text color={isGenerating ? "cyan" : "gray"}>{isGenerating ? `🐙 ${loadingFrames[loadingIndex]}` : " "}</Text>
-        <Text dimColor>Ctrl+Enter New Line │ Esc Cancel │ Ctrl+C Quit</Text>
+        <Text dimColor>{footerText}</Text>
       </Box>
     </Box>
   );

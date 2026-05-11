@@ -1,5 +1,11 @@
 export type ClientType = "web" | "desktop" | "tui" | "unknown";
 
+export const DEFAULT_GATEWAY_HOST = "0.0.0.0";
+export const DEFAULT_GATEWAY_PORT = 8000;
+export const DEFAULT_GATEWAY_HTTP_URL = "http://127.0.0.1:8000";
+export const DEFAULT_GATEWAY_WS_URL = "ws://127.0.0.1:8000/ws";
+export const DEFAULT_ANTHROPIC_VERSION = "2023-06-01";
+
 export interface ChatMessage {
   id: string;
   role: "system" | "user" | "assistant" | "tool";
@@ -44,21 +50,16 @@ export interface GatewayHealth {
 export type LLMProtocol = "openai" | "anthropic";
 
 export interface LLMSettings {
-  activeProfileId: string;
-  profileName: string;
   protocol: LLMProtocol;
   baseUrl: string;
   model: string;
   hasApiKey: boolean;
   maskedApiKey?: string;
-  configPath: string;
-  secretsPath: string;
-  persistedConfig: boolean;
-  persistedSecrets: boolean;
+  settingsPath: string;
+  persistedSettings: boolean;
 }
 
 export interface UpdateLLMSettingsInput {
-  profileName?: string;
   protocol: LLMProtocol;
   baseUrl?: string;
   model: string;

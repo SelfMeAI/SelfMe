@@ -67,4 +67,6 @@ yarn-error.log*
 dist/
 dist-renderer/
 dist-electron/
+dist-runtime/
+dist-app/
 *.tsbuildinfo

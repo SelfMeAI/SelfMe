@@ -80,12 +80,12 @@ export function ChatShell({
       const data = (await response.json()) as { version?: string; model?: string };
 
       setConfig({
-        version: data.version ?? "2026.4.21",
+        version: data.version ?? "",
         model: data.model ?? "Unknown"
       });
     } catch {
       setConfig({
-        version: "2026.4.21",
+        version: "",
         model: "Disconnected"
       });
     }

@@ -2,16 +2,18 @@ import { createApp } from "./app.js";
 import { logBanner, logError } from "./logger.js";
 
 async function bootstrap(): Promise<void> {
-  const { app, config, llm } = createApp();
+  const { app, config, llm, settings } = createApp();
+  const snapshot = settings.getSnapshot();
 
   try {
     logBanner({
       host: config.host,
       port: config.port,
-      protocol: llm.getProtocol(),
-      model: llm.getModel(),
+      protocol: snapshot.model ? llm.getProtocol() : "Not configured",
+      model: snapshot.model || "Not configured",
       version: config.appVersion,
-      apiKeyConfigured: llm.hasApiKey()
+      apiKeyConfigured: llm.hasApiKey(),
+      baseUrl: llm.getBaseUrl()
     });
 
     await app.listen({

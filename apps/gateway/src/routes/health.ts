@@ -5,7 +5,7 @@ import type { GatewayHealth } from "@selfme/protocol";
 export const registerHealthRoutes: FastifyPluginAsync<{
   appVersion: string;
   getModel: () => string;
-  getProtocol: () => string;
+  getProtocol: () => string | undefined;
   getActiveSessions: () => number;
 }> = async (
   app,

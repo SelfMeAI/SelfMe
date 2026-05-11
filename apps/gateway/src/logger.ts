@@ -8,30 +8,46 @@ const colors = {
   reset: "\x1b[0m"
 };
 
+type LogContext = Record<string, string | number | boolean | undefined | null>;
+
 function timestamp(): string {
   return new Date().toLocaleTimeString("zh-CN", {
     hour12: false
   });
 }
 
-function print(color: string, prefix: string, message: string): void {
-  console.log(`${colors.dim}${timestamp()}${colors.reset} ${color}${prefix} ${message}${colors.reset}`);
+function formatContext(input?: LogContext): string {
+  if (!input) {
+    return "";
+  }
+
+  const parts = Object.entries(input)
+    .filter(([, value]) => value !== undefined && value !== null && value !== "")
+    .map(([key, value]) => `${key}=${typeof value === "string" && value.includes(" ") ? JSON.stringify(value) : String(value)}`);
+
+  return parts.length > 0 ? parts.join(" ") : "";
 }
 
-export function logInfo(message: string): void {
-  print(colors.blue, "ℹ", message);
+function print(color: string, prefix: string, message: string, context?: LogContext): void {
+  const formattedContext = formatContext(context);
+  const contextSuffix = formattedContext ? ` ${colors.dim}${formattedContext}${colors.reset}` : "";
+  console.log(`${colors.dim}${timestamp()}${colors.reset} ${color}${prefix}${colors.reset} ${message}${contextSuffix}`);
 }
 
-export function logSuccess(message: string): void {
-  print(colors.green, "✓", message);
+export function logInfo(message: string, context?: LogContext): void {
+  print(colors.blue, "INFO", message, context);
 }
 
-export function logWarning(message: string): void {
-  print(colors.yellow, "!", message);
+export function logSuccess(message: string, context?: LogContext): void {
+  print(colors.green, "OK", message, context);
 }
 
-export function logError(message: string): void {
-  print(colors.red, "✗", message);
+export function logWarning(message: string, context?: LogContext): void {
+  print(colors.yellow, "WARN", message, context);
+}
+
+export function logError(message: string, context?: LogContext): void {
+  print(colors.red, "ERROR", message, context);
 }
 
 export function logBanner(input: {
@@ -41,6 +57,7 @@ export function logBanner(input: {
   model: string;
   version: string;
   apiKeyConfigured: boolean;
+  baseUrl?: string;
 }): void {
   console.log("");
   console.log(`${colors.cyan}  ███████╗███████╗██╗     ███████╗███╗   ███╗███████╗${colors.reset}`);
@@ -51,9 +68,12 @@ export function logBanner(input: {
   console.log(`${colors.cyan}  ╚══════╝╚══════╝╚══════╝╚═╝     ╚═╝     ╚═╝╚══════╝${colors.reset}`);
   console.log("");
   console.log(`  Gateway  http://${input.host}:${input.port}`);
+  console.log(`  Version  ${input.version}`);
   console.log(`  Protocol ${input.protocol}`);
   console.log(`  Model    ${input.model}`);
-  console.log(`  Version  ${input.version}`);
+  if (input.baseUrl) {
+    console.log(`  Base URL ${input.baseUrl}`);
+  }
   console.log(`  API Key  ${input.apiKeyConfigured ? "Configured" : "Missing"}`);
   console.log("  Press Ctrl+C to stop");
   console.log("");

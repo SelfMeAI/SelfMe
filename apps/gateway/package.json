@@ -1,6 +1,6 @@
 {
   "name": "@selfme/gateway",
-  "version": "2026.4.21",
+  "version": "2026.5.11",
   "private": true,
   "type": "module",
   "scripts": {
@@ -13,7 +13,6 @@
     "@fastify/cors": "^11.1.0",
     "@fastify/websocket": "^11.2.0",
     "@selfme/protocol": "workspace:*",
-    "dotenv": "^16.6.1",
     "fastify": "^5.6.1",
     "openai": "^6.3.0"
   },

@@ -1,6 +1,6 @@
 import OpenAI from "openai";
 
-import type { ChatMessage } from "@selfme/protocol";
+import { DEFAULT_ANTHROPIC_VERSION, type ChatMessage } from "@selfme/protocol";
 
 export interface LLMUsage {
   inputTokens: number;
@@ -96,6 +96,10 @@ export class LLMService {
     return this.model;
   }
 
+  public getBaseUrl(): string | undefined {
+    return this.baseURL;
+  }
+
   public setModel(model: string): void {
     this.model = model.trim();
   }
@@ -118,6 +122,10 @@ export class LLMService {
   }
 
   public async *streamChat(messages: ChatMessage[], signal?: AbortSignal): AsyncGenerator<string> {
+    if (!this.model.trim()) {
+      throw new Error("LLM model is missing.");
+    }
+
     if (!this.apiKey) {
       throw new Error("LLM API key is missing.");
     }
@@ -202,7 +210,7 @@ export class LLMService {
       headers: {
         "content-type": "application/json",
         "x-api-key": this.apiKey,
-        "anthropic-version": process.env.ANTHROPIC_VERSION ?? "2023-06-01"
+        "anthropic-version": DEFAULT_ANTHROPIC_VERSION
       },
       body: JSON.stringify({
         model: this.model,

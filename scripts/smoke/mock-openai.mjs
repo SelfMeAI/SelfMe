@@ -1,6 +1,6 @@
 import http from "node:http";
 
-const port = Number(process.env.MOCK_OPENAI_PORT ?? "9100");
+const port = 9100;
 
 function sendJson(response, statusCode, payload) {
   response.writeHead(statusCode, {

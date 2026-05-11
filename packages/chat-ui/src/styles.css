@@ -482,8 +482,7 @@ a {
   line-height: 1.5;
 }
 
-.settings-field-input,
-.settings-storage-path {
+.settings-field-input {
   width: 100%;
   border: 1px solid var(--sm-line-strong);
   border-radius: 16px;
@@ -498,28 +497,6 @@ a {
   outline: none;
   border-color: rgba(15, 118, 110, 0.22);
   box-shadow: 0 0 0 4px rgba(213, 239, 232, 0.72);
-}
-
-.settings-storage-path {
-  font-family: "IBM Plex Mono", monospace;
-  font-size: 12px;
-  word-break: break-all;
-}
-
-.settings-storage-grid {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 12px;
-}
-
-.settings-storage-card {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-  padding: 14px;
-  border: 1px solid rgba(23, 53, 88, 0.08);
-  border-radius: 16px;
-  background: rgba(255, 255, 255, 0.42);
 }
 
 .settings-feedback {
@@ -1256,10 +1233,6 @@ a {
   }
 
   .settings-summary {
-    grid-template-columns: 1fr;
-  }
-
-  .settings-storage-grid {
     grid-template-columns: 1fr;
   }
 

@@ -21,17 +21,7 @@ export function createApp() {
   const sessions = new SessionStore();
   const tools = new ToolRegistry();
   const settings = new LLMSettingsStore({
-    configPath: config.localConfigPath,
-    secretsPath: config.localSecretsPath,
-    legacyModelConfigPath: config.legacyModelConfigPath,
-    defaultProfile: {
-      id: "default",
-      name: "Default",
-      protocol: config.defaultLlmProtocol === "anthropic" ? "anthropic" : "openai",
-      baseUrl: config.defaultLlmBaseUrl,
-      model: config.defaultLlmModel,
-      apiKey: config.defaultLlmApiKey
-    }
+    settingsPath: config.localSettingsPath
   });
   const runtimeConfig = settings.getRuntimeConfig();
   const llm = new LLMService({
@@ -74,8 +64,8 @@ export function createApp() {
 
   app.register(registerHealthRoutes, {
     appVersion: config.appVersion,
-    getModel: () => llm.getModel(),
-    getProtocol: () => llm.getProtocol(),
+    getModel: () => settings.getSnapshot().model || "Not configured",
+    getProtocol: () => settings.getSnapshot().model ? llm.getProtocol() : undefined,
     getActiveSessions: () => sessions.listSize()
   });
   app.register(registerSettingsRoutes, {
@@ -94,6 +84,7 @@ export function createApp() {
   return {
     app,
     config,
-    llm
+    llm,
+    settings
   };
 }

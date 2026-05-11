@@ -1,15 +1,21 @@
 import { spawn } from "node:child_process";
+import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import process from "node:process";
 import { fileURLToPath } from "node:url";
 
 const currentDir = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(currentDir, "../..");
-const gatewayPort = Number(process.env.SMOKE_GATEWAY_PORT ?? "8010");
-const mockPort = Number(process.env.MOCK_OPENAI_PORT ?? "9100");
+const gatewayPort = 8010;
+const mockPort = 9100;
 const gatewayHttpUrl = `http://127.0.0.1:${gatewayPort}`;
 const gatewayWsUrl = `ws://127.0.0.1:${gatewayPort}`;
 const children = [];
+const smokeRootDir = mkdtempSync(path.join(os.tmpdir(), "selfme-smoke-"));
+const smokeSelfMeDir = path.join(smokeRootDir, ".selfme");
+const smokeAppPath = path.join(smokeSelfMeDir, "app.json");
+const smokeSettingsPath = path.join(smokeSelfMeDir, "settings.json");
 
 function assert(condition, message) {
   if (!condition) {
@@ -64,6 +70,11 @@ function cleanup() {
       child.kill("SIGTERM");
     }
   }
+
+  rmSync(smokeRootDir, {
+    recursive: true,
+    force: true
+  });
 }
 
 async function createSession(clientType) {
@@ -171,24 +182,24 @@ async function main() {
     process.exit(143);
   });
 
-  const mockServer = spawnChild(process.execPath, ["./scripts/smoke/mock-openai.mjs"], {
-    env: {
-      ...process.env,
-      MOCK_OPENAI_PORT: String(mockPort)
-    }
+  mkdirSync(smokeSelfMeDir, {
+    recursive: true
   });
 
-  const gatewayServer = spawnChild(process.execPath, ["./apps/gateway/dist/index.js"], {
-    env: {
-      ...process.env,
-      GATEWAY_HOST: "127.0.0.1",
-      GATEWAY_PORT: String(gatewayPort),
-      LLM_PROTOCOL: "openai",
-      LLM_API_KEY: "smoke-selfme-key",
-      LLM_BASE_URL: `http://127.0.0.1:${mockPort}/v1`,
-      LLM_MODEL: "mock-gpt-selfme"
-    }
-  });
+  writeFileSync(smokeAppPath, `${JSON.stringify({
+    gatewayHost: "127.0.0.1",
+    gatewayPort
+  }, null, 2)}\n`, "utf-8");
+
+  writeFileSync(smokeSettingsPath, `${JSON.stringify({
+    protocol: "openai",
+    baseUrl: `http://127.0.0.1:${mockPort}/v1`,
+    model: "mock-gpt-selfme",
+    apiKey: "smoke-selfme-key"
+  }, null, 2)}\n`, "utf-8");
+
+  const mockServer = spawnChild(process.execPath, ["./scripts/smoke/mock-openai.mjs"]);
+  const gatewayServer = spawnChild(process.execPath, ["./apps/gateway/dist/index.js", `--selfme-root=${smokeRootDir}`]);
 
   mockServer.on("exit", (code) => {
     if (code && code !== 0) {

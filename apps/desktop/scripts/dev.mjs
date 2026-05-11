@@ -1,7 +1,7 @@
 import { spawn } from "node:child_process";
 import process from "node:process";
 
-const rendererUrl = process.env.ELECTRON_RENDERER_URL ?? "http://127.0.0.1:5173";
+const rendererUrl = "http://127.0.0.1:5173";
 const pnpmCommand = process.platform === "win32" ? "pnpm.cmd" : "pnpm";
 const children = [];
 
@@ -9,7 +9,6 @@ function spawnCommand(args, options = {}) {
   const child = spawn(pnpmCommand, args, {
     cwd: new URL("..", import.meta.url),
     stdio: "inherit",
-    env: process.env,
     ...options
   });
 
@@ -78,12 +77,7 @@ async function main() {
 
   await waitForRenderer(rendererUrl);
 
-  const electron = spawnCommand(["exec", "electron", "dist-electron/main.js"], {
-    env: {
-      ...process.env,
-      ELECTRON_RENDERER_URL: rendererUrl
-    }
-  });
+  const electron = spawnCommand(["exec", "electron", "dist-electron/main.js", `--renderer-url=${rendererUrl}`]);
 
   electron.on("exit", (code) => {
     stopChildren();

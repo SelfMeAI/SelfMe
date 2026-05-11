@@ -1,6 +1,6 @@
 {
-  "name": "selfme-next",
-  "version": "2026.4.21",
+  "name": "selfme",
+  "version": "2026.5.11",
   "private": true,
   "packageManager": "pnpm@10.29.2",
   "scripts": {
@@ -9,6 +9,7 @@
     "dev:desktop": "pnpm --filter @selfme/desktop dev",
     "dev:desktop:renderer": "pnpm --filter @selfme/desktop dev:renderer",
     "dev:desktop:main": "pnpm --filter @selfme/desktop dev:main",
+    "package:desktop:mac": "pnpm --filter @selfme/desktop package:mac",
     "dev:tui": "pnpm --filter @selfme/tui dev",
     "build": "pnpm -r --if-present build",
     "typecheck": "pnpm -r --if-present typecheck",

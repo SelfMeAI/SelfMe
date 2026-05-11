@@ -26,8 +26,7 @@ export const registerSettingsRoutes: FastifyPluginAsync<{
       throw new Error("Model is required.");
     }
 
-    const snapshot = await input.settings.updateActiveProfile({
-      profileName: request.body.profileName,
+    const snapshot = await input.settings.update({
       protocol: request.body.protocol,
       baseUrl: request.body.baseUrl,
       model: normalizedModel,
@@ -42,7 +41,10 @@ export const registerSettingsRoutes: FastifyPluginAsync<{
       model: runtimeConfig.model
     });
 
-    logSuccess(`LLM settings updated: ${snapshot.protocol} / ${snapshot.model}`);
+    logSuccess("LLM settings updated", {
+      protocol: snapshot.protocol,
+      model: snapshot.model
+    });
 
     return snapshot;
   });
