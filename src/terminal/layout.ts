@@ -97,7 +97,7 @@ function renderMessageBlock(message: TerminalMessageBlock, viewportWidth: number
   if (message.kind === "user") {
     const userContentWidth = Math.max(8, viewportWidth - 2);
     const contentLines = wrapBlockLines(message.body, userContentWidth)
-      .map((line, index) => formatComposerLine(line, index === 0 ? "> " : "· ", viewportWidth))
+      .map((line, index) => formatComposerLine(line, index === 0 ? "> " : "  ", viewportWidth))
       .join("\n");
 
     return [

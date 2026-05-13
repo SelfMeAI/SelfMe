@@ -9,6 +9,7 @@ import { createDefaultSessionRecord } from "../runtime/context.js";
 import { AgentRuntime } from "../runtime/agent.js";
 import { TerminalEventLoop } from "../terminal/event-loop.js";
 import { TerminalRenderer } from "../terminal/renderer.js";
+import { LogStore } from "../storage/logs.js";
 import { SettingsStore } from "../storage/settings.js";
 import { TranscriptStore } from "../storage/transcripts.js";
 import { AnthropicProvider } from "../providers/anthropic.js";
@@ -28,7 +29,9 @@ export async function bootstrapApp() {
   const bus = new EventBus();
   const settings = new SettingsStore(resolve(appConfigDir, "settings.json"));
   const transcriptStore = new TranscriptStore(resolve(runtimeDir, "transcripts.jsonl"));
+  const logStore = new LogStore(resolve(runtimeDir, "tool-logs.jsonl"));
   await settings.ensureInitialized();
+  await logStore.ensureInitialized();
   const appSettings = await settings.read();
   const session = createDefaultSessionRecord(appRoot, packageJson.version ?? "0.0.0");
   const provider = appSettings.provider === "openai" && appSettings.baseUrl && appSettings.apiKey
@@ -51,7 +54,8 @@ export async function bootstrapApp() {
     provider,
     tools,
     session,
-    transcriptStore
+    transcriptStore,
+    logStore
   });
   const renderer = new TerminalRenderer({
     bus,

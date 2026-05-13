@@ -5,7 +5,9 @@ import type { ProviderClient } from "../providers/base.js";
 import type { ToolRegistry } from "../tools/base.js";
 import type { ApprovalRequest } from "../types/approval.js";
 import type { SessionRecord } from "../types/session.js";
+import type { LogStore } from "../storage/logs.js";
 import type { TranscriptStore } from "../storage/transcripts.js";
+import { parseToolCommand } from "./commands.js";
 import {
   createAssistantCompletedEvent,
   createAssistantDeltaEvent,
@@ -34,6 +36,7 @@ export class AgentRuntime {
       tools: ToolRegistry;
       session: SessionRecord;
       transcriptStore: TranscriptStore;
+      logStore: LogStore;
     }
   ) {}
 
@@ -81,22 +84,18 @@ export class AgentRuntime {
         return;
       }
 
-      const commandMatch = event.payload.content.trim().match(/^\/(shell|read)\s+([\s\S]+)$/);
+      const parsedToolCommand = parseToolCommand(event.payload.content);
 
-      if (commandMatch) {
-        const [, command, rawInput] = commandMatch;
+      if (parsedToolCommand) {
         const taskId = randomUUID();
-        const toolName = command === "read" ? "files" : "shell";
-        const input = command === "read"
-          ? { path: rawInput.trim() }
-          : { command: rawInput.trim() };
+        const { toolName, input } = parsedToolCommand;
 
         if (toolName === "shell") {
           const approval = createApprovalRequestedEvent({
             sessionId: event.sessionId,
             taskId,
             toolName,
-            reason: `Run shell command: ${input.command}`,
+            reason: `Run shell command: ${input.command ?? ""}`,
             risk: "high"
           });
 
@@ -135,6 +134,8 @@ export class AgentRuntime {
             "/help",
             "/tools",
             "/read <path>",
+            "/read <path:start-end>",
+            "/read <path> --max-bytes <n>",
             "/shell <command>",
             "/approve <id>",
             "/deny <id>",
@@ -259,6 +260,36 @@ export class AgentRuntime {
           sessionId: event.sessionId,
           taskId: event.taskId
         });
+
+        if (result.summary) {
+          await this.input.logStore.append({
+            sessionId: event.sessionId,
+            taskId: event.taskId,
+            toolName: event.payload.toolName,
+            kind: "summary",
+            content: result.summary
+          });
+        }
+
+        if (result.rawLogs?.stdout) {
+          await this.input.logStore.append({
+            sessionId: event.sessionId,
+            taskId: event.taskId,
+            toolName: event.payload.toolName,
+            kind: "stdout",
+            content: result.rawLogs.stdout
+          });
+        }
+
+        if (result.rawLogs?.stderr) {
+          await this.input.logStore.append({
+            sessionId: event.sessionId,
+            taskId: event.taskId,
+            toolName: event.payload.toolName,
+            kind: "stderr",
+            content: result.rawLogs.stderr
+          });
+        }
 
         const completed = createToolExecutionCompletedEvent({
           sessionId: event.sessionId,

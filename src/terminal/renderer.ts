@@ -253,7 +253,7 @@ export class TerminalRenderer {
     const lines = value.length > 0 ? value.split("\n") : [""];
     const viewportWidth = process.stdout.columns ?? 80;
     const promptLines = lines.map((line, index) => {
-      const prefix = index === 0 ? "> " : "· ";
+      const prefix = index === 0 ? "> " : "  ";
       const contentWidth = Math.max(1, viewportWidth - getDisplayWidth(prefix));
       return `${ansiComposerPrefix(prefix)}${ansiComposerFill(padToDisplayWidth(line || " ", contentWidth))}`;
     });
