@@ -1,10 +1,19 @@
+import type { ApprovalRisk } from "./approval.js";
+
 export type ToolApprovalPolicy = "always" | "on-risk" | "never";
+
+export interface ToolApprovalDescriptor {
+  title: string;
+  reason: string;
+  risk: ApprovalRisk;
+}
 
 export interface ToolDefinition {
   name: string;
   description: string;
   inputSchema: unknown;
   approvalPolicy: ToolApprovalPolicy;
+  buildApproval?(input: unknown): ToolApprovalDescriptor;
 }
 
 export interface ToolContext {

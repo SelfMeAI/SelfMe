@@ -163,7 +163,13 @@ export class TerminalRenderer {
       this.render();
     });
 
-    this.input.bus.on("assistant.completed", () => {
+    this.input.bus.on("assistant.completed", (event) => {
+      const existing = findMessageByTaskId(this.state.messages, event.taskId);
+
+      if (existing?.kind === "assistant-working") {
+        removeMessageByTaskId(this.state.messages, event.taskId);
+      }
+
       this.stopWorkingAnimation();
       this.state.workingTaskId = undefined;
       this.syncActions();
@@ -784,6 +790,13 @@ function renderToolTarget(toolName: string, input?: unknown) {
     return `${input.path}${range}`;
   }
 
+  if ((toolName === "write" || toolName === "edit") && input && typeof input === "object" && "path" in input && typeof input.path === "string") {
+    const range = "startLine" in input && typeof input.startLine === "number"
+      ? `:${input.startLine}${"endLine" in input && typeof input.endLine === "number" ? `-${input.endLine}` : ""}`
+      : "";
+    return `${input.path}${range}`;
+  }
+
   return "";
 }
 
@@ -810,16 +823,22 @@ function sanitizeToolChunk(chunk: string) {
 }
 
 function clipToolTranscript(text: string, maxLines = 12, maxChars = 2400) {
-  const normalized = text.length <= maxChars
-    ? text
-    : `${text.slice(text.length - maxChars + 16)}\n...truncated...`;
-  const lines = normalized.split("\n");
+  const lines = text.split("\n");
+  const [header = "", ...bodyLines] = lines;
+  const compactBody = bodyLines.join("\n");
+  const clippedBody = compactBody.length <= Math.max(0, maxChars - header.length - 1)
+    ? compactBody
+    : `${compactBody.slice(Math.max(0, compactBody.length - Math.max(0, maxChars - header.length - 17)))}\n...truncated...`;
+  const normalized = [header, clippedBody].filter(Boolean).join("\n");
+  const normalizedLines = normalized.split("\n");
 
-  if (lines.length <= maxLines) {
+  if (normalizedLines.length <= maxLines) {
     return normalized;
   }
 
-  return ["...truncated...", ...lines.slice(-maxLines + 1)].join("\n");
+  const visibleBodyLines = normalizedLines.slice(1);
+
+  return [header, "...truncated...", ...visibleBodyLines.slice(-(maxLines - 2))].join("\n");
 }
 
 function hasMeaningfulToolOutput(text: string) {
@@ -889,6 +908,23 @@ function upsertMessageByTaskId(messages: TerminalMessageBlock[], taskId: string 
   }
 
   messages.push(nextMessage);
+  return false;
+}
+
+function removeMessageByTaskId(messages: TerminalMessageBlock[], taskId: string | undefined) {
+  if (!taskId) {
+    return false;
+  }
+
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    if (messages[index]?.taskId !== taskId) {
+      continue;
+    }
+
+    messages.splice(index, 1);
+    return true;
+  }
+
   return false;
 }
 

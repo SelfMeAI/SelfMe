@@ -7,6 +7,7 @@ import type { TranscriptStore } from "../storage/transcripts.js";
 import type { ToolRegistry } from "../tools/base.js";
 import type { ApprovalRequest } from "../types/approval.js";
 import type { SessionRecord } from "../types/session.js";
+import type { ToolImplementation } from "../types/tool.js";
 import { parseBuiltInCommand, parseToolCommand, renderHelpLines } from "./commands.js";
 import { buildContextMessages, createInlinePreview } from "./context-compaction.js";
 import {
@@ -24,11 +25,22 @@ import {
   createToolStdoutAppendedEvent
 } from "./events.js";
 
+const MAX_AGENT_TOOL_STEPS = 6;
+const TOOL_CALL_OPEN = "<tool_call>";
+const TOOL_CALL_CLOSE = "</tool_call>";
+const TOOL_CALL_DENIED_PROMPT = "The requested tool action was denied by the user. Continue without that action. If you can still help, answer directly. If another tool is needed, return exactly one tool call block.";
+
+interface ParsedAssistantToolCall {
+  tool: string;
+  input: unknown;
+}
+
 export class AgentRuntime {
   private readonly pendingApprovals = new Map<string, {
     request: ApprovalRequest;
     toolName: string;
     input: unknown;
+    autoContinue?: boolean;
   }>();
 
   constructor(
@@ -103,7 +115,8 @@ export class AgentRuntime {
       await this.input.transcriptStore.appendEvent(started);
 
       try {
-        const result = await tool.invoke(event.payload.input, {
+        const validatedInput = parseToolInput(tool, event.payload.input);
+        const result = await tool.invoke(validatedInput, {
           cwd: this.input.session.cwd ?? process.cwd(),
           sessionId: event.sessionId,
           taskId: event.taskId,
@@ -115,7 +128,6 @@ export class AgentRuntime {
               chunk
             });
             this.input.bus.emit(stdoutEvent);
-            await this.input.transcriptStore.appendEvent(stdoutEvent);
           }
         });
 
@@ -154,7 +166,7 @@ export class AgentRuntime {
           taskId: event.taskId,
           toolName: event.payload.toolName,
           summary: result.summary,
-          rawOutput: result.rawLogs?.stdout || result.rawLogs?.stderr
+          rawOutput: combineToolRawOutput(result.rawLogs?.stdout, result.rawLogs?.stderr)
         });
         this.input.bus.emit(completed);
         await this.input.transcriptStore.appendEvent(completed);
@@ -219,7 +231,7 @@ export class AgentRuntime {
 
       this.pendingApprovals.delete(approvalId);
 
-      if (action === "approve") {
+      if (action === "approve" && !pending.autoContinue) {
         const toolEvent = createToolExecutionRequestedEvent({
           sessionId,
           taskId: pending.request.taskId,
@@ -254,28 +266,44 @@ export class AgentRuntime {
 
     if (parsedToolCommand) {
       const taskId = randomUUID();
-      const { toolName, input: toolInput } = parsedToolCommand;
+      const { toolName, input: rawToolInput } = parsedToolCommand;
+      const tool = this.input.tools.get(toolName);
 
-      if (toolName === "shell") {
+      if (!tool) {
+        const runtimeError = createRuntimeErrorRaisedEvent({
+          sessionId: input.sessionId,
+          taskId,
+          message: `Unknown tool: ${toolName}`
+        });
+        this.input.bus.emit(runtimeError);
+        await this.input.transcriptStore.appendEvent(runtimeError);
+        return true;
+      }
+
+      const toolInput = parseToolInput(tool, rawToolInput);
+
+      if (tool.approvalPolicy !== "never") {
+        const approvalDescriptor = tool.buildApproval?.(toolInput) ?? buildDefaultApprovalDescriptor(tool, toolInput);
         const waitingApprovalTask = createTaskStateChangedEvent({
           sessionId: input.sessionId,
           taskId,
           state: "waiting_approval",
-          title: `Run shell · ${createInlinePreview(toolInput.command ?? "", 96)}`
+          title: approvalDescriptor.title
         });
         const approval = createApprovalRequestedEvent({
           sessionId: input.sessionId,
           taskId,
           toolName,
           input: toolInput,
-          reason: `Run shell command: ${toolInput.command ?? ""}`,
-          risk: "high"
+          reason: approvalDescriptor.reason,
+          risk: approvalDescriptor.risk
         });
 
         this.pendingApprovals.set(approval.payload.approvalId, {
           request: approval.payload,
           toolName,
-          input: toolInput
+          input: toolInput,
+          autoContinue: false
         });
 
         this.input.bus.emit(waitingApprovalTask);
@@ -330,57 +358,84 @@ export class AgentRuntime {
   }
 
   private async handleAssistantTurn(sessionId: string, content: string) {
-    const taskId = randomUUID();
+    const responseTaskId = randomUUID();
+    const originalRequest = content;
+    let nextPrompt = content;
 
     this.input.bus.emit(createTaskStateChangedEvent({
       sessionId,
-      taskId,
+      taskId: responseTaskId,
       state: "running",
       title: "Respond to user input"
     }));
 
-    this.input.bus.emit(createAssistantStartedEvent({
-      sessionId,
-      taskId
-    }));
-
     try {
-      const historyEvents = await this.input.transcriptStore.readEventsBySession(sessionId);
-      const contextMessages = buildContextMessages(historyEvents);
-
-      for await (const delta of this.input.provider.streamResponse({
-        content,
-        contextMessages
-      })) {
-        const nextEvent = createAssistantDeltaEvent({
+      for (let step = 0; step < MAX_AGENT_TOOL_STEPS; step += 1) {
+        const assistantPass = await this.runAssistantPass({
           sessionId,
-          taskId,
-          delta: delta.delta
+          taskId: responseTaskId,
+          content: nextPrompt
         });
-        this.input.bus.emit(nextEvent);
-        await this.input.transcriptStore.appendEvent(nextEvent);
+
+        if (assistantPass.kind === "message") {
+          const completedEvent = createAssistantCompletedEvent({
+            sessionId,
+            taskId: responseTaskId,
+            model: this.input.session.model
+          });
+          this.input.bus.emit(completedEvent);
+          await this.input.transcriptStore.appendEvent(completedEvent);
+
+          const taskCompleted = createTaskStateChangedEvent({
+            sessionId,
+            taskId: responseTaskId,
+            state: "completed",
+            title: "Respond to user input"
+          });
+          this.input.bus.emit(taskCompleted);
+          await this.input.transcriptStore.appendEvent(taskCompleted);
+          return;
+        }
+
+        const tool = this.input.tools.get(assistantPass.toolCall.tool);
+
+        if (!tool) {
+          throw new Error(`Unknown tool requested by model: ${assistantPass.toolCall.tool}`);
+        }
+
+        const toolInput = parseToolInput(tool, assistantPass.toolCall.input);
+        const toolTaskResult = await this.requestToolFromAssistant({
+          sessionId,
+          tool,
+          input: toolInput
+        });
+
+        if (toolTaskResult.kind === "denied") {
+          nextPrompt = buildDeniedContinuationPrompt(originalRequest);
+          continue;
+        }
+
+        if (toolTaskResult.kind === "failed") {
+          nextPrompt = buildToolFailureContinuationPrompt(originalRequest, toolTaskResult.result);
+          continue;
+        }
+
+        nextPrompt = buildToolContinuationPrompt(originalRequest, toolTaskResult.result);
       }
 
+      throw new Error(`Agent stopped after ${MAX_AGENT_TOOL_STEPS} tool steps`);
+    } catch (error) {
       const completedEvent = createAssistantCompletedEvent({
         sessionId,
-        taskId,
+        taskId: responseTaskId,
         model: this.input.session.model
       });
       this.input.bus.emit(completedEvent);
       await this.input.transcriptStore.appendEvent(completedEvent);
 
-      const taskCompleted = createTaskStateChangedEvent({
-        sessionId,
-        taskId,
-        state: "completed",
-        title: "Respond to user input"
-      });
-      this.input.bus.emit(taskCompleted);
-      await this.input.transcriptStore.appendEvent(taskCompleted);
-    } catch (error) {
       const runtimeError = createRuntimeErrorRaisedEvent({
         sessionId,
-        taskId,
+        taskId: responseTaskId,
         message: error instanceof Error ? error.message : "Unknown runtime error"
       });
       this.input.bus.emit(runtimeError);
@@ -388,7 +443,7 @@ export class AgentRuntime {
 
       const taskFailed = createTaskStateChangedEvent({
         sessionId,
-        taskId,
+        taskId: responseTaskId,
         state: "failed",
         title: "Respond to user input"
       });
@@ -396,4 +451,503 @@ export class AgentRuntime {
       await this.input.transcriptStore.appendEvent(taskFailed);
     }
   }
+
+  private async runAssistantPass(input: {
+    sessionId: string;
+    taskId: string;
+    content: string;
+  }) {
+    const startedEvent = createAssistantStartedEvent({
+      sessionId: input.sessionId,
+      taskId: input.taskId
+    });
+    this.input.bus.emit(startedEvent);
+
+    const historyEvents = await this.input.transcriptStore.readEventsBySession(input.sessionId);
+    const contextMessages = [
+      {
+        role: "system" as const,
+        content: buildAgentSystemPrompt(this.input.tools.list())
+      },
+      ...buildContextMessages(historyEvents)
+    ];
+
+    let buffer = "";
+    let streamedVisible = false;
+    let pendingPrefix = "";
+
+    for await (const chunk of this.input.provider.streamResponse({
+      content: input.content,
+      contextMessages
+    })) {
+      buffer += chunk.delta;
+
+      if (streamedVisible) {
+        const nextEvent = createAssistantDeltaEvent({
+          sessionId: input.sessionId,
+          taskId: input.taskId,
+          delta: chunk.delta
+        });
+        this.input.bus.emit(nextEvent);
+        await this.input.transcriptStore.appendEvent(nextEvent);
+        continue;
+      }
+
+      pendingPrefix += chunk.delta;
+      const mode = classifyAssistantBuffer(pendingPrefix);
+
+      if (mode === "tool") {
+        continue;
+      }
+
+      if (mode === "message") {
+        streamedVisible = true;
+        const nextEvent = createAssistantDeltaEvent({
+          sessionId: input.sessionId,
+          taskId: input.taskId,
+          delta: pendingPrefix
+        });
+        this.input.bus.emit(nextEvent);
+        await this.input.transcriptStore.appendEvent(nextEvent);
+        pendingPrefix = "";
+      }
+    }
+
+    if (streamedVisible) {
+      return {
+        kind: "message" as const
+      };
+    }
+
+    const parsedToolCall = parseAssistantToolCall(buffer);
+
+    if (!parsedToolCall) {
+      if (looksLikeToolCallBuffer(buffer)) {
+        throw new Error("Model emitted a malformed tool call");
+      }
+
+      if (buffer.trim().length > 0) {
+        const nextEvent = createAssistantDeltaEvent({
+          sessionId: input.sessionId,
+          taskId: input.taskId,
+          delta: buffer
+        });
+        this.input.bus.emit(nextEvent);
+        await this.input.transcriptStore.appendEvent(nextEvent);
+      }
+
+      return {
+        kind: "message" as const
+      };
+    }
+
+    const completedEvent = createAssistantCompletedEvent({
+      sessionId: input.sessionId,
+      taskId: input.taskId,
+      model: this.input.session.model
+    });
+    this.input.bus.emit(completedEvent);
+    await this.input.transcriptStore.appendEvent(completedEvent);
+
+    return {
+      kind: "tool_call" as const,
+      toolCall: parsedToolCall
+    };
+  }
+
+  private async requestToolFromAssistant(input: {
+    sessionId: string;
+    tool: ToolImplementation;
+    input: unknown;
+  }) {
+    const toolTaskId = randomUUID();
+
+    if (input.tool.approvalPolicy !== "never") {
+      const decision = await this.requestApproval({
+        sessionId: input.sessionId,
+        taskId: toolTaskId,
+        tool: input.tool,
+        input: input.input
+      });
+
+      if (!decision.approved) {
+        return {
+          kind: "denied" as const
+        };
+      }
+    }
+
+    const result = await this.executeToolAndWait({
+      sessionId: input.sessionId,
+      taskId: toolTaskId,
+      toolName: input.tool.name,
+      input: input.input
+    });
+
+    if (!result.ok) {
+      return {
+        kind: "failed" as const,
+        result
+      };
+    }
+
+    return {
+      kind: "completed" as const,
+      result
+    };
+  }
+
+  private async requestApproval(input: {
+    sessionId: string;
+    taskId: string;
+    tool: ToolImplementation;
+    input: unknown;
+  }) {
+    const approvalDescriptor = input.tool.buildApproval?.(input.input) ?? buildDefaultApprovalDescriptor(input.tool, input.input);
+    const waitingApprovalTask = createTaskStateChangedEvent({
+      sessionId: input.sessionId,
+      taskId: input.taskId,
+      state: "waiting_approval",
+      title: approvalDescriptor.title
+    });
+    const approval = createApprovalRequestedEvent({
+      sessionId: input.sessionId,
+      taskId: input.taskId,
+      toolName: input.tool.name,
+      input: input.input,
+      reason: approvalDescriptor.reason,
+      risk: approvalDescriptor.risk
+    });
+
+    this.pendingApprovals.set(approval.payload.approvalId, {
+      request: approval.payload,
+      toolName: input.tool.name,
+      input: input.input,
+      autoContinue: true
+    });
+
+    const decisionPromise = this.waitForApprovalResolution(approval.payload.approvalId);
+
+    this.input.bus.emit(waitingApprovalTask);
+    this.input.bus.emit(approval);
+    await this.input.transcriptStore.appendEvent(waitingApprovalTask);
+    await this.input.transcriptStore.appendEvent(approval);
+
+    return await decisionPromise;
+  }
+
+  private async waitForApprovalResolution(approvalId: string) {
+    return await new Promise<{ approved: boolean }>((resolve) => {
+      const unsubscribe = this.input.bus.on("approval.resolved", (event) => {
+        if (event.payload.approvalId !== approvalId) {
+          return;
+        }
+
+        unsubscribe();
+        resolve({
+          approved: event.payload.approved
+        });
+      });
+    });
+  }
+
+  private async executeToolAndWait(input: {
+    sessionId: string;
+    taskId: string;
+    toolName: string;
+    input: unknown;
+  }) {
+    const resultPromise = new Promise<{
+      ok: boolean;
+      toolName: string;
+      summary: string;
+      rawOutput?: string;
+      errorMessage?: string;
+    }>((resolve) => {
+      const offCompleted = this.input.bus.on("tool.execution.completed", (event) => {
+        if (event.taskId !== input.taskId) {
+          return;
+        }
+
+        offCompleted();
+        offError();
+        resolve({
+          ok: true,
+          toolName: event.payload.toolName,
+          summary: event.payload.summary,
+          rawOutput: event.payload.rawOutput
+        });
+      });
+
+      const offError = this.input.bus.on("runtime.error.raised", (event) => {
+        if (event.taskId !== input.taskId) {
+          return;
+        }
+
+        offCompleted();
+        offError();
+        resolve({
+          ok: false,
+          toolName: input.toolName,
+          summary: `${input.toolName} · failed`,
+          rawOutput: event.payload.message,
+          errorMessage: event.payload.message
+        });
+      });
+    });
+
+    const toolEvent = createToolExecutionRequestedEvent({
+      sessionId: input.sessionId,
+      taskId: input.taskId,
+      toolName: input.toolName,
+      input: input.input
+    });
+    this.input.bus.emit(toolEvent);
+    await this.input.transcriptStore.appendEvent(toolEvent);
+
+    return await resultPromise;
+  }
+}
+
+function buildDefaultApprovalDescriptor(tool: ToolImplementation, input: unknown) {
+  const target = renderApprovalTarget(tool.name, input);
+
+  return {
+    title: target ? `Run ${tool.name} · ${target}` : `Run ${tool.name}`,
+    reason: target ? `Run ${tool.name}: ${target}` : `Run ${tool.name}`,
+    risk: tool.approvalPolicy === "always" ? "high" : "medium"
+  } as const;
+}
+
+function renderApprovalTarget(toolName: string, input: unknown) {
+  if (toolName === "shell" && input && typeof input === "object" && "command" in input && typeof input.command === "string") {
+    return createInlinePreview(input.command, 96);
+  }
+
+  if (
+    (toolName === "files" || toolName === "write" || toolName === "edit") &&
+    input &&
+    typeof input === "object" &&
+    "path" in input &&
+    typeof input.path === "string"
+  ) {
+    if ("startLine" in input && typeof input.startLine === "number") {
+      const endLine = "endLine" in input && typeof input.endLine === "number"
+        ? input.endLine
+        : input.startLine;
+      return `${input.path}:${input.startLine}-${endLine}`;
+    }
+
+    return input.path;
+  }
+
+  return "";
+}
+
+function parseToolInput(tool: ToolImplementation, input: unknown) {
+  const schema = tool.inputSchema;
+
+  if (schema && typeof schema === "object" && "parse" in schema && typeof schema.parse === "function") {
+    return schema.parse(input);
+  }
+
+  return input;
+}
+
+function combineToolRawOutput(stdout?: string, stderr?: string) {
+  return [stdout, stderr]
+    .filter((value) => typeof value === "string" && value.length > 0)
+    .join(stdout && stderr ? "\n" : "");
+}
+
+function buildToolContinuationPrompt(originalRequest: string, input: {
+  toolName: string;
+  summary: string;
+  rawOutput?: string;
+}) {
+  const lines = [
+    `Original user request: ${originalRequest}`,
+    "",
+    "Continue from the latest tool result only.",
+    "Do not infer anything that is not explicitly present in the result below.",
+    "If another tool is required, return exactly one tool call block.",
+    "If the original request is not yet completed, keep working instead of stopping at a status update.",
+    "Otherwise answer the user briefly and directly.",
+    "",
+    `Tool: ${input.toolName}`,
+    `Summary: ${input.summary}`
+  ];
+
+  if (input.rawOutput && input.rawOutput.trim().length > 0) {
+    lines.push("Raw output:");
+    lines.push(input.rawOutput);
+  } else {
+    lines.push("Raw output: (none)");
+  }
+
+  return lines.join("\n");
+}
+
+function buildDeniedContinuationPrompt(originalRequest: string) {
+  return [
+    `Original user request: ${originalRequest}`,
+    "",
+    TOOL_CALL_DENIED_PROMPT
+  ].join("\n");
+}
+
+function buildToolFailureContinuationPrompt(originalRequest: string, input: {
+  toolName: string;
+  summary: string;
+  rawOutput?: string;
+  errorMessage?: string;
+}) {
+  const lines = [
+    `Original user request: ${originalRequest}`,
+    "",
+    "The latest tool attempt failed.",
+    "Do not repeat the raw failure twice.",
+    "Explain the failure briefly and accurately.",
+    "If another tool can help, return exactly one tool call block.",
+    "Otherwise answer directly.",
+    "",
+    `Tool: ${input.toolName}`,
+    `Summary: ${input.summary}`
+  ];
+
+  if (input.errorMessage) {
+    lines.push(`Error: ${input.errorMessage}`);
+  }
+
+  if (input.rawOutput && input.rawOutput !== input.errorMessage) {
+    lines.push("Raw output:");
+    lines.push(input.rawOutput);
+  }
+
+  return lines.join("\n");
+}
+
+function buildAgentSystemPrompt(tools: ToolImplementation[]) {
+  const lines = [
+    "You are SelfMe, a terminal-first coding agent.",
+    "Use tools when they materially help complete the user's request.",
+    "When a tool is required, respond with exactly one tool call block and no prose before or after it.",
+    `${TOOL_CALL_OPEN}`,
+    '{"tool":"shell","input":{"command":"pwd"}}',
+    `${TOOL_CALL_CLOSE}`,
+    "Always place tool arguments inside the input object.",
+    "If no tool is needed, answer normally.",
+    "Prefer read before edit when you need to inspect a file.",
+    "Use write to create or replace a whole file.",
+    "Use edit to replace a specific line range or an entire existing file.",
+    "When answering after a tool result, ground your answer strictly in the actual tool output.",
+    "Do not invent files, directories, lines, commands, errors, or truncation that are not explicitly present in the latest tool result.",
+    "If the latest tool result already fully answers the user, give a short direct answer instead of restating or embellishing the output.",
+    "For directory listings, only mention entries that actually appear in the listing.",
+    "Never invent tool names or input fields.",
+    "Available tools:"
+  ];
+
+  for (const tool of tools) {
+    lines.push(`- ${tool.name}: ${tool.description}`);
+  }
+
+  lines.push('Example for reading a file: {"tool":"files","input":{"path":"note.txt","startLine":1,"endLine":20}}');
+  lines.push('Example for editing a file: {"tool":"edit","input":{"path":"note.txt","startLine":2,"endLine":2,"replacement":"SELFME"}}');
+
+  return lines.join("\n");
+}
+
+function classifyAssistantBuffer(content: string) {
+  const trimmedStart = normalizeToolCallBufferPrefix(content);
+
+  if (trimmedStart.length === 0) {
+    return "pending" as const;
+  }
+
+  if (trimmedStart.startsWith(TOOL_CALL_OPEN)) {
+    return "tool" as const;
+  }
+
+  if (TOOL_CALL_OPEN.startsWith(trimmedStart)) {
+    return "pending" as const;
+  }
+
+  return "message" as const;
+}
+
+function parseAssistantToolCall(content: string): ParsedAssistantToolCall | undefined {
+  const normalized = normalizeToolCallBufferPrefix(content).trim();
+
+  if (!normalized.startsWith(TOOL_CALL_OPEN)) {
+    return undefined;
+  }
+
+  const closeIndex = normalized.indexOf(TOOL_CALL_CLOSE, TOOL_CALL_OPEN.length);
+
+  if (closeIndex < 0) {
+    return undefined;
+  }
+
+  const jsonText = normalized
+    .slice(TOOL_CALL_OPEN.length, closeIndex)
+    .trim();
+
+  if (!jsonText) {
+    return undefined;
+  }
+
+  let parsed: {
+    tool?: unknown;
+    input?: unknown;
+    [key: string]: unknown;
+  };
+
+  try {
+    parsed = JSON.parse(jsonText) as {
+      tool?: unknown;
+      input?: unknown;
+    };
+  } catch {
+    return undefined;
+  }
+
+  if (typeof parsed.tool !== "string" || parsed.tool.trim().length === 0) {
+    return undefined;
+  }
+
+  const derivedInput = parsed.input ?? Object.fromEntries(
+    Object.entries(parsed).filter(([key]) => key !== "tool")
+  );
+
+  return {
+    tool: parsed.tool.trim(),
+    input: derivedInput
+  };
+}
+
+function looksLikeToolCallBuffer(content: string) {
+  return normalizeToolCallBufferPrefix(content).startsWith(TOOL_CALL_OPEN);
+}
+
+function normalizeToolCallBufferPrefix(content: string) {
+  let normalized = content.trimStart();
+
+  if (!normalized.startsWith("```")) {
+    return normalized;
+  }
+
+  const firstNewlineIndex = normalized.indexOf("\n");
+
+  if (firstNewlineIndex < 0) {
+    return "";
+  }
+
+  normalized = normalized.slice(firstNewlineIndex + 1).trimStart();
+
+  if (normalized.endsWith("```")) {
+    normalized = normalized.slice(0, -3).trimEnd();
+  }
+
+  return normalized;
 }

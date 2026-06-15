@@ -6,6 +6,9 @@ import { z } from "zod";
 
 import type { ToolImplementation, ToolResult } from "../types/tool.js";
 
+const SHELL_TIMEOUT_MS = 8_000;
+const SHELL_CAPTURE_MAX_BYTES = 64 * 1024;
+
 export const shellToolSchema = z.object({
   command: z.string().min(1)
 });
@@ -43,27 +46,51 @@ async function runWithPty(
     env: process.env as Record<string, string>
   });
 
-  let stdout = "";
+  const stdoutCapture = createTextCapture(SHELL_CAPTURE_MAX_BYTES);
 
   return await new Promise<ToolResult>((resolve) => {
+    let settled = false;
+    let timedOut = false;
+    const timeout = setTimeout(() => {
+      timedOut = true;
+      child.kill();
+    }, SHELL_TIMEOUT_MS);
+
+    const finalize = (exitCode: number) => {
+      if (settled) {
+        return;
+      }
+
+      settled = true;
+      clearTimeout(timeout);
+      const stdout = stdoutCapture.read();
+      resolve({
+        ok: exitCode === 0 && !timedOut,
+        summary: buildShellSummary(command, exitCode, timedOut, stdout.truncated),
+        structuredOutput: {
+          command,
+          timedOut,
+          truncated: stdout.truncated
+        },
+        rawLogs: {
+          stdout: stdout.text
+        },
+        exitCode,
+        errorMessage: timedOut
+          ? `Shell command timed out after ${Math.floor(SHELL_TIMEOUT_MS / 1000)}s`
+          : exitCode === 0
+            ? undefined
+            : `Shell command failed with exit code ${exitCode}`
+      });
+    };
+
     child.onData((data: string) => {
-      stdout += data;
+      stdoutCapture.append(data);
       void context.onStdoutChunk?.(data);
     });
 
     child.onExit(({ exitCode }: { exitCode: number; signal?: number }) => {
-      resolve({
-        ok: exitCode === 0,
-        summary: buildShellSummary(command, exitCode),
-        structuredOutput: {
-          command
-        },
-        rawLogs: {
-          stdout
-        },
-        exitCode,
-        errorMessage: exitCode === 0 ? undefined : `Shell command failed with exit code ${exitCode}`
-      });
+      finalize(exitCode);
     });
   });
 }
@@ -79,48 +106,80 @@ async function runWithSpawn(
     env: process.env
   });
 
-  let stdout = "";
-  let stderr = "";
+  const stdoutCapture = createTextCapture(SHELL_CAPTURE_MAX_BYTES);
+  const stderrCapture = createTextCapture(SHELL_CAPTURE_MAX_BYTES);
 
   return await new Promise<ToolResult>((resolve, reject) => {
+    let settled = false;
+    let timedOut = false;
+    const timeout = setTimeout(() => {
+      timedOut = true;
+      child.kill("SIGTERM");
+      setTimeout(() => child.kill("SIGKILL"), 1000).unref();
+    }, SHELL_TIMEOUT_MS);
+
+    const finalize = (exitCode: number) => {
+      if (settled) {
+        return;
+      }
+
+      settled = true;
+      clearTimeout(timeout);
+      const stdout = stdoutCapture.read();
+      const stderr = stderrCapture.read();
+      resolve({
+        ok: exitCode === 0 && !timedOut,
+        summary: buildShellSummary(command, exitCode, timedOut, stdout.truncated || stderr.truncated),
+        structuredOutput: {
+          command,
+          timedOut,
+          truncated: stdout.truncated || stderr.truncated
+        },
+        rawLogs: {
+          stdout: stdout.text,
+          stderr: stderr.text
+        },
+        exitCode,
+        errorMessage: timedOut
+          ? `Shell command timed out after ${Math.floor(SHELL_TIMEOUT_MS / 1000)}s`
+          : exitCode === 0
+            ? undefined
+            : `Shell command failed with exit code ${exitCode}`
+      });
+    };
+
     child.stdout.on("data", (chunk: Buffer | string) => {
       const data = String(chunk);
-      stdout += data;
+      stdoutCapture.append(data);
       void context.onStdoutChunk?.(data);
     });
 
     child.stderr.on("data", (chunk: Buffer | string) => {
       const data = String(chunk);
-      stderr += data;
+      stderrCapture.append(data);
       void context.onStdoutChunk?.(data);
     });
 
-    child.on("error", reject);
+    child.on("error", (error) => {
+      clearTimeout(timeout);
+      reject(error);
+    });
     child.on("close", (code) => {
-      const exitCode = code ?? 1;
-      resolve({
-        ok: exitCode === 0,
-        summary: buildShellSummary(command, exitCode),
-        structuredOutput: {
-          command
-        },
-        rawLogs: {
-          stdout,
-          stderr
-        },
-        exitCode,
-        errorMessage: exitCode === 0 ? undefined : `Shell command failed with exit code ${exitCode}`
-      });
+      finalize(code ?? (timedOut ? 124 : 1));
     });
   });
 }
 
-function buildShellSummary(command: string, exitCode: number) {
+function buildShellSummary(command: string, exitCode: number, timedOut: boolean, truncated: boolean) {
   const preview = createCommandPreview(command, 120);
 
+  if (timedOut) {
+    return `${preview} · timed out${truncated ? " · truncated" : ""}`;
+  }
+
   return exitCode === 0
-    ? `${preview} · completed`
-    : `${preview} · failed (${exitCode})`;
+    ? `${preview} · completed${truncated ? " · truncated" : ""}`
+    : `${preview} · failed (${exitCode})${truncated ? " · truncated" : ""}`;
 }
 
 function createCommandPreview(command: string, maxLength: number) {
@@ -131,4 +190,53 @@ function createCommandPreview(command: string, maxLength: number) {
   }
 
   return `${normalized.slice(0, maxLength - 3).trimEnd()}...`;
+}
+
+function createTextCapture(maxBytes: number) {
+  let value = "";
+  let truncated = false;
+
+  return {
+    append(chunk: string) {
+      if (!chunk || truncated) {
+        if (chunk) {
+          truncated = true;
+        }
+        return;
+      }
+
+      const next = `${value}${chunk}`;
+
+      if (Buffer.byteLength(next, "utf8") <= maxBytes) {
+        value = next;
+        return;
+      }
+
+      value = clipText(next, maxBytes);
+      truncated = true;
+    },
+    read() {
+      return {
+        text: value,
+        truncated
+      };
+    }
+  };
+}
+
+function clipText(text: string, maxBytes: number) {
+  const suffix = "\n...truncated...";
+  let output = "";
+
+  for (const char of text) {
+    const next = `${output}${char}`;
+
+    if (Buffer.byteLength(`${next}${suffix}`, "utf8") > maxBytes) {
+      break;
+    }
+
+    output = next;
+  }
+
+  return `${output}${suffix}`;
 }

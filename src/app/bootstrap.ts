@@ -1,5 +1,6 @@
 import { mkdir, readFile } from "node:fs/promises";
-import { resolve } from "node:path";
+import { dirname, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 
 import { EventBus } from "./event-bus.js";
 import { AppLifecycle } from "./lifecycle.js";
@@ -18,10 +19,11 @@ import { OpenAIProvider } from "../providers/openai.js";
 import { InMemoryToolRegistry } from "../tools/registry.js";
 
 export async function bootstrapApp() {
-  const appRoot = process.cwd();
-  const appConfigDir = resolve(appRoot, ".selfme");
-  const runtimeDir = resolve(appRoot, ".selfme", "runtime");
-  const packageJson = JSON.parse(await readFile(resolve(appRoot, "package.json"), "utf8")) as { version?: string };
+  const workspaceRoot = process.env.SELFME_WORKSPACE_ROOT || process.env.INIT_CWD || process.cwd();
+  const cliRoot = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
+  const appConfigDir = resolve(workspaceRoot, ".selfme");
+  const runtimeDir = resolve(workspaceRoot, ".selfme", "runtime");
+  const packageJson = JSON.parse(await readFile(resolve(cliRoot, "package.json"), "utf8")) as { version?: string };
 
   await mkdir(appConfigDir, { recursive: true });
   await mkdir(runtimeDir, { recursive: true });
@@ -36,7 +38,7 @@ export async function bootstrapApp() {
   await logStore.ensureInitialized();
 
   const appSettings = await settings.read();
-  const session = createDefaultSessionRecord(appRoot, packageJson.version ?? "0.0.0");
+  const session = createDefaultSessionRecord(workspaceRoot, packageJson.version ?? "0.0.0");
   const provider = appSettings.provider === "openai" && appSettings.baseUrl && appSettings.apiKey
     ? new OpenAIProvider({
         baseUrl: appSettings.baseUrl,
@@ -51,7 +53,7 @@ export async function bootstrapApp() {
         })
       : new LocalProvider();
 
-  session.model = appSettings.model;
+  session.model = appSettings.model || provider.name;
 
   const tools = new InMemoryToolRegistry();
   const panel = new TerminalPanelController();

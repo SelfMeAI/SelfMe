@@ -11,17 +11,21 @@ const commandPaletteItems: CommandPaletteItem[] = [
   { key: "help", command: "/help", summary: "Show the minimal command reference" },
   { key: "tools", command: "/tools", summary: "List available tools" },
   { key: "read", command: "/read ", summary: "Read a file or line range", requiresInput: true },
+  { key: "write", command: "/write ", summary: "Write a file from multiline input", requiresInput: true },
+  { key: "edit", command: "/edit ", summary: "Replace a file range from multiline input", requiresInput: true },
   { key: "shell", command: "/shell ", summary: "Run a shell command", requiresInput: true }
 ];
 
 export interface ParsedToolCommand {
-  toolName: "shell" | "files";
+  toolName: "shell" | "files" | "write" | "edit";
   input: {
     command?: string;
     path?: string;
     startLine?: number;
     endLine?: number;
     maxBytes?: number;
+    content?: string;
+    replacement?: string;
   };
 }
 
@@ -36,6 +40,9 @@ export function renderHelpLines() {
     "/read <path>",
     "/read <path:start-end>",
     "/read <path> --max-bytes <n>",
+    "/write <path>\\n<content>",
+    "/edit <path>\\n<replacement>",
+    "/edit <path:start-end>\\n<replacement>",
     "/shell <command>"
   ];
 }
@@ -55,7 +62,45 @@ export function parseBuiltInCommand(content: string): BuiltInCommandName | undef
 }
 
 export function parseToolCommand(content: string): ParsedToolCommand | undefined {
-  const trimmed = content.trim();
+  const normalized = content.replace(/\r\n/g, "\n");
+  const newlineIndex = normalized.indexOf("\n");
+  const header = newlineIndex >= 0 ? normalized.slice(0, newlineIndex) : normalized;
+  const body = newlineIndex >= 0 ? normalized.slice(newlineIndex + 1) : "";
+  const trimmedHeader = header.trim();
+
+  if (trimmedHeader.startsWith("/write ")) {
+    const path = trimmedHeader.slice("/write ".length).trim();
+
+    if (!path) {
+      return undefined;
+    }
+
+    return {
+      toolName: "write",
+      input: {
+        path,
+        content: body
+      }
+    };
+  }
+
+  if (trimmedHeader.startsWith("/edit ")) {
+    const target = trimmedHeader.slice("/edit ".length).trim();
+
+    if (!target) {
+      return undefined;
+    }
+
+    return {
+      toolName: "edit",
+      input: {
+        ...parsePathRangeInput(target),
+        replacement: body
+      }
+    };
+  }
+
+  const trimmed = normalized.trim();
   const commandMatch = trimmed.match(/^\/(shell|read)\s+([\s\S]+)$/);
 
   if (!commandMatch) {
@@ -85,23 +130,29 @@ function parseReadInput(rawInput: string) {
   const withoutMaxBytes = maxBytesMatch
     ? rawInput.slice(0, maxBytesMatch.index).trim()
     : rawInput;
-  const rangeMatch = withoutMaxBytes.match(/:(\d+)(?:-(\d+))?$/);
+
+  return {
+    ...parsePathRangeInput(withoutMaxBytes),
+    maxBytes
+  };
+}
+
+function parsePathRangeInput(rawInput: string) {
+  const rangeMatch = rawInput.match(/:(\d+)(?:-(\d+))?$/);
 
   if (!rangeMatch) {
     return {
-      path: withoutMaxBytes,
-      maxBytes
+      path: rawInput
     };
   }
 
-  const path = withoutMaxBytes.slice(0, rangeMatch.index).trim();
+  const path = rawInput.slice(0, rangeMatch.index).trim();
   const startLine = Number(rangeMatch[1]);
   const endLine = rangeMatch[2] ? Number(rangeMatch[2]) : startLine;
 
   return {
     path,
     startLine,
-    endLine,
-    maxBytes
+    endLine
   };
 }
