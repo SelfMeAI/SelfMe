@@ -168,10 +168,7 @@ function renderMessageBlock(
   }
 
   if (message.kind === "system") {
-    const wrappedBody = wrapBlockLines(message.body, Math.max(8, contentWidth - 2))
-      .map((line) => `${ansiMuted("│ ")}${line}`);
-
-    return [formatMetaTitle(message.title.toLowerCase()), ...wrappedBody].join("\n");
+    return renderSystemBlock(message, Math.max(8, contentWidth - 2));
   }
 
   if (message.kind === "assistant") {
@@ -193,7 +190,7 @@ function renderMessageBlock(
   const wrappedBody = wrapBlockLines(message.body, Math.max(8, contentWidth - 2))
     .map((line) => `${ansiMuted("  ")}${line}`);
 
-  return [formatMetaTitle(message.title), ...wrappedBody].join("\n");
+  return [`${ansiMuted("· ")}${ansiSystemTitle(message.title.toLowerCase())}`, ...wrappedBody].join("\n");
 }
 
 function wrapBlockLines(block: string, width: number) {
@@ -324,7 +321,7 @@ function formatUserComposerLine(line: string, prefix: string, viewportWidth: num
   const contentWidth = Math.max(1, viewportWidth - getDisplayWidth(prefix));
   const padded = padToDisplayWidth(line || " ", contentWidth);
 
-  return `${ansiUserComposerPrefix(prefix)}${ansiInputFill(padded)}`;
+  return `${ansiUserComposerPrefix(prefix)}${ansiUserInputFill(padded)}`;
 }
 
 function renderComposerPadLine(viewportWidth: number) {
@@ -347,8 +344,17 @@ function formatAssistantWorkingLine(line: string, isFirstLine: boolean) {
   return `${ansiMuted("  ")}${line}`;
 }
 
-function formatMetaTitle(title: string) {
-  return `${ansiMuted("[" + title + "]")}`;
+function renderSystemBlock(message: TerminalMessageBlock, width: number) {
+  const lines = wrapBlockLines(message.body, width);
+  const heading = message.title
+    ? `${ansiMuted("· ")}${ansiSystemTitle(message.title.toLowerCase())}`
+    : "";
+  const body = lines.map((line, index) => {
+    const prefix = index === 0 && !heading ? "· " : "  ";
+    return `${ansiMuted(prefix)}${ansiSystem(line)}`;
+  });
+
+  return [heading, ...body].filter(Boolean).join("\n");
 }
 
 function renderStructuredMetaBlock(
@@ -415,11 +421,15 @@ function ansiComposerPrefix(text: string) {
 }
 
 function ansiUserComposerPrefix(text: string) {
-  return paint(text, { bg: "bgSubtle", fg: "textSecondary" });
+  return paint(text, { bg: "bgSubtle", fg: "textMuted" });
 }
 
 function ansiInputFill(text: string) {
   return paint(text, { bg: "bgSubtle", fg: "textPrimary" });
+}
+
+function ansiUserInputFill(text: string) {
+  return paint(text, { bg: "bgSubtle", fg: "textSecondary" });
 }
 
 function ansiInputMeta(text: string) {
@@ -427,6 +437,14 @@ function ansiInputMeta(text: string) {
 }
 
 function ansiMuted(text: string) {
+  return fg("textMuted", text);
+}
+
+function ansiSystem(text: string) {
+  return fg("textSecondary", text);
+}
+
+function ansiSystemTitle(text: string) {
   return fg("textMuted", text);
 }
 

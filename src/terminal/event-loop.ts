@@ -56,7 +56,14 @@ export class TerminalEventLoop {
             continue;
           }
 
+          const panelState = this.input.panel.getState(currentValue);
+
           if (this.input.panel.submit(this.input.bus, this.input.sessionId ?? "local-session", currentValue)) {
+            if (panelState.mode === "command") {
+              this.input.editor.setValue("");
+              this.emitEditorState();
+            }
+
             this.emitUiState();
             continue;
           }
@@ -64,7 +71,11 @@ export class TerminalEventLoop {
           if (isSlashCommand(currentValue)) {
             const panel = this.input.panel.getState(currentValue);
 
-            if (panel.mode === "command" && panel.options.length > 0) {
+            if (
+              panel.mode === "command" &&
+              panel.options.length > 0 &&
+              !hasSlashArguments(currentValue)
+            ) {
               continue;
             }
 
@@ -122,15 +133,6 @@ export class TerminalEventLoop {
         }
 
         if (event.type === "move-left") {
-          const panel = this.input.panel.getState(this.input.editor.getState().value);
-
-          if (panel.mode === "help") {
-            if (this.input.panel.focusHelpPreviousTab()) {
-              this.emitUiState();
-            }
-            continue;
-          }
-
           if (this.input.panel.hasOpenPanel(this.input.editor.getState().value)) {
             continue;
           }
@@ -141,15 +143,6 @@ export class TerminalEventLoop {
         }
 
         if (event.type === "move-right") {
-          const panel = this.input.panel.getState(this.input.editor.getState().value);
-
-          if (panel.mode === "help") {
-            if (this.input.panel.focusHelpNextTab()) {
-              this.emitUiState();
-            }
-            continue;
-          }
-
           if (this.input.panel.hasOpenPanel(this.input.editor.getState().value)) {
             continue;
           }
@@ -232,4 +225,21 @@ function disableExtendedKeyboardReporting() {
 function isSlashCommand(value: string) {
   const trimmed = value.trim();
   return trimmed.startsWith("/") && !trimmed.includes("\n");
+}
+
+function hasSlashArguments(value: string) {
+  const trimmed = value.trim();
+
+  if (!trimmed.startsWith("/")) {
+    return false;
+  }
+
+  const withoutSlash = trimmed.slice(1);
+  const firstWhitespace = withoutSlash.search(/\s/);
+
+  if (firstWhitespace === -1) {
+    return false;
+  }
+
+  return withoutSlash.slice(firstWhitespace).trim().length > 0;
 }

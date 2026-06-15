@@ -3,8 +3,6 @@ import { homedir } from "node:os";
 import type { TerminalPanelController, TerminalPanelState } from "./panel-controller.js";
 import { clearLine, hideCursor, moveCursorTo, readCursorPosition, showCursor } from "./screen.js";
 import { renderTerminalLayout, type TerminalMessageBlock } from "./layout.js";
-import type { SettingsStore } from "../storage/settings.js";
-import type { RuntimeEvent } from "../types/events.js";
 import type { SessionRecord } from "../types/session.js";
 import { fg, paint } from "./theme.js";
 
@@ -15,6 +13,11 @@ interface RenderState {
   messageViewportOffset: number;
   workingFrame: number;
   workingTaskId?: string;
+  notice?: {
+    title: string;
+    body: string;
+    tone: "info" | "error";
+  };
 }
 
 export class TerminalRenderer {
@@ -27,7 +30,8 @@ export class TerminalRenderer {
     messages: [],
     messageViewportOffset: 0,
     workingFrame: 0,
-    workingTaskId: undefined
+    workingTaskId: undefined,
+    notice: undefined
   };
   private workingTimer?: NodeJS.Timeout;
 
@@ -35,12 +39,7 @@ export class TerminalRenderer {
     private readonly input: {
       bus: EventBus;
       panel: TerminalPanelController;
-      settings: SettingsStore;
       session: SessionRecord;
-      restoredEvents?: RuntimeEvent[];
-      resumedSession?: boolean;
-      startupMode?: "new" | "resume-latest" | "resume-selected";
-      latestSessionHint?: string;
     }
   ) {}
 
@@ -53,9 +52,6 @@ export class TerminalRenderer {
       `${logo[1]}  ${ansiDim(this.input.session.model)}`,
       `${logo[2]}  ${ansiDim(shortenHomePath(this.input.session.cwd ?? process.cwd()))}`
     ];
-    const restoredMessages = this.input.restoredEvents?.length
-      ? projectRestoredMessages(this.input.restoredEvents)
-      : [];
 
     this.state.messages.push({
       kind: "welcome",
@@ -63,32 +59,16 @@ export class TerminalRenderer {
       body: welcomeLines.join("\n")
     });
 
-    if (this.input.resumedSession) {
-      this.state.messages.push({
-        kind: "system",
-        title: "Session",
-        body: createSessionStartupMessage({
-          startupMode: this.input.startupMode,
-          restoredCount: restoredMessages.length
-        })
-      });
-    } else if (this.input.latestSessionHint) {
-      this.state.messages.push({
-        kind: "system",
-        title: "Resume",
-        body: this.input.latestSessionHint
-      });
-    }
-
-    if (restoredMessages.length > 0) {
-      this.state.messages.push(...restoredMessages);
-    }
-
     this.syncActions();
 
     this.input.bus.on("editor.state.changed", (event) => {
       this.state.editorValue = String(event.payload.value ?? "");
       this.state.editorCursor = Number(event.payload.cursor ?? 0);
+
+      if (this.state.notice && this.state.editorValue.trim().length > 0) {
+        this.state.notice = undefined;
+      }
+
       this.render();
     });
 
@@ -114,11 +94,22 @@ export class TerminalRenderer {
       this.state.messageViewportOffset = 0;
       this.state.editorValue = "";
       this.state.editorCursor = 0;
+      this.state.notice = undefined;
       this.syncActions();
       this.render();
     });
 
     this.input.bus.on("system.message.appended", (event) => {
+      if (isTransientSystemNotice(event.payload.title)) {
+        this.state.notice = {
+          title: event.payload.title,
+          body: event.payload.content,
+          tone: "info"
+        };
+        this.render();
+        return;
+      }
+
       const nextMessage: TerminalMessageBlock = {
         kind: "system",
         title: event.payload.title,
@@ -147,6 +138,7 @@ export class TerminalRenderer {
 
       this.state.messageViewportOffset = 0;
       this.state.workingTaskId = event.taskId;
+      this.state.notice = undefined;
       this.syncActions();
       this.startWorkingAnimation();
       this.render();
@@ -187,6 +179,7 @@ export class TerminalRenderer {
       };
       upsertMessageByTaskId(this.state.messages, event.taskId, nextMessage);
       this.state.messageViewportOffset = 0;
+      this.state.notice = undefined;
       this.syncActions();
       this.render();
     });
@@ -257,6 +250,7 @@ export class TerminalRenderer {
       };
       this.state.messages.push(nextMessage);
       this.state.messageViewportOffset = 0;
+      this.state.notice = undefined;
       this.syncActions();
       this.render();
     });
@@ -282,6 +276,16 @@ export class TerminalRenderer {
     });
 
     this.input.bus.on("runtime.error.raised", (event) => {
+      if (!event.taskId && isTransientRuntimeNotice(event.payload.message)) {
+        this.state.notice = {
+          title: "Error",
+          body: event.payload.message,
+          tone: "error"
+        };
+        this.render();
+        return;
+      }
+
       this.stopWorkingAnimation();
       this.state.workingTaskId = undefined;
       const existing = findMessageByTaskId(this.state.messages, event.taskId);
@@ -380,6 +384,10 @@ export class TerminalRenderer {
       return this.renderPanelFooter(panel, viewportWidth);
     }
 
+    if (this.state.notice) {
+      return this.renderNoticeFooter(viewportWidth);
+    }
+
     return [this.renderComposerMetaLine(viewportWidth)];
   }
 
@@ -401,41 +409,54 @@ export class TerminalRenderer {
     lines.push(truncateAnsiLine([title, subtitle].filter(Boolean).join(separator), viewportWidth));
 
     if (panel.description) {
-      lines.push(truncateAnsiLine(ansiPanelDescription(panel.description), viewportWidth));
-    }
-
-    if (panel.mode === "help" && panel.tabs?.length) {
-      lines.push(truncateAnsiLine(
-        panel.tabs
-          .map((tab, index) => index === panel.activeTabIndex
-            ? ansiPanelActiveTab(tab.label)
-            : ansiPanelTab(tab.label))
-          .join("  "),
-        viewportWidth
-      ));
+      for (const line of panel.description.split("\n")) {
+        lines.push(truncateAnsiLine(ansiPanelDescription(line), viewportWidth));
+      }
     }
 
     if (panel.mode === "command" && panel.query !== undefined) {
-      lines.push(truncateAnsiLine(`${ansiPanelLabel("Filter")} ${ansiPanelQuery(`/${panel.query}`)}`, viewportWidth));
+      lines.push(truncateAnsiLine(ansiPanelQuery(`/${panel.query}`), viewportWidth));
     }
 
     const visibleOptions = panel.options.slice(0, 5);
 
     for (const [index, option] of visibleOptions.entries()) {
-      if (panel.mode === "help") {
-        lines.push(truncateAnsiLine(this.renderPanelHelpLine(option.label), viewportWidth));
-        continue;
-      }
-
       const isSelected = index === panel.selectedIndex;
       lines.push(truncateAnsiLine(this.renderPanelOption(option.label, option.detail, option.style, isSelected), viewportWidth));
     }
 
-    lines.push(truncateAnsiLine(panel.mode === "help"
-      ? `${ansiActionHint("←→")} ${ansiPanelHelp("tabs")}  ${ansiActionHint("Esc")} ${ansiPanelHelp("close")}`
-      : `${ansiActionHint("↑↓")} ${ansiPanelHelp("select")}  ${ansiActionHint("Enter")} ${ansiPanelHelp("confirm")}  ${ansiActionHint("Esc")} ${ansiPanelHelp("close")}`,
+    lines.push(truncateAnsiLine(
+      `${ansiActionHint("↑↓")} ${ansiPanelHelp("select")}  ${ansiActionHint("Enter")} ${ansiPanelHelp("confirm")}  ${ansiActionHint("Esc")} ${ansiPanelHelp("close")}`,
       viewportWidth
     ));
+
+    return lines;
+  }
+
+  private renderNoticeFooter(viewportWidth: number) {
+    const notice = this.state.notice;
+
+    if (!notice) {
+      return [this.renderComposerMetaLine(viewportWidth)];
+    }
+
+    const lines = [
+      truncateAnsiLine(
+        notice.tone === "error"
+          ? ansiNoticeErrorTitle(notice.title)
+          : ansiNoticeTitle(notice.title),
+        viewportWidth
+      )
+    ];
+
+    for (const line of notice.body.split("\n").slice(0, 6)) {
+      lines.push(truncateAnsiLine(
+        notice.tone === "error"
+          ? ansiNoticeErrorBody(line)
+          : ansiNoticeBody(line),
+        viewportWidth
+      ));
+    }
 
     return lines;
   }
@@ -453,10 +474,6 @@ export class TerminalRenderer {
     const detailText = detail ? `  ${ansiPanelDetail(detail)}` : "";
 
     return `${mark} ${content}${detailText}`;
-  }
-
-  private renderPanelHelpLine(text: string) {
-    return `  ${ansiPanelHelpLine(text)}`;
   }
 
   private startWorkingAnimation() {
@@ -645,20 +662,24 @@ function ansiPanelDescription(text: string) {
   return fg("textSecondary", text);
 }
 
-function ansiPanelTab(text: string) {
-  return fg("textMuted", text);
-}
-
-function ansiPanelActiveTab(text: string) {
-  return paint(` ${text} `, { fg: "bgBase", bg: "textSecondary", bold: true });
-}
-
 function ansiPanelHelp(text: string) {
   return fg("textMuted", text);
 }
 
-function ansiPanelHelpLine(text: string) {
+function ansiNoticeTitle(text: string) {
+  return fg("textMuted", text);
+}
+
+function ansiNoticeBody(text: string) {
   return fg("textSecondary", text);
+}
+
+function ansiNoticeErrorTitle(text: string) {
+  return fg("stateError", text);
+}
+
+function ansiNoticeErrorBody(text: string) {
+  return fg("stateError", text);
 }
 
 function ansiActionMenuItem(text: string, style?: "primary" | "secondary" | "danger") {
@@ -706,31 +727,12 @@ function renderWelcomeLogo() {
   ];
 }
 
-function createSessionStartupMessage(input: {
-  startupMode?: "new" | "resume-latest" | "resume-selected";
-  restoredCount: number;
-}) {
-  const recoveredLine = input.restoredCount > 0
-    ? `Recovered session history (${input.restoredCount} items)`
-    : "Reopened session";
-  const attachLine = input.startupMode === "resume-selected"
-    ? "Attached using selfme --session <id>"
-    : "Attached to session";
-
-  return [
-    recoveredLine,
-    attachLine,
-    "New session: selfme --new",
-    "Other sessions: /sessions"
-  ].join("\n");
-}
-
 function createToolRunningMessage(toolName: string, input?: unknown) {
   const target = renderToolTarget(toolName, input);
 
   return target
-    ? `${toolName} · running\n${target}\nwaiting for output...`
-    : `${toolName} · running\nwaiting for output...`;
+    ? `${toolName} · running\n${target}`
+    : `${toolName} · running`;
 }
 
 function appendToolOutput(current: string, toolName: string, chunk: string) {
@@ -754,7 +756,6 @@ function finalizeToolMessage(current: string, toolName: string, summary: string,
   }
 
   const preserved = lines.slice(1).filter((line) =>
-    line !== "waiting for output..." &&
     !line.startsWith("command · ") &&
     !line.startsWith("path · ")
   );
@@ -773,32 +774,17 @@ function finalizeToolMessage(current: string, toolName: string, summary: string,
 
 function renderToolTarget(toolName: string, input?: unknown) {
   if (toolName === "shell" && input && typeof input === "object" && "command" in input && typeof input.command === "string") {
-    return `command · ${createToolPreview(input.command, 140)}`;
+    return createToolPreview(input.command, 140);
   }
 
   if (toolName === "files" && input && typeof input === "object" && "path" in input && typeof input.path === "string") {
     const range = "startLine" in input && typeof input.startLine === "number"
       ? `:${input.startLine}${"endLine" in input && typeof input.endLine === "number" ? `-${input.endLine}` : ""}`
       : "";
-    return `path · ${input.path}${range}`;
+    return `${input.path}${range}`;
   }
 
   return "";
-}
-
-function createApprovalRequestedMessage(input: {
-  toolName: string;
-  reason: string;
-  risk: string;
-  approvalId: string;
-}) {
-  return [
-    `${input.toolName} · approval required`,
-    input.reason,
-    `risk · ${input.risk}`,
-    `approve · /approve ${input.approvalId}`,
-    `deny · /deny ${input.approvalId}`
-  ].join("\n");
 }
 
 function createApprovalResolvedMessage(_approvalId: string, approved: boolean) {
@@ -923,18 +909,15 @@ function upsertMessageByApprovalId(messages: TerminalMessageBlock[], approvalId:
 }
 
 function shouldUpsertSystemMessage(title: string) {
-  return title === "Help" ||
-    title === "Sessions" ||
-    title === "Tasks" ||
-    title === "Plan" ||
-    title === "Checkpoint" ||
-    title === "Tools" ||
-    title === "History" ||
-    title === "Search" ||
-    title === "Jump" ||
-    title === "Resume" ||
-    title === "Retry" ||
-    title === "Recovery";
+  return title === "Help" || title === "Tools";
+}
+
+function isTransientSystemNotice(title: string) {
+  return title === "Help" || title === "Tools";
+}
+
+function isTransientRuntimeNotice(message: string) {
+  return message.startsWith("Unknown command:") || message.startsWith("Unknown approval id:");
 }
 
 function upsertSystemMessageByTitle(messages: TerminalMessageBlock[], nextMessage: TerminalMessageBlock) {
@@ -953,146 +936,6 @@ function upsertSystemMessageByTitle(messages: TerminalMessageBlock[], nextMessag
   }
 
   messages.push(nextMessage);
-}
-
-function projectRestoredMessages(events: RuntimeEvent[]): TerminalMessageBlock[] {
-  const projected: TerminalMessageBlock[] = [];
-
-  for (const event of events) {
-    if (event.type === "system.message.appended") {
-      const nextMessage: TerminalMessageBlock = {
-        kind: "system",
-        title: event.payload.title,
-        body: event.payload.content
-      };
-
-      if (shouldUpsertSystemMessage(event.payload.title)) {
-        upsertSystemMessageByTitle(projected, nextMessage);
-      } else {
-        projected.push(nextMessage);
-      }
-      continue;
-    }
-
-    if (event.type === "user.message.submitted") {
-      projected.push({
-        kind: "user",
-        title: "",
-        body: event.payload.content
-      });
-      continue;
-    }
-
-    if (event.type === "approval.requested") {
-      projected.push({
-        kind: "approval",
-        title: "Approval",
-        taskId: event.taskId,
-        approvalId: event.payload.approvalId,
-        approvalContext: {
-          toolName: event.payload.toolName,
-          reason: event.payload.reason,
-          risk: event.payload.risk
-        },
-        actions: [
-          {
-            id: "approve",
-            label: "Approve",
-            command: `/approve ${event.payload.approvalId}`,
-            style: "primary"
-          },
-          {
-            id: "deny",
-            label: "Deny",
-            command: `/deny ${event.payload.approvalId}`,
-            style: "danger"
-          }
-        ],
-        body: ""
-      });
-      continue;
-    }
-
-    if (event.type === "approval.resolved") {
-      upsertMessageByApprovalId(projected, event.payload.approvalId, {
-        kind: "approval",
-        title: "Approval",
-        taskId: event.taskId,
-        approvalId: event.payload.approvalId,
-        approvalContext: undefined,
-        actions: [],
-        body: createApprovalResolvedMessage(event.payload.approvalId, event.payload.approved)
-      });
-      continue;
-    }
-
-    if (event.type === "runtime.error.raised") {
-      const existing = findMessageByTaskId(projected, event.taskId);
-      upsertMessageByTaskId(projected, event.taskId, {
-        kind: "error",
-        title: "Error",
-        taskId: event.taskId,
-        body: createTaskErrorMessage(existing?.body, event.payload.message)
-      });
-      continue;
-    }
-
-    if (event.type === "tool.execution.requested") {
-      upsertMessageByTaskId(projected, event.taskId, {
-        kind: "tool",
-        title: "Tool",
-        taskId: event.taskId,
-        body: createToolRunningMessage(event.payload.toolName, event.payload.input)
-      });
-      continue;
-    }
-
-    if (event.type === "tool.execution.completed") {
-      const existing = findMessageByTaskId(projected, event.taskId);
-      const body = finalizeToolMessage(
-        existing?.kind === "tool" ? existing.body : "",
-        event.payload.toolName,
-        event.payload.summary,
-        event.payload.rawOutput
-      );
-      upsertMessageByTaskId(projected, event.taskId, {
-        kind: "tool",
-        title: "Tool",
-        taskId: event.taskId,
-        body
-      });
-      continue;
-    }
-
-    if (event.type === "tool.stdout.appended") {
-      const existing = findMessageByTaskId(projected, event.taskId);
-      const body = appendToolOutput(existing?.kind === "tool" ? existing.body : "", event.payload.toolName, event.payload.chunk);
-      upsertMessageByTaskId(projected, event.taskId, {
-        kind: "tool",
-        title: "Tool",
-        taskId: event.taskId,
-        body
-      });
-      continue;
-    }
-
-    if (event.type !== "assistant.delta.received") {
-      continue;
-    }
-
-    const existing = findMessageByTaskId(projected, event.taskId);
-    const body = existing?.kind === "assistant"
-      ? `${existing.body}${event.payload.delta}`
-      : event.payload.delta;
-    upsertMessageByTaskId(projected, event.taskId, {
-      kind: "assistant",
-      title: "",
-      taskId: event.taskId,
-      body
-    });
-  }
-
-  return projected;
 }
 
 function getCharDisplayWidth(char: string) {

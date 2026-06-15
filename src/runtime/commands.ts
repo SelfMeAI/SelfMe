@@ -1,3 +1,19 @@
+export type BuiltInCommandName = "help" | "tools";
+
+export interface CommandPaletteItem {
+  key: string;
+  command: string;
+  summary: string;
+  requiresInput?: boolean;
+}
+
+const commandPaletteItems: CommandPaletteItem[] = [
+  { key: "help", command: "/help", summary: "Show the minimal command reference" },
+  { key: "tools", command: "/tools", summary: "List available tools" },
+  { key: "read", command: "/read ", summary: "Read a file or line range", requiresInput: true },
+  { key: "shell", command: "/shell ", summary: "Run a shell command", requiresInput: true }
+];
+
 export interface ParsedToolCommand {
   toolName: "shell" | "files";
   input: {
@@ -9,114 +25,19 @@ export interface ParsedToolCommand {
   };
 }
 
-export type BuiltInCommandName = "help" | "tools" | "tasks" | "plan" | "checkpoint" | "sessions";
-
-export interface CommandPaletteItem {
-  key: string;
-  command: string;
-  summary: string;
-  requiresInput?: boolean;
-  opensView?: "help";
-}
-
-export interface HelpTab {
-  key: string;
-  label: string;
-  lines: string[];
-}
-
-const commandPaletteItems: CommandPaletteItem[] = [
-  { key: "help", command: "/help", summary: "Show command reference", opensView: "help" },
-  { key: "tools", command: "/tools", summary: "List available tools" },
-  { key: "tasks", command: "/tasks", summary: "Show current tasks" },
-  { key: "plan", command: "/plan", summary: "Summarize current recovery plan" },
-  { key: "checkpoint", command: "/checkpoint", summary: "Show latest checkpoint snapshot" },
-  { key: "sessions", command: "/sessions", summary: "Browse recent sessions" },
-  { key: "history", command: "/history", summary: "Show recent conversation history" },
-  { key: "search", command: "/search ", summary: "Search conversation history", requiresInput: true },
-  { key: "jump-latest", command: "/jump latest", summary: "Jump to the latest history item" },
-  { key: "retry-latest", command: "/retry latest", summary: "Retry the latest user request" },
-  { key: "resume", command: "/resume", summary: "Open resumable tool tasks" },
-  { key: "resume-latest", command: "/resume latest", summary: "Resume the latest tool task" },
-  { key: "read", command: "/read ", summary: "Read a file or line range", requiresInput: true },
-  { key: "shell", command: "/shell ", summary: "Run a shell command", requiresInput: true }
-];
-
 export function listCommandPaletteItems() {
   return commandPaletteItems.map((item) => ({ ...item }));
 }
 
-export function listHelpTabs(): HelpTab[] {
+export function renderHelpLines() {
   return [
-    {
-      key: "workspace",
-      label: "Workspace",
-      lines: [
-        "/sessions",
-        "/tasks",
-        "/plan",
-        "/checkpoint"
-      ]
-    },
-    {
-      key: "history",
-      label: "History",
-      lines: [
-        "/history",
-        "/search <query>",
-        "/jump latest",
-        "/retry latest"
-      ]
-    },
-    {
-      key: "recovery",
-      label: "Recovery",
-      lines: [
-        "/resume",
-        "/resume latest",
-        "/resume <taskId>",
-        "/approve <id>",
-        "/deny <id>"
-      ]
-    },
-    {
-      key: "tools",
-      label: "Tools",
-      lines: [
-        "/tools",
-        "/read <path>",
-        "/read <path:start-end>",
-        "/read <path> --max-bytes <n>",
-        "/shell <command>"
-      ]
-    },
-    {
-      key: "launch",
-      label: "Launch",
-      lines: [
-        "selfme --new",
-        "selfme --session <id>"
-      ]
-    },
-    {
-      key: "keys",
-      label: "Keys",
-      lines: [
-        "Up / Down  select menu item",
-        "Tab / Shift+Tab  move within menu",
-        "Enter  confirm",
-        "Esc  close",
-        "PageUp / PageDown  scroll messages",
-        "Ctrl+Up / Ctrl+Down  fine scroll"
-      ]
-    }
+    "/help",
+    "/tools",
+    "/read <path>",
+    "/read <path:start-end>",
+    "/read <path> --max-bytes <n>",
+    "/shell <command>"
   ];
-}
-
-export interface ParsedSessionCommand {
-  name: "history" | "search" | "jump" | "retry" | "resume";
-  query?: string;
-  target?: "latest" | "list" | string;
 }
 
 export function parseBuiltInCommand(content: string): BuiltInCommandName | undefined {
@@ -128,78 +49,6 @@ export function parseBuiltInCommand(content: string): BuiltInCommandName | undef
 
   if (trimmed === "/tools") {
     return "tools";
-  }
-
-  if (trimmed === "/tasks") {
-    return "tasks";
-  }
-
-  if (trimmed === "/plan") {
-    return "plan";
-  }
-
-  if (trimmed === "/checkpoint") {
-    return "checkpoint";
-  }
-
-  if (trimmed === "/sessions") {
-    return "sessions";
-  }
-
-  return undefined;
-}
-
-export function parseSessionCommand(content: string): ParsedSessionCommand | undefined {
-  const trimmed = content.trim();
-
-  if (trimmed === "/history") {
-    return { name: "history" };
-  }
-
-  const searchMatch = trimmed.match(/^\/search\s+([\s\S]+)$/);
-
-  if (searchMatch) {
-    return {
-      name: "search",
-      query: searchMatch[1].trim()
-    };
-  }
-
-  if (trimmed === "/jump latest") {
-    return {
-      name: "jump",
-      target: "latest"
-    };
-  }
-
-  if (trimmed === "/retry latest") {
-    return {
-      name: "retry",
-      target: "latest"
-    };
-  }
-
-  if (trimmed === "/resume latest") {
-    return {
-      name: "resume",
-      target: "latest"
-    };
-  }
-
-  if (trimmed === "/resume") {
-    return {
-      name: "resume",
-      target: "list"
-    };
-  }
-
-  const resumeMatch = trimmed.match(/^\/resume\s+([a-zA-Z0-9-]+)$/);
-
-  if (resumeMatch) {
-    return {
-      name: "resume",
-      target: resumeMatch[1]
-    };
   }
 
   return undefined;
@@ -216,11 +65,9 @@ export function parseToolCommand(content: string): ParsedToolCommand | undefined
   const [, command, rawInput] = commandMatch;
 
   if (command === "read") {
-    const parsedReadInput = parseReadInput(rawInput.trim());
-
     return {
       toolName: "files",
-      input: parsedReadInput
+      input: parseReadInput(rawInput.trim())
     };
   }
 

@@ -1,9 +1,7 @@
 import type { EventBus } from "../app/event-bus.js";
 import {
   listCommandPaletteItems,
-  listHelpTabs,
-  type CommandPaletteItem,
-  type HelpTab
+  type CommandPaletteItem
 } from "../runtime/commands.js";
 import { createTerminalCommandInvokedEvent } from "../runtime/events.js";
 import type { TerminalMessageBlock } from "./layout.js";
@@ -17,15 +15,13 @@ export interface TerminalPanelOption {
 }
 
 export interface TerminalPanelState {
-  mode: "idle" | "approval" | "command" | "help";
+  mode: "idle" | "approval" | "command";
   title?: string;
   subtitle?: string;
   description?: string;
   query?: string;
   options: TerminalPanelOption[];
   selectedIndex: number;
-  tabs?: HelpTab[];
-  activeTabIndex?: number;
 }
 
 interface ApprovalItem {
@@ -44,8 +40,6 @@ export class TerminalPanelController {
   private selectedApprovalKey?: string;
   private selectedCommandKey?: string;
   private suppressedCommandValue?: string;
-  private helpOpen = false;
-  private helpTabIndex = 0;
 
   sync(messages: TerminalMessageBlock[], editorValue: string) {
     const previousSignature = this.approvals.map((item) => item.key).join("|");
@@ -99,26 +93,6 @@ export class TerminalPanelController {
   }
 
   getState(editorValue: string): TerminalPanelState {
-    if (this.helpOpen) {
-      const tabs = listHelpTabs();
-      const activeTabIndex = Math.max(0, Math.min(this.helpTabIndex, tabs.length - 1));
-      const activeTab = tabs[activeTabIndex];
-
-      return {
-        mode: "help",
-        title: "Help",
-        subtitle: activeTab?.label,
-        description: "Browse command groups",
-        tabs,
-        activeTabIndex,
-        options: (activeTab?.lines ?? []).map((line, index) => ({
-          key: `${activeTab?.key ?? "help"}-${index}`,
-          label: line
-        })),
-        selectedIndex: 0
-      };
-    }
-
     const commandPanel = buildCommandPanel(editorValue);
 
     if (commandPanel && this.suppressedCommandValue !== editorValue) {
@@ -130,16 +104,19 @@ export class TerminalPanelController {
 
     if (this.approvals.length > 0 && !this.approvalSuppressed) {
       const current = this.approvals[getSelectedIndex(this.approvals, this.selectedApprovalKey)];
+      const descriptionLines = [
+        current?.reason,
+        current?.risk ? `Risk · ${current.risk}` : undefined
+      ].filter(Boolean);
 
       return {
         mode: "approval",
         title: "Approval Required",
         subtitle: current?.toolName,
-        description: current?.reason,
-        options: this.approvals.map((item, index) => ({
+        description: descriptionLines.join("\n"),
+        options: this.approvals.map((item) => ({
           key: item.key,
           label: item.label,
-          detail: item.label.toLowerCase() === "deny" ? item.risk ? `risk · ${item.risk}` : "" : "",
           style: item.style,
           command: item.command
         })),
@@ -186,11 +163,6 @@ export class TerminalPanelController {
   clear(editorValue: string) {
     const panel = this.getState(editorValue);
 
-    if (panel.mode === "help") {
-      this.helpOpen = false;
-      return true;
-    }
-
     if (panel.mode === "command") {
       this.suppressedCommandValue = editorValue;
       return true;
@@ -222,12 +194,6 @@ export class TerminalPanelController {
 
       if (!item) {
         return false;
-      }
-
-      if (item.opensView === "help") {
-        this.helpOpen = true;
-        this.selectedCommandKey = undefined;
-        return true;
       }
 
       if (item.requiresInput) {
@@ -269,11 +235,7 @@ export class TerminalPanelController {
 
     const item = listCommandPaletteItems().find((entry) => entry.key === selected.key);
 
-    if (!item) {
-      return undefined;
-    }
-
-    if (!shouldInsertCommand(item, editorValue)) {
+    if (!item || !shouldInsertCommand(item, editorValue)) {
       return undefined;
     }
 
@@ -282,26 +244,6 @@ export class TerminalPanelController {
 
   acceptCommandInsertion(value: string) {
     this.suppressedCommandValue = value;
-  }
-
-  focusHelpNextTab() {
-    if (!this.helpOpen) {
-      return false;
-    }
-
-    const tabs = listHelpTabs();
-    this.helpTabIndex = (this.helpTabIndex + 1) % tabs.length;
-    return true;
-  }
-
-  focusHelpPreviousTab() {
-    if (!this.helpOpen) {
-      return false;
-    }
-
-    const tabs = listHelpTabs();
-    this.helpTabIndex = (this.helpTabIndex - 1 + tabs.length) % tabs.length;
-    return true;
   }
 
   private setSelectedKey(mode: TerminalPanelState["mode"], key?: string) {
@@ -375,10 +317,6 @@ function deriveSlashQuery(value: string) {
 }
 
 function shouldInsertCommand(item: CommandPaletteItem, editorValue: string) {
-  if (item.opensView) {
-    return false;
-  }
-
   if (!item.requiresInput) {
     return false;
   }
