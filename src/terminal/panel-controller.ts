@@ -271,15 +271,19 @@ function buildCommandPanel(editorValue: string): TerminalPanelState | undefined 
 
   const options = filterCommandItems(query).map((item) => ({
     key: item.key,
-    label: item.command,
+    label: item.display,
     detail: item.summary,
     style: "secondary" as const
   }));
 
+  if (options.length === 0) {
+    return undefined;
+  }
+
   return {
     mode: "command",
     title: "Commands",
-    subtitle: options.length > 0 ? "Type to filter commands" : "No matching commands",
+    subtitle: "Enter to run or insert",
     query,
     options,
     selectedIndex: 0
@@ -300,7 +304,7 @@ function filterCommandItems(query: string) {
   }
 
   return listCommandPaletteItems().filter((item) =>
-    item.command.slice(1).toLowerCase().startsWith(commandToken)
+    getCommandToken(item).startsWith(commandToken)
   );
 }
 
@@ -310,6 +314,10 @@ function deriveSlashQuery(value: string) {
   }
 
   if (value.includes("\n")) {
+    return undefined;
+  }
+
+  if (/\s/.test(value.slice(1))) {
     return undefined;
   }
 
@@ -329,7 +337,7 @@ function shouldInsertCommand(item: CommandPaletteItem, editorValue: string) {
     return true;
   }
 
-  return item.command.slice(1).toLowerCase().startsWith(typedCommand.toLowerCase());
+  return getCommandToken(item).startsWith(typedCommand.toLowerCase());
 }
 
 function getSelectedIndex(options: Array<{ key: string }>, selectedKey?: string) {
@@ -343,4 +351,8 @@ function getSelectedIndex(options: Array<{ key: string }>, selectedKey?: string)
 
 function getActionKey(message: Pick<TerminalMessageBlock, "approvalId" | "taskId">, actionId: string) {
   return `${message.approvalId ?? message.taskId ?? "message"}:${actionId}`;
+}
+
+function getCommandToken(item: CommandPaletteItem) {
+  return item.command.slice(1).trimEnd().toLowerCase();
 }

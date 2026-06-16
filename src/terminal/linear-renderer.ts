@@ -26,6 +26,7 @@ interface RenderState {
   liveTool?: TerminalMessageBlock;
   workingFrame: number;
   workingTaskId?: string;
+  activeTurnStartedAt?: number;
 }
 
 export class LinearTerminalRenderer {
@@ -34,7 +35,8 @@ export class LinearTerminalRenderer {
     editorCursor: 0,
     approvals: [],
     workingFrame: 0,
-    workingTaskId: undefined
+    workingTaskId: undefined,
+    activeTurnStartedAt: undefined
   };
   private workingTimer?: NodeJS.Timeout;
   private bottomArea?: BottomAreaSnapshot;
@@ -76,12 +78,14 @@ export class LinearTerminalRenderer {
 
     this.input.bus.on("user.message.submitted", (event) => {
       this.state.notice = undefined;
+      this.state.activeTurnStartedAt = Date.now();
       this.state.editorValue = "";
       this.state.editorCursor = 0;
       this.appendHistoryBlock({
         kind: "user",
         title: "",
-        body: event.payload.content
+        body: event.payload.content,
+        taskId: event.taskId
       });
     });
 
@@ -276,6 +280,35 @@ export class LinearTerminalRenderer {
       this.renderBottomArea();
     });
 
+    this.input.bus.on("task.state.changed", (event) => {
+      if (event.payload.title !== "Respond to user input") {
+        return;
+      }
+
+      if (
+        event.payload.state !== "completed" &&
+        event.payload.state !== "failed" &&
+        event.payload.state !== "cancelled"
+      ) {
+        return;
+      }
+
+      const startedAt = this.state.activeTurnStartedAt;
+      this.state.activeTurnStartedAt = undefined;
+
+      if (!startedAt) {
+        return;
+      }
+
+      this.appendHistoryBlock({
+        kind: "divider",
+        title: "",
+        taskId: event.taskId,
+        body: buildTurnSummaryLabel(event.payload.state, startedAt)
+      }, false);
+      this.renderBottomArea();
+    });
+
     process.on("exit", () => {
       this.stopWorkingAnimation();
       this.clearBottomArea();
@@ -294,8 +327,8 @@ export class LinearTerminalRenderer {
     const outputLines = renderHistoryBlock(message, viewportWidth);
     const separator = this.hasCommittedHistory
       ? shouldTightGroup(this.lastCommitted, message)
-        ? "\n"
-        : "\n\n"
+        ? ""
+        : "\n"
       : "";
 
     process.stdout.write(hideCursor());
@@ -319,7 +352,8 @@ export class LinearTerminalRenderer {
       panel: this.input.panel.getState(this.state.editorValue),
       notice: this.state.notice,
       liveBlocks: [this.state.liveTool, this.state.liveAssistant].filter(Boolean) as TerminalMessageBlock[],
-      session: this.input.session
+      session: this.input.session,
+      hasHistory: this.hasCommittedHistory
     });
 
     this.clearBottomArea();
@@ -405,7 +439,8 @@ export class LinearTerminalRenderer {
   }
 
   private renderWorkingLabel() {
-    const text = "• Working";
+    const prefix = fg("accentPrimary", "•");
+    const text = "Working";
     const beamWidth = 3;
     const cycleLength = text.length + beamWidth * 2;
     const beamCenter = (this.state.workingFrame % cycleLength) - beamWidth;
@@ -438,8 +473,32 @@ export class LinearTerminalRenderer {
       output += fg("textSecondary", char);
     }
 
-    return output;
+    const elapsed = formatElapsedDuration(this.state.activeTurnStartedAt);
+    const suffix = `${ansiMetaMuted(" (")}${ansiMetaValue(elapsed)}${ansiMetaSeparator(" · ")}${ansiMetaMuted("Esc to stop")}${ansiMetaMuted(")")}`;
+
+    return `${prefix}${ansiMetaMuted(" ")}${output}${suffix}`;
   }
+}
+
+function formatElapsedDuration(startedAt?: number) {
+  if (!startedAt) {
+    return "0s";
+  }
+
+  const elapsedSeconds = Math.max(0, Math.floor((Date.now() - startedAt) / 1000));
+  const hours = Math.floor(elapsedSeconds / 3600);
+  const minutes = Math.floor((elapsedSeconds % 3600) / 60);
+  const seconds = elapsedSeconds % 60;
+
+  if (hours > 0) {
+    return `${hours}h ${minutes}m ${seconds}s`;
+  }
+
+  if (minutes > 0) {
+    return `${minutes}m ${seconds}s`;
+  }
+
+  return `${seconds}s`;
 }
 
 function buildBottomArea(input: {
@@ -454,12 +513,15 @@ function buildBottomArea(input: {
   };
   liveBlocks: TerminalMessageBlock[];
   session: SessionRecord;
+  hasHistory: boolean;
 }) {
   const lines: string[] = [];
   let cursorRow = 0;
   let cursorColumn = 0;
 
-  lines.push("");
+  if (input.liveBlocks.length > 0) {
+    lines.push("");
+  }
 
   for (const [index, block] of input.liveBlocks.entries()) {
     if (index > 0) {
@@ -469,16 +531,12 @@ function buildBottomArea(input: {
     lines.push(...renderHistoryBlock(block, input.viewportWidth));
   }
 
-  if (input.liveBlocks.length > 0) {
-    lines.push("");
-  }
-
   const prompt = renderPrompt({
     value: input.promptValue,
     cursor: input.promptCursor,
     viewportWidth: input.viewportWidth
   });
-  if (lines.length > 0) {
+  if (lines.length > 0 || input.hasHistory) {
     lines.push("");
   }
   lines.push(renderComposerPadLine(input.viewportWidth));
@@ -555,6 +613,10 @@ function renderHistoryBlock(message: TerminalMessageBlock, viewportWidth: number
       : "";
     const body = renderPrefixedBlock(message.body, contentWidth, "· ", "  ", ansiSystemText);
     return [heading, ...body].filter(Boolean);
+  }
+
+  if (message.kind === "divider") {
+    return [renderTurnDividerLine(message.body, viewportWidth)];
   }
 
   return renderPrefixedBlock(message.body, contentWidth, "", "", ansiSystemText);
@@ -649,7 +711,7 @@ function renderPanelFooter(panel: TerminalPanelState, viewportWidth: number) {
     lines.push(truncateAnsiLine(ansiPanelQuery(`/${panel.query}`), viewportWidth));
   }
 
-  const visibleOptions = panel.options.slice(0, 5);
+  const visibleOptions = panel.options;
 
   for (const [index, option] of visibleOptions.entries()) {
     const isSelected = index === panel.selectedIndex;
@@ -680,7 +742,7 @@ function renderNoticeFooter(
     viewportWidth
   );
 
-  for (const bodyLine of notice.body.split("\n").slice(0, 6)) {
+  for (const bodyLine of notice.body.split("\n")) {
     lines.push(...wrapLine(
       notice.tone === "error" ? ansiNoticeErrorBody(bodyLine) : ansiNoticeBody(bodyLine),
       viewportWidth
@@ -871,6 +933,19 @@ function padToDisplayWidth(text: string, width: number) {
 
 function renderComposerPadLine(viewportWidth: number) {
   return ansiComposerFill(" ".repeat(Math.max(1, viewportWidth)));
+}
+
+function renderTurnDividerLine(label: string, viewportWidth: number) {
+  if (!label) {
+    return fg("lineStrong", "─".repeat(Math.max(2, viewportWidth)));
+  }
+
+  const text = ` ${label} `;
+  const visibleWidth = Math.max(0, viewportWidth - getDisplayWidth(text));
+  const leftWidth = Math.max(2, Math.floor(visibleWidth / 2));
+  const rightWidth = Math.max(2, visibleWidth - leftWidth);
+
+  return `${fg("lineStrong", "─".repeat(leftWidth))}${fg("textMuted", text)}${fg("lineStrong", "─".repeat(rightWidth))}`;
 }
 
 function truncateAnsiLine(text: string, viewportWidth: number) {
@@ -1079,9 +1154,40 @@ function deriveTaskHeadline(body: string) {
     .trim();
 }
 
+function buildTurnSummaryLabel(state: "completed" | "failed" | "cancelled", startedAt: number) {
+  const elapsedSeconds = getElapsedSeconds(startedAt);
+  const duration = formatElapsedDuration(startedAt);
+
+  if (state === "failed") {
+    return `failed after ${duration}`;
+  }
+
+  if (state === "cancelled") {
+    return `stopped after ${duration}`;
+  }
+
+  if (elapsedSeconds < 5) {
+    return "";
+  }
+
+  return `done in ${duration}`;
+}
+
+function getElapsedSeconds(startedAt?: number) {
+  if (!startedAt) {
+    return 0;
+  }
+
+  return Math.max(0, Math.floor((Date.now() - startedAt) / 1000));
+}
+
 function shouldTightGroup(previous: TerminalMessageBlock | undefined, next: TerminalMessageBlock) {
   if (!previous?.taskId || !next.taskId || previous.taskId !== next.taskId) {
     return false;
+  }
+
+  if (previous.kind === "user") {
+    return isTaskFlowKind(next.kind);
   }
 
   return isTaskFlowKind(previous.kind) && isTaskFlowKind(next.kind);
@@ -1096,7 +1202,7 @@ function isTaskFlowKind(kind: TerminalMessageBlock["kind"]) {
 }
 
 function isTransientSystemNotice(title: string) {
-  return title === "Help" || title === "Tools" || title === "Busy" || title === "Stopped";
+  return title === "Help" || title === "Busy" || title === "Stopped";
 }
 
 function isTransientRuntimeNotice(message: string) {

@@ -214,11 +214,11 @@
         <div class="grid">
           <article class="card">
             <h3>Terminal</h3>
-            <p>已具备稳定输入区、多行输入、真实光标、流式回复、底部菜单和基础状态展示。</p>
+            <p>已切到原生终端滚动模型，具备稳定输入区、多行输入、真实光标、流式回复、底部菜单和克制的状态展示。</p>
           </article>
           <article class="card">
             <h3>Commands</h3>
-            <p>当前保留最小命令面：<code>/help</code>、<code>/tools</code>、<code>/stop</code>、<code>/read</code>、<code>/write</code>、<code>/edit</code>、<code>/shell</code>。</p>
+            <p>当前保留最小命令面：<code>/help</code>、<code>/stop</code>、<code>/read</code>、<code>/write</code>、<code>/edit</code>、<code>/shell</code>。</p>
           </article>
           <article class="card">
             <h3>Approvals</h3>
@@ -231,6 +231,10 @@
           <article class="card">
             <h3>Runtime Control</h3>
             <p>已具备单活跃任务模型、忙时拦截新消息、<code>Esc</code> / <code>Ctrl+C</code> / <code>/stop</code> 中断当前任务，以及 provider / shell abort 贯通。</p>
+          </article>
+          <article class="card">
+            <h3>Turn Feedback</h3>
+            <p>已接入整轮级 <code>Working</code> 计时、停止提示和结束收口线，快速完成的轮次只保留弱分隔，不强行展示耗时。</p>
           </article>
         </div>
       </section>
@@ -252,16 +256,16 @@
         <h2>下一阶段要做什么</h2>
         <ol>
           <li>
+            <strong>继续收终端输出层次</strong>
+            <p>当前输入区、进行中状态和结束线已经稳定，下一步继续压工具块、失败块和长输出块的噪音，避免结构感过重或信息重复。</p>
+          </li>
+          <li>
             <strong>继续扩真实回归样本</strong>
             <p>已经补上首批真实 coding task 回归，下一步继续增加失败场景、长输出场景和多步修正场景，避免只覆盖顺利路径。</p>
           </li>
           <li>
             <strong>继续打磨上下文裁剪</strong>
             <p>当前已经把早期对话压缩为摘要，并限制 recent window 和 tool notes；下一步继续观察真实任务中的上下文保真度，补边界断言。</p>
-          </li>
-          <li>
-            <strong>工具展示收口</strong>
-            <p>继续收工具块展示、长输出样本、失败说明和最终回答的克制程度，避免信息重复或工具噪音过强。</p>
           </li>
           <li>
             <strong>最小命令面维持稳定</strong>
@@ -300,7 +304,7 @@
           </article>
           <article class="card">
             <h3>M3</h3>
-            <p>中断控制、单活跃任务模型和上下文裁剪已接上；现在重点是继续打磨长对话稳定性和工具输出收口。</p>
+            <p>中断控制、单活跃任务模型、整轮级 <code>Working</code> 反馈和上下文裁剪已接上；现在重点是继续打磨长对话稳定性和工具输出收口。</p>
           </article>
           <article class="card">
             <h3>M4</h3>
@@ -325,7 +329,7 @@
         <div class="tag next">Immediate</div>
         <h2>当前建议的直接开工项</h2>
         <p>
-          下一步直接做 <strong>工具展示收口 + 更强的真实任务回归</strong>。基础自动工具调用、审批、中断控制、首批回归和上下文裁剪已经成立，
+          下一步直接做 <strong>终端输出收口 + 更强的真实任务回归</strong>。基础自动工具调用、审批、中断控制、整轮状态反馈、首批回归和上下文裁剪已经成立，
           现在该继续收长输出体验，并扩大真实任务覆盖面。
         </p>
       </section>

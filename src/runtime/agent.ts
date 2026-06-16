@@ -404,18 +404,6 @@ export class AgentRuntime {
       return true;
     }
 
-    if (builtInCommand === "tools") {
-      const toolsEvent = createSystemMessageAppendedEvent({
-        sessionId: input.sessionId,
-        title: "Tools",
-        content: this.input.tools.list()
-          .map((tool) => `${tool.name}  ${tool.description}  [approval: ${tool.approvalPolicy}]`)
-          .join("\n")
-      });
-      this.input.bus.emit(toolsEvent);
-      return true;
-    }
-
     const runtimeError = createRuntimeErrorRaisedEvent({
       sessionId: input.sessionId,
       message: `Unknown command: ${input.content.trim()}`

@@ -1,20 +1,20 @@
-export type BuiltInCommandName = "help" | "tools" | "stop";
+export type BuiltInCommandName = "help" | "stop";
 
 export interface CommandPaletteItem {
   key: string;
   command: string;
+  display: string;
   summary: string;
   requiresInput?: boolean;
 }
 
 const commandPaletteItems: CommandPaletteItem[] = [
-  { key: "help", command: "/help", summary: "Show the minimal command reference" },
-  { key: "tools", command: "/tools", summary: "List available tools" },
-  { key: "stop", command: "/stop", summary: "Stop the current running task" },
-  { key: "read", command: "/read ", summary: "Read a file or line range", requiresInput: true },
-  { key: "write", command: "/write ", summary: "Write a file from multiline input", requiresInput: true },
-  { key: "edit", command: "/edit ", summary: "Replace a file range from multiline input", requiresInput: true },
-  { key: "shell", command: "/shell ", summary: "Run a shell command", requiresInput: true }
+  { key: "help", command: "/help", display: "/help", summary: "Show help" },
+  { key: "stop", command: "/stop", display: "/stop", summary: "Stop current task" },
+  { key: "read", command: "/read ", display: "/read <path>", summary: "Read file", requiresInput: true },
+  { key: "write", command: "/write ", display: "/write <path>", summary: "Write file", requiresInput: true },
+  { key: "edit", command: "/edit ", display: "/edit <path>", summary: "Edit file", requiresInput: true },
+  { key: "shell", command: "/shell ", display: "/shell <command>", summary: "Run command", requiresInput: true }
 ];
 
 export interface ParsedToolCommand {
@@ -36,16 +36,22 @@ export function listCommandPaletteItems() {
 
 export function renderHelpLines() {
   return [
+    "Commands",
     "/help",
-    "/tools",
     "/stop",
     "/read <path>",
-    "/read <path:start-end>",
-    "/read <path> --max-bytes <n>",
-    "/write <path>\\n<content>",
-    "/edit <path>\\n<replacement>",
-    "/edit <path:start-end>\\n<replacement>",
-    "/shell <command>"
+    "/write <path>",
+    "/edit <path>",
+    "/shell <command>",
+    "",
+    "Input",
+    "Type / to open commands",
+    "Use ↑↓ to select",
+    "Press Enter to confirm",
+    "",
+    "Notes",
+    "For /write and /edit, content starts on the next line",
+    "Esc stops the current response"
   ];
 }
 
@@ -54,10 +60,6 @@ export function parseBuiltInCommand(content: string): BuiltInCommandName | undef
 
   if (trimmed === "/help") {
     return "help";
-  }
-
-  if (trimmed === "/tools") {
-    return "tools";
   }
 
   if (trimmed === "/stop") {

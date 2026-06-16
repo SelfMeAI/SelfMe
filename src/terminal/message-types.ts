@@ -1,5 +1,5 @@
 export interface TerminalMessageBlock {
-  kind?: "welcome" | "user" | "assistant" | "assistant-working" | "system" | "tool" | "approval" | "error";
+  kind?: "welcome" | "user" | "assistant" | "assistant-working" | "system" | "tool" | "approval" | "error" | "divider";
   title: string;
   body: string;
   taskId?: string;
