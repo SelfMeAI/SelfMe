@@ -1,13 +1,14 @@
 import type { AgentRuntime } from "../runtime/agent.js";
 import type { TranscriptStore } from "../storage/transcripts.js";
-import type { TerminalRenderer } from "../terminal/renderer.js";
 import type { TerminalEventLoop } from "../terminal/event-loop.js";
 
 export class AppLifecycle {
   constructor(
     private readonly input: {
       runtime: AgentRuntime;
-      renderer: TerminalRenderer;
+      renderer: {
+        start(): Promise<void>;
+      };
       terminal: TerminalEventLoop;
       transcriptStore: TranscriptStore;
     }

@@ -8,7 +8,7 @@ import { EditorController } from "../editor/composer.js";
 import { createDefaultSessionRecord } from "../runtime/context.js";
 import { AgentRuntime } from "../runtime/agent.js";
 import { TerminalEventLoop } from "../terminal/event-loop.js";
-import { TerminalRenderer } from "../terminal/renderer.js";
+import { LinearTerminalRenderer } from "../terminal/linear-renderer.js";
 import { TerminalPanelController } from "../terminal/panel-controller.js";
 import { LogStore } from "../storage/logs.js";
 import { SettingsStore } from "../storage/settings.js";
@@ -65,7 +65,7 @@ export async function bootstrapApp() {
     transcriptStore,
     logStore
   });
-  const renderer = new TerminalRenderer({
+  const renderer = new LinearTerminalRenderer({
     panel,
     bus,
     session

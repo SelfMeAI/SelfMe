@@ -4,7 +4,7 @@ import {
   type CommandPaletteItem
 } from "../runtime/commands.js";
 import { createTerminalCommandInvokedEvent } from "../runtime/events.js";
-import type { TerminalMessageBlock } from "./layout.js";
+import type { TerminalMessageBlock } from "./message-types.js";
 
 export interface TerminalPanelOption {
   key: string;
