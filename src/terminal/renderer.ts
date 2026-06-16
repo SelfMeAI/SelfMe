@@ -734,7 +734,7 @@ function renderWelcomeLogo() {
 }
 
 function createToolRunningMessage(toolName: string, input?: unknown) {
-  const target = renderToolTarget(toolName, input);
+  const target = renderToolTargetLine(toolName, input);
 
   return target
     ? `${toolName} · running\n${target}`
@@ -742,8 +742,14 @@ function createToolRunningMessage(toolName: string, input?: unknown) {
 }
 
 function appendToolOutput(current: string, toolName: string, chunk: string) {
+  const sanitizedChunk = sanitizeToolChunk(chunk);
+
+  if (!sanitizedChunk) {
+    return current || createToolRunningMessage(toolName);
+  }
+
   const normalizedCurrent = current || createToolRunningMessage(toolName);
-  const content = `${normalizedCurrent}\n${sanitizeToolChunk(chunk)}`.trimEnd();
+  const content = `${normalizedCurrent}\n${sanitizedChunk}`.trimEnd();
   return clipToolTranscript(content);
 }
 
@@ -753,7 +759,7 @@ function finalizeToolMessage(current: string, toolName: string, summary: string,
   const lines = current
     ? current.split("\n").filter(Boolean)
     : [];
-  const header = `${toolName} · ${summary}`;
+  const header = createToolCompletedHeadline(toolName, summary);
 
   if (lines.length === 0) {
     return meaningfulOutput
@@ -778,26 +784,36 @@ function finalizeToolMessage(current: string, toolName: string, summary: string,
   return clipToolTranscript(next);
 }
 
-function renderToolTarget(toolName: string, input?: unknown) {
+function renderToolTargetLine(toolName: string, input?: unknown) {
   if (toolName === "shell" && input && typeof input === "object" && "command" in input && typeof input.command === "string") {
-    return createToolPreview(input.command, 140);
+    return `command · ${createToolPreview(input.command, 140)}`;
   }
 
   if (toolName === "files" && input && typeof input === "object" && "path" in input && typeof input.path === "string") {
     const range = "startLine" in input && typeof input.startLine === "number"
       ? `:${input.startLine}${"endLine" in input && typeof input.endLine === "number" ? `-${input.endLine}` : ""}`
       : "";
-    return `${input.path}${range}`;
+    return `path · ${input.path}${range}`;
   }
 
   if ((toolName === "write" || toolName === "edit") && input && typeof input === "object" && "path" in input && typeof input.path === "string") {
     const range = "startLine" in input && typeof input.startLine === "number"
       ? `:${input.startLine}${"endLine" in input && typeof input.endLine === "number" ? `-${input.endLine}` : ""}`
       : "";
-    return `${input.path}${range}`;
+    return `path · ${input.path}${range}`;
   }
 
   return "";
+}
+
+function createToolCompletedHeadline(toolName: string, summary: string) {
+  const normalized = summary.trim();
+
+  if (normalized.length > 0) {
+    return normalized;
+  }
+
+  return `${toolName} · completed`;
 }
 
 function createApprovalResolvedMessage(_approvalId: string, approved: boolean) {
@@ -825,20 +841,25 @@ function sanitizeToolChunk(chunk: string) {
 function clipToolTranscript(text: string, maxLines = 12, maxChars = 2400) {
   const lines = text.split("\n");
   const [header = "", ...bodyLines] = lines;
-  const compactBody = bodyLines.join("\n");
-  const clippedBody = compactBody.length <= Math.max(0, maxChars - header.length - 1)
-    ? compactBody
-    : `${compactBody.slice(Math.max(0, compactBody.length - Math.max(0, maxChars - header.length - 17)))}\n...truncated...`;
-  const normalized = [header, clippedBody].filter(Boolean).join("\n");
-  const normalizedLines = normalized.split("\n");
+  const bodyBudget = Math.max(0, maxChars - header.length - 1);
+  const clippedBodyByChars = clipToolBodyByChars(bodyLines.join("\n"), bodyBudget);
+  const normalizedLines = [header, ...clippedBodyByChars.split("\n").filter(Boolean)].filter(Boolean);
 
   if (normalizedLines.length <= maxLines) {
-    return normalized;
+    return normalizedLines.join("\n");
   }
 
   const visibleBodyLines = normalizedLines.slice(1);
+  const maxBodyLines = Math.max(1, maxLines - 1);
+  const keepHeadLines = Math.min(4, Math.max(1, Math.floor((maxBodyLines - 1) / 2)));
+  const keepTailLines = Math.max(0, maxBodyLines - keepHeadLines - 1);
 
-  return [header, "...truncated...", ...visibleBodyLines.slice(-(maxLines - 2))].join("\n");
+  return [
+    header,
+    ...visibleBodyLines.slice(0, keepHeadLines),
+    "...truncated...",
+    ...(keepTailLines > 0 ? visibleBodyLines.slice(-keepTailLines) : [])
+  ].filter(Boolean).join("\n");
 }
 
 function hasMeaningfulToolOutput(text: string) {
@@ -856,6 +877,26 @@ function createToolPreview(content: string, maxLength: number) {
   }
 
   return `${normalized.slice(0, maxLength - 3).trimEnd()}...`;
+}
+
+function clipToolBodyByChars(body: string, maxChars: number) {
+  if (!body || body.length <= maxChars) {
+    return body;
+  }
+
+  const marker = "\n...truncated...\n";
+  const budgetWithoutMarker = Math.max(0, maxChars - marker.length);
+
+  if (budgetWithoutMarker <= 0) {
+    return "...truncated...";
+  }
+
+  const headBudget = Math.max(1, Math.floor(budgetWithoutMarker * 0.58));
+  const tailBudget = Math.max(1, budgetWithoutMarker - headBudget);
+  const head = body.slice(0, headBudget).trimEnd();
+  const tail = body.slice(-tailBudget).trimStart();
+
+  return `${head}${marker}${tail}`;
 }
 
 function deriveTaskHeadline(body: string) {

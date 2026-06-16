@@ -7,8 +7,14 @@ export interface SessionTimelineEntry {
   searchText: string;
 }
 
-const RECENT_CONTEXT_WINDOW = 8;
+const RECENT_CONVERSATION_WINDOW = 6;
 const SUMMARY_ENTRY_WINDOW = 6;
+const RECENT_TOOL_NOTE_WINDOW = 4;
+const MAX_CONTEXT_MESSAGE_CHARS = 1200;
+const MAX_SUMMARY_CHARS = 1400;
+const MAX_TOOL_NOTE_CHARS = 220;
+const MAX_RECENT_USER_CHARS = 1400;
+const MAX_RECENT_ASSISTANT_CHARS = 1200;
 
 export function projectSessionTimeline(events: Awaited<ReturnType<TranscriptStore["readEventsBySession"]>>) {
   const entries: SessionTimelineEntry[] = [];
@@ -47,11 +53,7 @@ export function projectSessionTimeline(events: Awaited<ReturnType<TranscriptStor
     }
 
     if (item.type === "tool.execution.completed") {
-      const summary = normalizePreviewText(
-        [item.payload.summary, item.payload.rawOutput ?? ""]
-          .filter(Boolean)
-          .join(" ")
-      );
+      const summary = normalizePreviewText(item.payload.summary || `${item.payload.toolName} completed`);
 
       entries.push({
         kind: "tool",
@@ -114,25 +116,27 @@ export function buildContextMessages(events: Awaited<ReturnType<TranscriptStore[
     return [];
   }
 
-  const recentEntries = timeline.slice(-RECENT_CONTEXT_WINDOW);
-  const earlierEntries = timeline.slice(0, -RECENT_CONTEXT_WINDOW);
+  const recentBoundaryIndex = findRecentBoundaryIndex(timeline);
+  const recentEntries = timeline.slice(recentBoundaryIndex);
+  const earlierEntries = timeline.slice(0, recentBoundaryIndex);
   const messages: ProviderContextMessage[] = [];
-  const summary = summarizeTimelineEntries(earlierEntries);
+  const summary = clipForContext(summarizeTimelineEntries(earlierEntries), MAX_SUMMARY_CHARS);
   const recentNotes = recentEntries
     .filter((entry) => entry.kind === "tool" || entry.kind === "error")
-    .map((entry) => `- ${entry.kind}: ${createInlinePreview(entry.text, 140)}`);
+    .slice(-RECENT_TOOL_NOTE_WINDOW)
+    .map((entry) => `- ${entry.kind}: ${createInlinePreview(entry.text, MAX_TOOL_NOTE_CHARS)}`);
 
   if (summary) {
     messages.push({
       role: "system",
-      content: `Earlier session summary:\n${summary}`
+      content: clipForContext(`Earlier session summary:\n${summary}`, MAX_CONTEXT_MESSAGE_CHARS)
     });
   }
 
   if (recentNotes.length > 0) {
     messages.push({
       role: "system",
-      content: `Recent session notes:\n${recentNotes.join("\n")}`
+      content: clipForContext(`Recent session notes:\n${recentNotes.join("\n")}`, MAX_CONTEXT_MESSAGE_CHARS)
     });
   }
 
@@ -140,7 +144,7 @@ export function buildContextMessages(events: Awaited<ReturnType<TranscriptStore[
     if (entry.kind === "user") {
       messages.push({
         role: "user",
-        content: entry.text
+        content: clipForContext(entry.text, MAX_RECENT_USER_CHARS)
       });
       continue;
     }
@@ -148,7 +152,7 @@ export function buildContextMessages(events: Awaited<ReturnType<TranscriptStore[
     if (entry.kind === "assistant") {
       messages.push({
         role: "assistant",
-        content: entry.text
+        content: clipForContext(entry.text, MAX_RECENT_ASSISTANT_CHARS)
       });
     }
   }
@@ -184,5 +188,27 @@ export function summarizeTimelineEntries(entries: SessionTimelineEntry[]) {
     })
   ].filter(Boolean);
 
-  return lines.join("\n");
+  return clipForContext(lines.join("\n"), MAX_SUMMARY_CHARS);
+}
+
+function findRecentBoundaryIndex(entries: SessionTimelineEntry[]) {
+  const conversationIndexes = entries.flatMap((entry, index) =>
+    entry.kind === "user" || entry.kind === "assistant"
+      ? [index]
+      : []
+  );
+
+  if (conversationIndexes.length <= RECENT_CONVERSATION_WINDOW) {
+    return 0;
+  }
+
+  return conversationIndexes.at(-RECENT_CONVERSATION_WINDOW) ?? 0;
+}
+
+function clipForContext(content: string, maxChars: number) {
+  if (content.length <= maxChars) {
+    return content;
+  }
+
+  return `${content.slice(0, maxChars - 3).trimEnd()}...`;
 }

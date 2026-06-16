@@ -11,6 +11,7 @@
     "dev": "tsx src/index.ts",
     "build": "tsc -p tsconfig.json",
     "start": "node dist/index.js",
+    "smoke:agent": "./node_modules/.bin/tsc -p tsconfig.json && node ./dist/smoke/agent-regression.js",
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },
   "devDependencies": {
