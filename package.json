@@ -3,8 +3,26 @@
   "version": "2026.7.2",
   "type": "module",
   "description": "Local-first agent CLI for real terminal work.",
+  "author": "q1d40",
+  "license": "MIT",
+  "homepage": "https://selfme.ai",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/SelfMeAI/SelfMe.git"
+  },
+  "bugs": {
+    "url": "https://github.com/SelfMeAI/SelfMe/issues"
+  },
+  "keywords": [
+    "agent",
+    "ai",
+    "cli",
+    "terminal",
+    "coding-agent",
+    "local-first"
+  ],
   "bin": {
-    "selfme": "./dist/index.js"
+    "selfme": "dist/index.js"
   },
   "files": [
     "dist/app",
@@ -30,7 +48,7 @@
     "build": "tsc -p tsconfig.json",
     "prepack": "pnpm build",
     "start": "node dist/index.js",
-    "smoke:agent": "./node_modules/.bin/tsc -p tsconfig.json && node ./dist/smoke/agent-regression.js",
+    "smoke:agent": "tsc -p tsconfig.json && node dist/smoke/agent-regression.js",
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },
   "devDependencies": {
