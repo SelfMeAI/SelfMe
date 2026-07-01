@@ -251,6 +251,21 @@
       </section>
 
       <section class="section">
+        <div class="tag next">Checkpoint</div>
+        <h2>当前恢复锚点</h2>
+        <ul>
+          <li>截至 2026-07-02，npm 包名已经定为 <code>selfme</code>，安装命令是 <code>npm i -g selfme</code>，可执行命令是 <code>selfme</code>。</li>
+          <li>当前仓库的终端交互、审批、工具消息和基础恢复链已经够用，后续主线不再回到“先补产品壳层”或“先扩表面功能”。</li>
+          <li>下次继续时，优先看 runtime 是否还会在 stage summary、progress-only reply、长链多步骤任务里提早停住。</li>
+          <li>如果需要快速判断当前是不是跑偏，直接看 <code>pnpm smoke:agent</code> 的失败点是否仍然围绕 continuation、resume、multi-step execution。</li>
+        </ul>
+        <div class="rule">
+          <strong>下次继续的默认顺序：</strong>
+          先读这个 checkpoint，再跑 smoke / 复现当前失败点，然后只修 runtime 收敛和执行稳定性，不扩新表面。
+        </div>
+      </section>
+
+      <section class="section">
         <div class="tag now">Principles</div>
         <h2>当前阶段的开发原则</h2>
         <ul>

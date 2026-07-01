@@ -128,14 +128,14 @@ pnpm start
 Install globally from npm after publish:
 
 ```bash
-npm i -g @selfme/cli
+npm i -g selfme
 selfme
 ```
 
 Run without a global install:
 
 ```bash
-npx @selfme/cli
+npx selfme
 ```
 
 ## Configuration
@@ -248,7 +248,7 @@ npm publish
 After publish, users can install it with:
 
 ```bash
-npm i -g @selfme/cli
+npm i -g selfme
 ```
 
 Notes:
@@ -274,22 +274,30 @@ src/
 ## Project Documents
 
 - `docs/agent-cli-roadmap.html`
-  Product boundary, current baseline, and roadmap
+  Product boundary, current baseline, current checkpoint, and roadmap
 - `docs/agent-eval-strategy.html`
   Evaluation method, regression strategy, and failure taxonomy
 - `docs/brand-color-system.html`
   Brand and color rules
 
-## Current Status
+## Current Checkpoint
 
-SelfMe is still under active iteration. The important questions right now are not about feature count.
+As of `2026-07-02`, the npm package name has been finalized as `selfme`, and the install path is:
 
-They are about runtime quality:
+```bash
+npm i -g selfme
+```
 
-- can it keep working after interruption?
-- can it continue after approval waits?
-- can it recover from verify and exact-output near-misses?
-- can it stay anchored to the real working file?
-- can it finish multi-step project tasks without stopping early?
+The current development checkpoint is:
 
-Until those answers are consistently yes, adding more surface area is noise.
+- npm CLI packaging is in place and published under `selfme`
+- terminal UX baseline is established enough to keep runtime work moving
+- the active work is still runtime hardening, not feature expansion
+
+The next runtime questions remain:
+
+- can it continue after stage summaries and progress-only replies?
+- can it finish long multi-step project tasks without stopping early?
+- can it drive `pnpm smoke:agent` to a stable green baseline?
+
+If you are resuming work later, start from `docs/agent-cli-roadmap.html` first. That file is the canonical checkpoint for current product scope and next priorities.
