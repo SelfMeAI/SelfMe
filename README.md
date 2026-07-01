@@ -4,6 +4,26 @@ Local-first agent CLI for real terminal work.
 
 SelfMe is a TypeScript + Node.js agent runtime focused on one surface only: the command line. It is being built to stay on task, survive interruptions, respect approvals, use real tools, and keep improving through regression pressure instead of demo-only patches.
 
+## Current Status
+
+SelfMe is still under active runtime development.
+
+What is already real:
+
+- terminal-first CLI workflow
+- file, write, edit, and shell tools
+- approval-gated risky actions
+- resumable task loop
+- regression-driven runtime iteration
+
+What is still being hardened:
+
+- continuation behavior after stage summaries and progress-only replies
+- long multi-step project execution stability
+- full green status for `pnpm smoke:agent`
+
+If you are reading this from GitHub, treat the repository as a serious WIP baseline rather than a finished agent product.
+
 ## At A Glance
 
 - Local CLI only

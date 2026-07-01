@@ -28,7 +28,7 @@ import { TerminalPanelController } from "../terminal/panel-controller.js";
 import { InMemoryToolRegistry } from "../tools/registry.js";
 import type { RuntimeEvent, TaskStateChangedEvent } from "../types/events.js";
 
-const VERSION = "2026.7.1";
+const VERSION = "2026.7.2";
 
 class RegressionProvider implements ProviderClient {
   readonly name = "regression-provider";
