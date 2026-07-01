@@ -125,7 +125,7 @@ Run the built CLI:
 pnpm start
 ```
 
-Install globally from npm after publish:
+Install globally from npm:
 
 ```bash
 npm i -g selfme
@@ -228,33 +228,6 @@ The working rule for this repository is strict:
 4. keep the fix at the state, loop, or decision level when possible
 
 The goal is not to patch isolated demos. The goal is to harden the runtime.
-
-## Publishing
-
-SelfMe is set up as a standard npm CLI package:
-
-- the executable command is `selfme`
-- npm installs the compiled `dist/` output, not `src/`
-- `prepack` rebuilds the package before `npm publish`
-
-Useful commands:
-
-```bash
-pnpm build
-npm pack --dry-run
-npm publish
-```
-
-After publish, users can install it with:
-
-```bash
-npm i -g selfme
-```
-
-Notes:
-
-- runtime dependencies are still installed by npm as normal package dependencies
-- if you eventually want a true single-file native executable, that is a separate distribution path from normal npm CLI publishing
 
 ## Repository Layout
 
