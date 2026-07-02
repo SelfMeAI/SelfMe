@@ -3417,6 +3417,7 @@ async function main() {
   await verifyProjectWordedRewriteAfterApprovalWaitInProjectChain();
   await verifyAlternateProjectWordedRewriteAfterApprovalWaitInProjectChain();
   await verifyProgressOnlyReplyAfterApprovalWaitInRewriteProjectChain();
+  await verifyCompletionToneReplyAfterApprovalWaitInRewriteProjectChain();
   await verifyNaturalLanguageApprovalShortcuts();
   await verifyPendingNextStepContextGuidesMultiTargetContinuation();
   await verifyAssistantStageSummaryPromotesExplicitNextTarget();
@@ -18089,7 +18090,13 @@ async function verifyAlternateProjectWordedRewriteAfterApprovalWaitInProjectChai
 
 async function verifyProgressOnlyReplyAfterApprovalWaitInRewriteProjectChain() {
   await verifyApprovalWaitResumeInRewriteProjectChain("还能继续吗", {
-    resumeWithProgressOnlyTurn: true
+    resumeIntermediateReply: "progress"
+  });
+}
+
+async function verifyCompletionToneReplyAfterApprovalWaitInRewriteProjectChain() {
+  await verifyApprovalWaitResumeInRewriteProjectChain("还能继续吗", {
+    resumeIntermediateReply: "completion"
   });
 }
 
@@ -18418,7 +18425,7 @@ async function verifyApprovalWaitResumeInProjectChain(
 async function verifyApprovalWaitResumeInRewriteProjectChain(
   followUpPrompt: "还能继续吗" | "可以" | "帮我重写项目" | "重写这个项目",
   options: {
-    resumeWithProgressOnlyTurn?: boolean;
+    resumeIntermediateReply?: "progress" | "completion";
   } = {}
 ) {
   const root = await mkdtemp(join(tmpdir(), "selfme-agent-resume-project-rewrite-approval-"));
@@ -18467,7 +18474,7 @@ async function verifyApprovalWaitResumeInRewriteProjectChain(
 
   class ResumeProjectRewriteApprovalProvider implements ProviderClient {
     readonly name = "resume-project-rewrite-approval-provider";
-    private emittedResumeProgressOnlyTurn = false;
+    private emittedResumeIntermediateReply = false;
 
     async *streamResponse(input: ProviderStreamInput): AsyncIterable<ProviderStreamChunk> {
       const originalPrompt = "看看项目，然后直接重写 node-todo：把 node-todo/app.js 的端口改成 process.env.PORT，再给 node-todo/views/index.ejs 的 title input 加上 maxlength 100，并运行 `node node-todo/verify-setup.mjs` 验证，直到输出 exactly `ready`。";
@@ -18546,7 +18553,7 @@ async function verifyApprovalWaitResumeInRewriteProjectChain(
         }
 
         if (toolName === "files" && /node-todo\/views\/index\.ejs/.test(summary)) {
-          if (options.resumeWithProgressOnlyTurn && this.emittedResumeProgressOnlyTurn) {
+          if (options.resumeIntermediateReply && this.emittedResumeIntermediateReply) {
             const recentTaskState = input.contextMessages?.find((message) =>
               message.role === "system" && message.content.includes("Recent task state:")
             )?.content ?? "";
@@ -18582,10 +18589,12 @@ async function verifyApprovalWaitResumeInRewriteProjectChain(
         assert.match(input.content, /Latest tool in context: files/);
         assert.match(input.content, /Latest tool summary in context: node-todo\/views\/index\.ejs:1-4/);
         assert.match(input.content, /Interrupted pending approval: edit · node-todo\/views\/index\.ejs:3-3/);
-        if (options.resumeWithProgressOnlyTurn && !this.emittedResumeProgressOnlyTurn) {
-          this.emittedResumeProgressOnlyTurn = true;
+        if (options.resumeIntermediateReply && !this.emittedResumeIntermediateReply) {
+          this.emittedResumeIntermediateReply = true;
           yield {
-            delta: "I still need to apply the pending node-todo/views/index.ejs edit and rerun node node-todo/verify-setup.mjs."
+            delta: options.resumeIntermediateReply === "completion"
+              ? "The node-todo rewrite is essentially finished overall."
+              : "I still need to apply the pending node-todo/views/index.ejs edit and rerun node node-todo/verify-setup.mjs."
           };
           return;
         }
@@ -18721,14 +18730,20 @@ async function verifyApprovalWaitResumeInRewriteProjectChain(
     prompt: followUpPrompt
   });
 
-  if (options.resumeWithProgressOnlyTurn) {
+  if (options.resumeIntermediateReply) {
     const resumedEvents = await transcriptStore.readEventsBySession(session.sessionId);
     assert.ok(
       resumedEvents.some((event) =>
         event.type === "assistant.delta.received"
-        && /I still need to apply the pending node-todo\/views\/index\.ejs edit/.test(event.payload.delta)
+        && (
+          options.resumeIntermediateReply === "completion"
+            ? /The node-todo rewrite is essentially finished overall\./.test(event.payload.delta)
+            : /I still need to apply the pending node-todo\/views\/index\.ejs edit/.test(event.payload.delta)
+        )
       ),
-      "resume after rewrite approval wait should preserve the intermediate progress-only reply before retrying the pending edit"
+      options.resumeIntermediateReply === "completion"
+        ? "resume after rewrite approval wait should preserve the intermediate completion-tone reply before retrying the pending edit"
+        : "resume after rewrite approval wait should preserve the intermediate progress-only reply before retrying the pending edit"
     );
   }
 
