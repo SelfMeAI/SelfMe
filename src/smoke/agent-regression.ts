@@ -1726,6 +1726,40 @@ async function main() {
     'const express = require("express");\nconst app = express();\nconst PORT = 3000;\napp.listen(PORT, () => {\n  console.log(`Todo app is running at http://localhost:${PORT}`);\n});\n',
     "utf8"
   );
+
+  console.log("task: continue broad project improvement after a long explanation at the first work file");
+  const broadProjectWorkfileExplanationResult = await runAgentTask({
+    bus,
+    transcriptStore,
+    sessionId: session.sessionId,
+    prompt: "看看项目然后帮我优化下。如果你读到 app.js 后先长解释，也要继续实际优化。"
+  });
+
+  const broadWorkfileExplanationTodoAppContent = await readFile(join(workspace, "node-todo", "app.js"), "utf8");
+  assert.match(broadWorkfileExplanationTodoAppContent, /process\.env\.PORT/);
+  assert.match(broadProjectWorkfileExplanationResult.assistantText, /process\.env\.PORT/);
+  assert.ok(
+    broadProjectWorkfileExplanationResult.toolSummaries.some((summary) => summary.startsWith("pwd && ls -la && find . -maxdepth 2 -type f")),
+    "expected long-explanation broad improvement workfile flow to start from a workspace listing"
+  );
+  assert.ok(
+    broadProjectWorkfileExplanationResult.toolSummaries.some((summary) => /^node-todo\/package\.json:1-\d+$/.test(summary)),
+    "expected long-explanation broad improvement workfile flow to inspect package.json first"
+  );
+  assert.ok(
+    broadProjectWorkfileExplanationResult.toolSummaries.some((summary) => /^node-todo\/app\.js:1-\d+/.test(summary)),
+    "expected long-explanation broad improvement workfile flow to continue into app.js"
+  );
+  assert.ok(
+    broadProjectWorkfileExplanationResult.toolSummaries.some((summary) => summary.startsWith("node-todo/app.js:3-3 · updated")),
+    "expected long-explanation broad improvement workfile flow to continue into the concrete edit"
+  );
+
+  await writeFile(
+    join(workspace, "node-todo", "app.js"),
+    'const express = require("express");\nconst app = express();\nconst PORT = 3000;\napp.listen(PORT, () => {\n  console.log(`Todo app is running at http://localhost:${PORT}`);\n});\n',
+    "utf8"
+  );
   await writeFile(
     join(workspace, "node-todo", "views", "index.ejs"),
     '<!DOCTYPE html>\n<form action="/add" method="post">\n  <input name="title" />\n</form>\n',
@@ -22266,6 +22300,12 @@ function resolveProviderResponse(content: string) {
     });
   }
 
+  if (content === "看看项目然后帮我优化下。如果你读到 app.js 后先长解释，也要继续实际优化。") {
+    return toolCall("shell", {
+      command: "pwd && ls -la && find . -maxdepth 2 -type f | sed 's#^./##' | sort | head -200"
+    });
+  }
+
   if (content === "看看项目，但先别改，告诉我如果重写 node-todo 你会怎么做。") {
     return toolCall("shell", {
       command: "pwd && ls -la && find . -maxdepth 2 -type f | sed 's#^./##' | sort | head -200"
@@ -24388,6 +24428,54 @@ function resolveProviderResponse(content: string) {
         endLine: 3,
         replacement: "const PORT = Number(process.env.PORT || 3000);"
       });
+    }
+
+    if (toolName === "edit" && /node-todo\/app\.js/.test(summary)) {
+      return "我已经优化了 node-todo/app.js，现在端口配置改成了 process.env.PORT。";
+    }
+  }
+
+  if (/^Original user request: 看看项目然后帮我优化下。如果你读到 app\.js 后先长解释，也要继续实际优化。(?:\n|$)/.test(content)) {
+    const toolName = extractLine(content, "Tool:") ?? extractLine(content, "Latest tool:");
+    const summary = extractLine(content, "Summary:") ?? extractLine(content, "Latest summary:") ?? "";
+
+    if (toolName === "shell") {
+      if (/You are in the middle of a concrete project inspection request\./.test(content)) {
+        assert.match(content, /Likely project entry: node-todo\/package\.json/);
+        return toolCall("files", {
+          path: "node-todo/package.json",
+          startLine: 1,
+          endLine: 20
+        });
+      }
+
+      return "我先看了工作区列表。当前最像要继续看的项目是 node-todo。";
+    }
+
+    if (toolName === "files" && /node-todo\/package\.json/.test(summary)) {
+      if (/You are in the middle of a project improvement task\./.test(content)) {
+        assert.match(content, /Likely working file: node-todo\/app\.js/);
+        return toolCall("files", {
+          path: "node-todo/app.js",
+          startLine: 1,
+          endLine: 20
+        });
+      }
+
+      return "node-todo 看起来是个小型 Express 项目。下一步我会继续看 app.js。";
+    }
+
+    if (toolName === "files" && /node-todo\/app\.js/.test(summary)) {
+      if (/You are already inside the execution phase of a concrete task\./.test(content)) {
+        return toolCall("edit", {
+          path: "node-todo/app.js",
+          startLine: 3,
+          endLine: 3,
+          replacement: "const PORT = Number(process.env.PORT || 3000);"
+        });
+      }
+
+      return "node-todo/app.js 当前把端口写死在 3000，这说明服务入口的配置还停留在非常基础的单环境写法，而且这一层直接决定部署时是不是能通过环境变量接住平台分配的端口；如果目标是把这个小项目往更可靠的方向推进，那么这里确实是第一处该落手的位置，但仅仅说明这一点还不够，因为真正完成优化还需要把这行常量改成读取 process.env.PORT 的形式。";
     }
 
     if (toolName === "edit" && /node-todo\/app\.js/.test(summary)) {
