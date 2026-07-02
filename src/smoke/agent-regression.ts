@@ -3338,14 +3338,14 @@ async function main() {
   const existenceEvents = (await transcriptStore.readEventsBySession(session.sessionId)).slice(beforeExistenceEvents.length);
   assert.match(fabricatedExistenceRecoveryResult.assistantText, /不存在|does not exist/i);
   assert.ok(
+    fabricatedExistenceRecoveryResult.toolSummaries.some((summary) => summary.startsWith("missing.txt · failed")),
+    "expected file existence question to recover by actually checking missing.txt"
+  );
+  assert.ok(
     existenceEvents.some((event) =>
       event.type === "tool.execution.requested" && event.payload.toolName === "files"
     ),
     "expected file existence question to recover by actually calling the files tool"
-  );
-  assert.ok(
-    existenceEvents.some((event) => event.type === "runtime.error.raised"),
-    "expected file existence question to recover by actually checking missing.txt"
   );
 
   console.log("task: accept loose files tool payload");
@@ -3419,6 +3419,10 @@ async function main() {
 
   assert.match(missingFileResult.assistantText, /missing\.txt/i);
   assert.match(missingFileResult.assistantText, /(does not exist|not exist|missing)/i);
+  assert.ok(
+    missingFileResult.toolSummaries.some((summary) => summary.startsWith("missing.txt · failed")),
+    "expected missing-file check to keep a failed files summary in the task history"
+  );
 
   console.log("task: handle direct shell failure");
   const directShellFailureResult = await runAgentTask({

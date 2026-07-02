@@ -223,8 +223,10 @@ export class AgentRuntime {
       this.input.bus.emit(started);
       await this.input.transcriptStore.appendEvent(started);
 
+      let validatedInput: unknown;
+
       try {
-        const validatedInput = parseToolInput(tool, event.payload.input);
+        validatedInput = parseToolInput(tool, event.payload.input);
         const result = await tool.invoke(validatedInput, {
           cwd: this.input.session.cwd ?? process.cwd(),
           sessionId: event.sessionId,
@@ -316,13 +318,44 @@ export class AgentRuntime {
           return;
         }
 
-        const runtimeError = createRuntimeErrorRaisedEvent({
-          sessionId: event.sessionId,
-          taskId: event.taskId,
-          message: error instanceof Error ? error.message : "Tool execution failed"
-        });
-        this.input.bus.emit(runtimeError);
-        await this.input.transcriptStore.appendEvent(runtimeError);
+        const errorMessage = error instanceof Error ? error.message : "Tool execution failed";
+
+        if (validatedInput !== undefined) {
+          const summary = buildThrownToolFailureSummary(event.payload.toolName, validatedInput);
+
+          await this.input.logStore.append({
+            sessionId: event.sessionId,
+            taskId: event.taskId,
+            toolName: event.payload.toolName,
+            kind: "summary",
+            content: summary
+          });
+          await this.input.logStore.append({
+            sessionId: event.sessionId,
+            taskId: event.taskId,
+            toolName: event.payload.toolName,
+            kind: "stderr",
+            content: errorMessage
+          });
+
+          const completed = createToolExecutionCompletedEvent({
+            sessionId: event.sessionId,
+            taskId: event.taskId,
+            toolName: event.payload.toolName,
+            summary,
+            rawOutput: errorMessage
+          });
+          this.input.bus.emit(completed);
+          await this.input.transcriptStore.appendEvent(completed);
+        } else {
+          const runtimeError = createRuntimeErrorRaisedEvent({
+            sessionId: event.sessionId,
+            taskId: event.taskId,
+            message: errorMessage
+          });
+          this.input.bus.emit(runtimeError);
+          await this.input.transcriptStore.appendEvent(runtimeError);
+        }
 
         if (event.taskId) {
           const taskFailed = createTaskStateChangedEvent({
@@ -1426,7 +1459,7 @@ export class AgentRuntime {
           toolName: event.payload.toolName,
           summary,
           rawOutput: event.payload.rawOutput,
-          errorMessage: ok ? undefined : summary
+          errorMessage: ok ? undefined : event.payload.rawOutput ?? summary
         });
       });
 
@@ -1583,6 +1616,72 @@ function buildDefaultApprovalDescriptor(tool: ToolImplementation, input: unknown
     reason: target ? `Run ${tool.name}: ${target}` : `Run ${tool.name}`,
     risk: tool.approvalPolicy === "always" ? "high" : "medium"
   } as const;
+}
+
+function buildThrownToolFailureSummary(toolName: string, input: unknown) {
+  const path = extractPathFromToolInput(input);
+
+  if (path) {
+    if (toolName === "edit") {
+      const range = extractRangeFromToolInput(input);
+      return `${path}${range ? `:${range}` : ""} · failed`;
+    }
+
+    return `${path} · failed`;
+  }
+
+  const command = extractShellCommandFromToolInput(input);
+
+  if (command) {
+    return `${command} · failed`;
+  }
+
+  return `${toolName} · failed`;
+}
+
+function extractPathFromToolInput(input: unknown) {
+  if (!input || typeof input !== "object") {
+    return undefined;
+  }
+
+  return typeof (input as { path?: unknown }).path === "string"
+    ? normalizePromptPath((input as { path: string }).path)
+    : undefined;
+}
+
+function extractRangeFromToolInput(input: unknown) {
+  if (!input || typeof input !== "object") {
+    return undefined;
+  }
+
+  const startLine = typeof (input as { startLine?: unknown }).startLine === "number"
+    ? (input as { startLine: number }).startLine
+    : undefined;
+  const endLine = typeof (input as { endLine?: unknown }).endLine === "number"
+    ? (input as { endLine: number }).endLine
+    : startLine;
+
+  if (startLine === undefined || endLine === undefined) {
+    return undefined;
+  }
+
+  return `${startLine}-${Math.max(startLine, endLine)}`;
+}
+
+function extractShellCommandFromToolInput(input: unknown) {
+  if (!input || typeof input !== "object") {
+    return undefined;
+  }
+
+  if (typeof (input as { command?: unknown }).command === "string") {
+    return (input as { command: string }).command.trim();
+  }
+
+  if (typeof (input as { cmd?: unknown }).cmd === "string") {
+    return (input as { cmd: string }).cmd.trim();
+  }
+
+  return undefined;
 }
 
 function shouldRequestApproval(tool: ToolImplementation, input: unknown) {
