@@ -266,6 +266,7 @@ The current development checkpoint is:
 - npm CLI packaging is in place and published under `selfme`
 - terminal UX baseline is established enough to keep runtime work moving
 - `pnpm smoke:agent` is green on the current continuation / resume / multi-step baseline
+- ordinary tool execution failures now stay on the unified failed-tool event path, so missing-file / edit-range failures keep usable task history instead of falling into ad hoc runtime-error-only branches
 - the active work is still runtime hardening, not feature expansion
 
 The next runtime questions remain:
