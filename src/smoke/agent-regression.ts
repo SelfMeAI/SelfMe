@@ -3384,6 +3384,7 @@ async function main() {
   await verifyResumeFollowUpInImplicitProjectStageSummaryChain();
   await verifyCompletionToneReplyInImplicitProjectStageSummaryChain();
   await verifyResumeFollowUpInImplicitGenericVerificationStageSummaryChain();
+  await verifyCompletionToneReplyInImplicitGenericVerificationStageSummaryChain();
   await verifyResumeFollowUpInImplicitGenericVerificationCompletionToneChain();
   await verifyBareAffirmativeInImplicitGenericVerificationCompletionToneRewriteChain();
   await verifyProjectWordedRewriteInImplicitGenericVerificationCompletionToneChain();
@@ -14739,6 +14740,12 @@ async function verifyResumeFollowUpInImplicitGenericVerificationStageSummaryChai
   await verifyImplicitGenericVerificationStageSummaryResume("还能继续吗");
 }
 
+async function verifyCompletionToneReplyInImplicitGenericVerificationStageSummaryChain() {
+  await verifyImplicitGenericVerificationStageSummaryResume("还能继续吗", {
+    resumeIntermediateReply: "completion"
+  });
+}
+
 async function verifyResumeFollowUpInImplicitGenericVerificationCompletionToneChain() {
   const root = await mkdtemp(join(tmpdir(), "selfme-agent-resume-implicit-generic-completion-tone-"));
   const workspace = join(root, "workspace");
@@ -16706,7 +16713,10 @@ async function verifyImplicitMultiTargetProposalResume(
 }
 
 async function verifyImplicitGenericVerificationStageSummaryResume(
-  followUpPrompt: "还能继续吗" | "可以" | "帮我优化下" | "帮我优化项目" | "帮我看看" | "帮我看看项目"
+  followUpPrompt: "还能继续吗" | "可以" | "帮我优化下" | "帮我优化项目" | "帮我看看" | "帮我看看项目",
+  options: {
+    resumeIntermediateReply?: "completion";
+  } = {}
 ) {
   const root = await mkdtemp(join(tmpdir(), "selfme-agent-resume-implicit-generic-stage-"));
   const workspace = join(root, "workspace");
@@ -16754,6 +16764,7 @@ async function verifyImplicitGenericVerificationStageSummaryResume(
 
   class ResumeImplicitGenericProjectStageProvider implements ProviderClient {
     readonly name = "resume-implicit-generic-project-stage-provider";
+    private emittedResumeIntermediateReply = false;
 
     async *streamResponse(input: ProviderStreamInput): AsyncIterable<ProviderStreamChunk> {
       const originalPrompt = "看看项目，然后直接把 node-todo 优化到正确。你自己判断需要改什么，并运行 `node node-todo/verify-generic-resume.mjs` 验证，直到它正确为止。";
@@ -16878,6 +16889,13 @@ async function verifyImplicitGenericVerificationStageSummaryResume(
         assert.match(input.content, /Pending next step target: node-todo\/views\/index\.ejs/);
         assert.match(input.content, /Latest tool in context: shell/);
         assert.match(input.content, /Latest tool summary in context: node node-todo\/verify-generic-resume\.mjs · completed/);
+        if (options.resumeIntermediateReply && !this.emittedResumeIntermediateReply) {
+          this.emittedResumeIntermediateReply = true;
+          yield {
+            delta: "The implicit generic project stage-summary chain is basically finished overall."
+          };
+          return;
+        }
         yield {
           delta: toolCall("files", {
             path: "node-todo/views/index.ejs",
@@ -16891,6 +16909,21 @@ async function verifyImplicitGenericVerificationStageSummaryResume(
       if (/^Original user request: The user replied "(还能继续吗|可以|帮我优化下|帮我优化项目|帮我看看|帮我看看项目)" and wants to continue the most recent unfinished task\./.test(input.content)) {
         const toolName = extractLine(input.content, "Tool:") ?? extractLine(input.content, "Latest tool:");
         const summary = extractLine(input.content, "Summary:") ?? extractLine(input.content, "Latest summary:") ?? "";
+
+        if (options.resumeIntermediateReply && /You have not started the requested work yet\./.test(input.content)) {
+          const recentTaskState = input.contextMessages?.find((message) =>
+            message.role === "system" && message.content.includes("Recent task state:")
+          )?.content ?? "";
+          assert.match(recentTaskState, /Pending next step target: node-todo\/views\/index\.ejs/);
+          yield {
+            delta: toolCall("files", {
+              path: "node-todo/views/index.ejs",
+              startLine: 1,
+              endLine: 4
+            })
+          };
+          return;
+        }
 
         if (toolName === "files" && /node-todo\/views\/index\.ejs/.test(summary)) {
           yield {
@@ -16978,6 +17011,17 @@ async function verifyImplicitGenericVerificationStageSummaryResume(
     sessionId: session.sessionId,
     prompt: followUpPrompt
   });
+
+  if (options.resumeIntermediateReply) {
+    const resumedEvents = await transcriptStore.readEventsBySession(session.sessionId);
+    assert.ok(
+      resumedEvents.some((event) =>
+        event.type === "assistant.delta.received"
+        && /The implicit generic project stage-summary chain is basically finished overall\./.test(event.payload.delta)
+      ),
+      "implicit generic project stage-summary completion-tone resume should preserve the intermediate completion-tone reply before retrying the pending view read"
+    );
+  }
 
   const resumedViewContent = await readFile(join(workspace, "node-todo", "views", "index.ejs"), "utf8");
   assert.match(resumedViewContent, /maxlength="100"/);
