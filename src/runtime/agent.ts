@@ -5280,13 +5280,7 @@ function shouldForceProjectInspectionContinuation(originalRequest: string, assis
     return false;
   }
 
-  return looksLikeBlockingQuestion(assistantMessage)
-    || looksLikeStageSummaryWithPendingWork(assistantMessage)
-    || looksLikeProgressOnlyAssistantReply(assistantMessage)
-    || looksLikeCompletionToneWithPendingWork(assistantMessage)
-    || looksLikeAssistantProposal(assistantMessage)
-    || looksLikeThinCompletionReply(originalRequest, assistantMessage, latestToolResult)
-    || looksLikeCompletionReply(assistantMessage);
+  return true;
 }
 
 function shouldForceWholeProjectInspectionContinuation(originalRequest: string, assistantMessage: string, latestToolResult: {
@@ -5316,13 +5310,7 @@ function shouldForceWholeProjectInspectionContinuation(originalRequest: string, 
     return false;
   }
 
-  return looksLikeBlockingQuestion(assistantMessage)
-    || looksLikeStageSummaryWithPendingWork(assistantMessage)
-    || looksLikeProgressOnlyAssistantReply(assistantMessage)
-    || looksLikeCompletionToneWithPendingWork(assistantMessage)
-    || looksLikeAssistantProposal(assistantMessage)
-    || looksLikeThinCompletionReply(originalRequest, assistantMessage, latestToolResult)
-    || looksLikeCompletionReply(assistantMessage);
+  return true;
 }
 
 function shouldForceProjectWorkfileContinuation(originalRequest: string, assistantMessage: string, latestToolResult: {
@@ -5358,11 +5346,7 @@ function shouldForceProjectWorkfileContinuation(originalRequest: string, assista
     return false;
   }
 
-  return looksLikeBlockingQuestion(assistantMessage)
-    || looksLikeStageSummaryWithPendingWork(assistantMessage)
-    || looksLikeProgressOnlyAssistantReply(assistantMessage)
-    || looksLikeCompletionToneWithPendingWork(assistantMessage)
-    || looksLikeAssistantProposal(assistantMessage);
+  return true;
 }
 
 function shouldForceExecutionConvergence(originalRequest: string, assistantMessage: string, latestToolResult: {

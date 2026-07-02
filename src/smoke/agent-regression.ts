@@ -1516,6 +1516,33 @@ async function main() {
     "expected direct whole-project inspection to continue beyond app.js into a second core project file"
   );
 
+  console.log("task: continue whole-project inspection after a long explanation at the first core file");
+  const longExplanationWholeProjectInspectionResult = await runAgentTask({
+    bus,
+    transcriptStore,
+    sessionId: session.sessionId,
+    prompt: "你能一次性都帮我看完整个项目吗？如果你看到 app.js 后先长解释，也要继续看下一个核心文件。"
+  });
+
+  assert.match(longExplanationWholeProjectInspectionResult.assistantText, /node-todo/i);
+  assert.match(longExplanationWholeProjectInspectionResult.assistantText, /app\.js/i);
+  assert.ok(
+    longExplanationWholeProjectInspectionResult.toolSummaries.some((summary) => summary.startsWith("pwd && ls -la && find . -maxdepth 2 -type f")),
+    "expected long-explanation whole-project inspection to start from a workspace listing"
+  );
+  assert.ok(
+    longExplanationWholeProjectInspectionResult.toolSummaries.some((summary) => /^node-todo\/package\.json:1-\d+$/.test(summary)),
+    "expected long-explanation whole-project inspection to read the project entry"
+  );
+  assert.ok(
+    longExplanationWholeProjectInspectionResult.toolSummaries.some((summary) => /^node-todo\/app\.js:1-\d+/.test(summary)),
+    "expected long-explanation whole-project inspection to continue into app.js"
+  );
+  assert.ok(
+    longExplanationWholeProjectInspectionResult.toolSummaries.some((summary) => /^node-todo\/views\/index\.ejs:1-\d+/.test(summary)),
+    "expected long-explanation whole-project inspection to continue beyond app.js into a second core file"
+  );
+
   console.log("task: continue a broad whole-project follow-up from the recent inspection context");
   const wholeProjectInspectionFollowUpResult = await runAgentTask({
     bus,
@@ -1658,6 +1685,40 @@ async function main() {
   assert.ok(
     broadProjectImprovementResult.toolSummaries.some((summary) => summary.startsWith("node-todo/app.js:3-3 · updated")),
     "expected broad project improvement flow to continue into a concrete edit"
+  );
+
+  await writeFile(
+    join(workspace, "node-todo", "app.js"),
+    'const express = require("express");\nconst app = express();\nconst PORT = 3000;\napp.listen(PORT, () => {\n  console.log(`Todo app is running at http://localhost:${PORT}`);\n});\n',
+    "utf8"
+  );
+
+  console.log("task: continue broad project improvement after a long explanation at the project entry");
+  const broadProjectEntryExplanationResult = await runAgentTask({
+    bus,
+    transcriptStore,
+    sessionId: session.sessionId,
+    prompt: "看看项目然后帮我优化下。如果你读到 package.json 后先长解释，也要继续实际优化。"
+  });
+
+  const broadEntryExplanationTodoAppContent = await readFile(join(workspace, "node-todo", "app.js"), "utf8");
+  assert.match(broadEntryExplanationTodoAppContent, /process\.env\.PORT/);
+  assert.match(broadProjectEntryExplanationResult.assistantText, /process\.env\.PORT/);
+  assert.ok(
+    broadProjectEntryExplanationResult.toolSummaries.some((summary) => summary.startsWith("pwd && ls -la && find . -maxdepth 2 -type f")),
+    "expected long-explanation broad improvement flow to start from a workspace listing"
+  );
+  assert.ok(
+    broadProjectEntryExplanationResult.toolSummaries.some((summary) => /^node-todo\/package\.json:1-\d+$/.test(summary)),
+    "expected long-explanation broad improvement flow to inspect package.json first"
+  );
+  assert.ok(
+    broadProjectEntryExplanationResult.toolSummaries.some((summary) => /^node-todo\/app\.js:1-\d+/.test(summary)),
+    "expected long-explanation broad improvement flow to continue from package.json into app.js"
+  );
+  assert.ok(
+    broadProjectEntryExplanationResult.toolSummaries.some((summary) => summary.startsWith("node-todo/app.js:3-3 · updated")),
+    "expected long-explanation broad improvement flow to continue into the concrete edit"
   );
 
   await writeFile(
@@ -22187,7 +22248,19 @@ function resolveProviderResponse(content: string) {
     });
   }
 
+  if (content === "你能一次性都帮我看完整个项目吗？如果你看到 app.js 后先长解释，也要继续看下一个核心文件。") {
+    return toolCall("shell", {
+      command: "pwd && ls -la && find . -maxdepth 2 -type f | sed 's#^./##' | sort | head -200"
+    });
+  }
+
   if (content === "看看项目然后帮我优化下") {
+    return toolCall("shell", {
+      command: "pwd && ls -la && find . -maxdepth 2 -type f | sed 's#^./##' | sort | head -200"
+    });
+  }
+
+  if (content === "看看项目然后帮我优化下。如果你读到 package.json 后先长解释，也要继续实际优化。") {
     return toolCall("shell", {
       command: "pwd && ls -la && find . -maxdepth 2 -type f | sed 's#^./##' | sort | head -200"
     });
@@ -24100,6 +24173,54 @@ function resolveProviderResponse(content: string) {
     }
   }
 
+  if (/^Original user request: 你能一次性都帮我看完整个项目吗？如果你看到 app\.js 后先长解释，也要继续看下一个核心文件。(?:\n|$)/.test(content)) {
+    const toolName = extractLine(content, "Tool:") ?? extractLine(content, "Latest tool:");
+    const summary = extractLine(content, "Summary:") ?? extractLine(content, "Latest summary:") ?? "";
+
+    if (toolName === "shell") {
+      if (/You are in the middle of a concrete project inspection request\./.test(content)) {
+        assert.match(content, /Likely project entry: node-todo\/package\.json/);
+        return toolCall("files", {
+          path: "node-todo/package.json",
+          startLine: 1,
+          endLine: 20
+        });
+      }
+
+      return "我先看了工作区列表，当前最像完整项目的是 node-todo。";
+    }
+
+    if (toolName === "files" && /node-todo\/package\.json/.test(summary)) {
+      if (/You are in the middle of a whole-project inspection request\./.test(content)) {
+        assert.match(content, /Likely inspection file: node-todo\/app\.js/);
+        return toolCall("files", {
+          path: "node-todo/app.js",
+          startLine: 1,
+          endLine: 20
+        });
+      }
+
+      return "我已经读了 node-todo/package.json，接下来会继续看核心实现。";
+    }
+
+    if (toolName === "files" && /node-todo\/app\.js/.test(summary)) {
+      if (/You are in the middle of a whole-project inspection request\./.test(content)) {
+        assert.match(content, /Likely inspection file: node-todo\/views\/index\.ejs/);
+        return toolCall("files", {
+          path: "node-todo/views/index.ejs",
+          startLine: 1,
+          endLine: 20
+        });
+      }
+
+      return "node-todo/app.js 已经说明这个项目的主入口非常薄，当前只负责启动一个小型 Express 应用，而且这里几乎没有业务层、控制层和模板层之间的额外协调逻辑，所以如果目标是真正把整个项目看完整，单靠这一层解释还不够，因为还需要继续下钻到模板和用户可见输出对应的另一个核心文件，才能判断这个项目的整体结构是不是完整闭环。";
+    }
+
+    if (toolName === "files" && /node-todo\/views\/index\.ejs/.test(summary)) {
+      return "我已经继续看了 node-todo 的核心实现，包括 app.js 和 views/index.ejs；当前这个项目是一个小型 Express todo 应用。";
+    }
+  }
+
   if (
     /^Original user request: The user replied "(不能一次性都帮我看完了 整个项目|你能一次性都帮我看完整个项目吗|帮我看看整个项目)" and wants you to inspect the most recently active whole project now\.(?:\n|$)/.test(content)
     || /^Original user request: The user replied "(不能一次性都帮我看完了 整个项目|你能一次性都帮我看完整个项目吗|帮我看看整个项目)" and wants you to execute the immediately previous inspect proposal now\.(?:\n|$)/.test(content)
@@ -24223,6 +24344,50 @@ function resolveProviderResponse(content: string) {
       }
 
       return "node-todo/app.js 里把端口写死了，先改成 process.env.PORT 会更稳。";
+    }
+
+    if (toolName === "edit" && /node-todo\/app\.js/.test(summary)) {
+      return "我已经优化了 node-todo/app.js，现在端口配置改成了 process.env.PORT。";
+    }
+  }
+
+  if (/^Original user request: 看看项目然后帮我优化下。如果你读到 package\.json 后先长解释，也要继续实际优化。(?:\n|$)/.test(content)) {
+    const toolName = extractLine(content, "Tool:") ?? extractLine(content, "Latest tool:");
+    const summary = extractLine(content, "Summary:") ?? extractLine(content, "Latest summary:") ?? "";
+
+    if (toolName === "shell") {
+      if (/You are in the middle of a concrete project inspection request\./.test(content)) {
+        assert.match(content, /Likely project entry: node-todo\/package\.json/);
+        return toolCall("files", {
+          path: "node-todo/package.json",
+          startLine: 1,
+          endLine: 20
+        });
+      }
+
+      return "我先看了工作区列表。当前最像要继续看的项目是 node-todo。";
+    }
+
+    if (toolName === "files" && /node-todo\/package\.json/.test(summary)) {
+      if (/You are in the middle of a project improvement task\./.test(content)) {
+        assert.match(content, /Likely working file: node-todo\/app\.js/);
+        return toolCall("files", {
+          path: "node-todo/app.js",
+          startLine: 1,
+          endLine: 20
+        });
+      }
+
+      return "node-todo/package.json 表明这是一个很小的 Express 应用，当前依赖和脚本都非常基础，整体结构也说明真正需要落手的地方不是包描述本身，因为这里没有复杂构建链、没有多包工作区、也没有额外运行时层，所以如果目标是让这个项目更像一个可部署的小应用，最关键的变化仍然会落在服务入口对应的实现文件上。";
+    }
+
+    if (toolName === "files" && /node-todo\/app\.js/.test(summary)) {
+      return toolCall("edit", {
+        path: "node-todo/app.js",
+        startLine: 3,
+        endLine: 3,
+        replacement: "const PORT = Number(process.env.PORT || 3000);"
+      });
     }
 
     if (toolName === "edit" && /node-todo\/app\.js/.test(summary)) {

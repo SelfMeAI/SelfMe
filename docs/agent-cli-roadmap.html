@@ -258,6 +258,7 @@
           <li>当前仓库的终端交互、审批、工具消息和基础恢复链已经够用，后续主线不再回到“先补产品壳层”或“先扩表面功能”。</li>
           <li><code>pnpm smoke:agent</code> 已经覆盖 continuation、resume、project inspection、rewrite / optimize follow-up、exact-output / verify 收口等关键 runtime 收敛路径，并保持全绿。</li>
           <li>普通工具执行失败（例如缺文件、edit range 越界）现在也会进入统一的 failed tool result 历史，而不是掉进零散的 runtime error 分支，后续 continuation / repair 能直接复用这条失败锚点。</li>
+          <li>项目入口或第一个核心实现文件后的长解释句，现在也会继续被拉回到下一个真正工作文件，而不是停在“我已经看出问题了”的说明态。</li>
           <li>下次继续时，优先看真实交互里是否仍然存在“一次工具、一句收尾、提前停住”的体感问题，而不是先回头补更多 smoke 文案分支。</li>
           <li>如果需要快速判断当前是不是跑偏，先跑 <code>pnpm smoke:agent</code> 守住基线，再去复现真实会话里的 continuation / resume / long-task 行为。</li>
         </ul>
