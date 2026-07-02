@@ -28,7 +28,7 @@ import { TerminalPanelController } from "../terminal/panel-controller.js";
 import { InMemoryToolRegistry } from "../tools/registry.js";
 import type { RuntimeEvent, TaskStateChangedEvent } from "../types/events.js";
 
-const VERSION = "2026.7.2";
+const VERSION = "2026.7.3";
 
 class RegressionProvider implements ProviderClient {
   readonly name = "regression-provider";
@@ -193,7 +193,7 @@ async function main() {
   await writeFile(join(workspace, "src", "shared", "render-portal.mjs"), 'export function renderPortal(portal) {\n  return `${portal.name} ${portal.surface}-${portal.region}`;\n}\n', "utf8");
   await writeFile(join(workspace, "src", "web", "show-portal.mjs"), 'import portal from "../../config/portal.json" with { type: "json" };\nimport { renderPortal } from "../shared/render-portal.mjs";\nconsole.log(renderPortal(portal));\n', "utf8");
   await writeFile(join(workspace, "src", "shared", "render-audit.mjs"), 'export function renderAudit(audit) {\n  return `${audit.name}:${audit.level}`;\n}\n', "utf8");
-  await writeFile(join(workspace, "src", "web", "show-audit.mjs"), 'import audit from "../../config/audit.json" with { type: "json" };\nimport { renderAudit } from "../shared/render-audit.mjs";\nconsole.log(`${renderAudit(audit)} ${audit.region}`);\n', "utf8");
+  await writeFile(join(workspace, "src", "web", "show-audit.mjs"), 'import audit from "../../config/audit.json" with { type: "json" };\nimport { renderAudit } from "../shared/render-audit.mjs";\nconsole.log(`${renderAudit(audit)}${audit.region}`);\n', "utf8");
   await writeFile(join(workspace, "src", "lib", "format-runtime.mjs"), 'export function formatRuntime(runtime) {\n  return `${runtime.product}:${runtime.stage}`;\n}\n', "utf8");
   await writeFile(join(workspace, "src", "lib", "format-runtime-explain.mjs"), 'export function formatRuntimeExplain(runtime) {\n  return `${runtime.product}:${runtime.stage}`;\n}\n', "utf8");
   await writeFile(join(workspace, "src", "lib", "render-service-stubborn.mjs"), 'export function renderServiceStubborn(service) {\n  return `${service.name} ${service.surface}-${service.version}`;\n}\n', "utf8");
@@ -447,7 +447,7 @@ async function main() {
   assert.match(rewriteFollowUpAppContent, /process\.env\.PORT/);
   assert.match(rewriteFollowUpResult.assistantText, /process\.env\.PORT|node-todo\/app\.js/i);
   assert.ok(
-    rewriteFollowUpResult.toolSummaries.some((summary) => summary.startsWith("node-todo/package.json:1-13")),
+    rewriteFollowUpResult.toolSummaries.some((summary) => /^node-todo\/package\.json:1-\d+$/.test(summary)),
     "expected vague rewrite follow-up to anchor to the recently inspected project entry"
   );
   assert.ok(
@@ -457,6 +457,37 @@ async function main() {
   assert.ok(
     rewriteFollowUpResult.toolSummaries.some((summary) => summary.startsWith("node-todo/app.js:3-3 · updated")),
     "expected vague rewrite follow-up to perform a concrete edit"
+  );
+
+  await writeFile(
+    join(workspace, "node-todo", "app.js"),
+    'const express = require("express");\nconst app = express();\nconst PORT = 3000;\napp.listen(PORT, () => {\n  console.log(`Todo app is running at http://localhost:${PORT}`);\n});\n',
+    "utf8"
+  );
+
+  console.log("task: anchor a project-worded vague rewrite follow-up to the most recently inspected project");
+  const projectWordedRewriteFollowUpResult = await runAgentTask({
+    bus,
+    transcriptStore,
+    sessionId: session.sessionId,
+    prompt: "帮我重写项目"
+  });
+
+  const projectWordedRewriteAppContent = await readFile(join(workspace, "node-todo", "app.js"), "utf8");
+  assert.match(projectWordedRewriteAppContent, /process\.env\.PORT/);
+  assert.match(projectWordedRewriteFollowUpResult.assistantText, /process\.env\.PORT|node-todo\/app\.js/i);
+  assert.equal(
+    projectWordedRewriteFollowUpResult.toolSummaries.filter((summary) => /^node-todo\/package\.json:1-\d+$/.test(summary)).length,
+    1,
+    "expected project-worded vague rewrite follow-up to anchor to the package entry once"
+  );
+  assert.ok(
+    projectWordedRewriteFollowUpResult.toolSummaries.some((summary) => /^node-todo\/app\.js:1-\d+/.test(summary)),
+    "expected project-worded vague rewrite follow-up to jump straight to the latest editable working file"
+  );
+  assert.ok(
+    projectWordedRewriteFollowUpResult.toolSummaries.some((summary) => summary.startsWith("node-todo/app.js:3-3 · updated")),
+    "expected project-worded vague rewrite follow-up to perform a concrete edit"
   );
 
   console.log("task: execute a broader approved project rewrite proposal instead of stopping at the plan");
@@ -476,7 +507,7 @@ async function main() {
     "expected rewrite proposal flow to start from a workspace listing"
   );
   assert.ok(
-    rewriteProposalResult.toolSummaries.some((summary) => summary.startsWith("node-todo/package.json:1-13")),
+    rewriteProposalResult.toolSummaries.some((summary) => /^node-todo\/package\.json:1-\d+$/.test(summary)),
     "expected rewrite proposal flow to inspect the package entry before proposing the rewrite"
   );
 
@@ -512,7 +543,7 @@ async function main() {
     "expected approved rewrite flow to edit views/index.ejs"
   );
   assert.ok(
-    approvedRewriteResult.toolSummaries.some((summary) => summary.startsWith("node-todo/package.json:1-13")),
+    approvedRewriteResult.toolSummaries.some((summary) => /^node-todo\/package\.json:1-\d+$/.test(summary)),
     "expected approved rewrite flow to read package.json before editing scripts"
   );
   assert.ok(
@@ -572,7 +603,7 @@ async function main() {
     "expected broad rewrite follow-up to continue into views/index.ejs"
   );
   assert.ok(
-    proposalDrivenRewriteFollowUpResult.toolSummaries.some((summary) => summary.startsWith("node-todo/package.json:1-13")),
+    proposalDrivenRewriteFollowUpResult.toolSummaries.some((summary) => /^node-todo\/package\.json:1-\d+$/.test(summary)),
     "expected broad rewrite follow-up to continue into package.json"
   );
   assert.ok(
@@ -653,6 +684,80 @@ async function main() {
   assert.ok(
     proposalDrivenVerificationRewriteResult.toolSummaries.some((summary) => summary.startsWith("node-todo/verify-exact.mjs:7-7 · updated")),
     "expected proposal-driven rewrite follow-up to repair verify-exact.mjs as the latest failure point"
+  );
+
+  await writeFile(
+    join(workspace, "node-todo", "app.js"),
+    'const express = require("express");\nconst app = express();\nconst PORT = 3000;\napp.listen(PORT, () => {\n  console.log(`Todo app is running at http://localhost:${PORT}`);\n});\n',
+    "utf8"
+  );
+  await writeFile(
+    join(workspace, "node-todo", "views", "index.ejs"),
+    '<!DOCTYPE html>\n<form action="/add" method="post">\n  <input name="title" />\n</form>\n',
+    "utf8"
+  );
+  await writeFile(
+    join(workspace, "node-todo", "verify-exact.mjs"),
+    [
+      'import { readFileSync } from "node:fs";',
+      'const app = readFileSync(new URL("./app.js", import.meta.url), "utf8");',
+      'const view = readFileSync(new URL("./views/index.ejs", import.meta.url), "utf8");',
+      'const appReady = /process\\.env\\.PORT/.test(app);',
+      'const viewReady = /maxlength="100"/.test(view);',
+      'if (appReady && viewReady) {',
+      '  console.log("ready!");',
+      '} else if (appReady) {',
+      '  console.log("app-only");',
+      '} else if (viewReady) {',
+      '  console.log("view-only");',
+      '} else {',
+      '  console.log("not-ready");',
+      '}'
+    ].join("\n") + "\n",
+    "utf8"
+  );
+
+  const rewriteProposalWithVerificationProjectWordedResult = await runAgentTask({
+    bus,
+    transcriptStore,
+    sessionId: session.sessionId,
+    prompt: "看看项目，但先别改，告诉我如果重写 node-todo，并运行 `node node-todo/verify-exact.mjs` 验证直到输出 exactly `ready`，你会怎么做。"
+  });
+
+  assert.match(rewriteProposalWithVerificationProjectWordedResult.assistantText, /app\.js/i);
+  assert.match(rewriteProposalWithVerificationProjectWordedResult.assistantText, /views\/index\.ejs/i);
+  assert.match(rewriteProposalWithVerificationProjectWordedResult.assistantText, /verify-exact\.mjs/i);
+
+  const projectWordedVerificationRewriteResult = await runAgentTask({
+    bus,
+    transcriptStore,
+    sessionId: session.sessionId,
+    prompt: "帮我重写项目"
+  });
+
+  const projectWordedVerificationAppContent = await readFile(join(workspace, "node-todo", "app.js"), "utf8");
+  const projectWordedVerificationViewContent = await readFile(join(workspace, "node-todo", "views", "index.ejs"), "utf8");
+  const projectWordedVerificationVerifierContent = await readFile(join(workspace, "node-todo", "verify-exact.mjs"), "utf8");
+  assert.match(projectWordedVerificationAppContent, /process\.env\.PORT/);
+  assert.match(projectWordedVerificationViewContent, /maxlength="100"/);
+  assert.match(projectWordedVerificationVerifierContent, /console\.log\("ready"\)/);
+  assert.match(projectWordedVerificationRewriteResult.assistantText, /ready/);
+  assert.doesNotMatch(projectWordedVerificationRewriteResult.assistantText, /^(可以|可以继续|好的|sure|okay)\b/i);
+  assert.ok(
+    projectWordedVerificationRewriteResult.toolSummaries.filter((summary) => summary.startsWith("node node-todo/verify-exact.mjs · completed")).length >= 3,
+    "expected project-worded rewrite follow-up to verify after app.js, after views/index.ejs, and after repairing verify-exact.mjs"
+  );
+  assert.ok(
+    projectWordedVerificationRewriteResult.toolSummaries.some((summary) => summary.startsWith("node-todo/views/index.ejs:3-3 · updated")),
+    "expected project-worded rewrite follow-up to finish the requested view edit before chasing the verifier"
+  );
+  assert.ok(
+    projectWordedVerificationRewriteResult.toolSummaries.some((summary) => summary.startsWith("node-todo/verify-exact.mjs:1-14")),
+    "expected project-worded rewrite follow-up to inspect the verifier after the near-miss exact output"
+  );
+  assert.ok(
+    projectWordedVerificationRewriteResult.toolSummaries.some((summary) => summary.startsWith("node-todo/verify-exact.mjs:7-7 · updated")),
+    "expected project-worded rewrite follow-up to repair verify-exact.mjs as the latest failure point"
   );
 
   console.log("task: allow extended coding task to continue beyond six tool steps");
@@ -991,7 +1096,7 @@ async function main() {
   });
 
   const anchoredReportContent = await readFile(join(workspace, "anchored-report.mjs"), "utf8");
-  assert.match(anchoredReportContent, /config\.name:\$\{config\.port\}/);
+  assert.match(anchoredReportContent, /\$\{config\.name\}:\$\{config\.port\}/);
   assert.match(anchoredWorkingFileResult.assistantText, /SelfMe:3000/);
   assert.equal(
     anchoredWorkingFileResult.toolSummaries.filter((summary) => summary.startsWith("app.config.json:1-4")).length,
@@ -999,7 +1104,7 @@ async function main() {
     "expected anchored repair flow to avoid rereading app.config.json once the working file is known"
   );
   assert.ok(
-    anchoredWorkingFileResult.toolSummaries.filter((summary) => summary.startsWith("anchored-report.mjs:1-20")).length >= 1,
+    anchoredWorkingFileResult.toolSummaries.some((summary) => /^anchored-report\.mjs:1-\d+$/.test(summary)),
     "expected anchored repair flow to inspect the working file before tightening it"
   );
   assert.ok(
@@ -1068,7 +1173,7 @@ async function main() {
   });
 
   const stubbornReportContent = await readFile(join(workspace, "stubborn-report.mjs"), "utf8");
-  assert.match(stubbornReportContent, /config\.name:\$\{config\.port\}/);
+  assert.match(stubbornReportContent, /\$\{config\.name\}:\$\{config\.port\}/);
   assert.match(stubbornRecoveryResult.assistantText, /SelfMe:3000/);
   assert.ok(
     stubbornRecoveryResult.toolSummaries.some((summary) => summary.startsWith("node stubborn-report.mjs · failed (1)")),
@@ -1079,7 +1184,7 @@ async function main() {
     "expected stubborn chain file read after the failed verification"
   );
   assert.ok(
-    stubbornRecoveryResult.toolSummaries.some((summary) => summary.startsWith("stubborn-report.mjs:1-2 · updated")),
+    stubbornRecoveryResult.toolSummaries.some((summary) => summary.startsWith("stubborn-report.mjs:1-1 · updated")),
     "expected stubborn chain first repair edit"
   );
   assert.ok(
@@ -1087,7 +1192,7 @@ async function main() {
     "expected stubborn chain to survive a near-miss verification and keep tightening"
   );
   assert.ok(
-    stubbornRecoveryResult.toolSummaries.filter((summary) => summary.startsWith("stubborn-report.mjs:1-2 · updated")).length >= 2,
+    stubbornRecoveryResult.toolSummaries.some((summary) => summary.startsWith("stubborn-report.mjs:2-2 · updated")),
     "expected stubborn chain to perform a second repair after the near-miss output"
   );
 
@@ -1100,7 +1205,7 @@ async function main() {
   });
 
   const stubbornQuestionReportContent = await readFile(join(workspace, "stubborn-question-report.mjs"), "utf8");
-  assert.match(stubbornQuestionReportContent, /config\.name:\$\{config\.port\}/);
+  assert.match(stubbornQuestionReportContent, /\$\{config\.name\}:\$\{config\.port\}/);
   assert.match(stubbornQuestionRecoveryResult.assistantText, /SelfMe:3000/);
   assert.ok(
     stubbornQuestionRecoveryResult.toolSummaries.some((summary) => summary.startsWith("app.config.json:1-4")),
@@ -1128,7 +1233,7 @@ async function main() {
   });
 
   const stubbornProposalReportContent = await readFile(join(workspace, "stubborn-proposal-report.mjs"), "utf8");
-  assert.match(stubbornProposalReportContent, /config\.name:\$\{config\.port\}/);
+  assert.match(stubbornProposalReportContent, /\$\{config\.name\}:\$\{config\.port\}/);
   assert.match(stubbornProposalRecoveryResult.assistantText, /SelfMe:3000/);
   assert.ok(
     stubbornProposalRecoveryResult.toolSummaries.some((summary) => summary.startsWith("app.config.json:1-4")),
@@ -1190,7 +1295,7 @@ async function main() {
   });
 
   const convergeQuestionReportContent = await readFile(join(workspace, "converge-question-report.mjs"), "utf8");
-  assert.match(convergeQuestionReportContent, /config\.name:\$\{config\.port\}/);
+  assert.match(convergeQuestionReportContent, /\$\{config\.name\}:\$\{config\.port\}/);
   assert.match(executionQuestionConvergenceResult.assistantText, /SelfMe:3000/);
   assert.ok(
     executionQuestionConvergenceResult.toolSummaries.some((summary) => summary.startsWith("app.config.json:1-4")),
@@ -1221,7 +1326,7 @@ async function main() {
   });
 
   const explainReportContent = await readFile(join(workspace, "explain-report.mjs"), "utf8");
-  assert.match(explainReportContent, /config\.name:\$\{config\.port\}/);
+  assert.match(explainReportContent, /\$\{config\.name\}:\$\{config\.port\}/);
   assert.match(workingFileContinuationResult.assistantText, /SelfMe:3000/);
   assert.equal(
     workingFileContinuationResult.toolSummaries.filter((summary) => summary.startsWith("app.config.json:1-4")).length,
@@ -1256,8 +1361,12 @@ async function main() {
     "expected initial workspace listing"
   );
   assert.ok(
-    projectInspectionResult.toolSummaries.some((summary) => summary.startsWith("node-todo/package.json:1-13")),
+    projectInspectionResult.toolSummaries.some((summary) => /^node-todo\/package\.json:1-\d+$/.test(summary)),
     "expected project inspection to continue into a concrete project entry"
+  );
+  assert.ok(
+    projectInspectionResult.toolSummaries.some((summary) => /^node-todo\/app\.js:1-\d+/.test(summary)),
+    "expected project inspection to continue from the project entry into a concrete implementation file"
   );
 
   console.log("task: inspect a whole project directly from the first user request");
@@ -1276,12 +1385,16 @@ async function main() {
     "expected direct whole-project inspection to start from a workspace listing"
   );
   assert.ok(
-    directWholeProjectInspectionResult.toolSummaries.some((summary) => summary.startsWith("node-todo/package.json:1-13")),
+    directWholeProjectInspectionResult.toolSummaries.some((summary) => /^node-todo\/package\.json:1-\d+$/.test(summary)),
     "expected direct whole-project inspection to read the project entry"
   );
   assert.ok(
     directWholeProjectInspectionResult.toolSummaries.some((summary) => /^node-todo\/app\.js:1-\d+/.test(summary)),
     "expected direct whole-project inspection to continue into a core implementation file"
+  );
+  assert.ok(
+    directWholeProjectInspectionResult.toolSummaries.some((summary) => /^node-todo\/views\/index\.ejs:1-\d+/.test(summary)),
+    "expected direct whole-project inspection to continue beyond app.js into a second core project file"
   );
 
   console.log("task: continue a broad whole-project follow-up from the recent inspection context");
@@ -1296,13 +1409,42 @@ async function main() {
   assert.match(wholeProjectInspectionFollowUpResult.assistantText, /app\.js/i);
   assert.doesNotMatch(wholeProjectInspectionFollowUpResult.assistantText, /^(可以|可以继续|好的|sure|okay)\b/i);
   assert.equal(
-    wholeProjectInspectionFollowUpResult.toolSummaries.filter((summary) => summary.startsWith("node-todo/package.json:1-13")).length,
+    wholeProjectInspectionFollowUpResult.toolSummaries.filter((summary) => /^node-todo\/package\.json:1-\d+$/.test(summary)).length,
     1,
     "expected whole-project follow-up to anchor back to the recent project entry once"
   );
   assert.ok(
     wholeProjectInspectionFollowUpResult.toolSummaries.some((summary) => /^node-todo\/app\.js:1-\d+/.test(summary)),
     "expected whole-project follow-up to continue into a core implementation file"
+  );
+  assert.ok(
+    wholeProjectInspectionFollowUpResult.toolSummaries.some((summary) => /^node-todo\/views\/index\.ejs:1-\d+/.test(summary)),
+    "expected whole-project follow-up to continue beyond app.js into a second core project file"
+  );
+
+  console.log("task: continue a project-worded whole-project follow-up from the recent inspection context");
+  const projectWordedWholeProjectInspectionFollowUpResult = await runAgentTask({
+    bus,
+    transcriptStore,
+    sessionId: session.sessionId,
+    prompt: "帮我看看整个项目"
+  });
+
+  assert.match(projectWordedWholeProjectInspectionFollowUpResult.assistantText, /node-todo/i);
+  assert.match(projectWordedWholeProjectInspectionFollowUpResult.assistantText, /app\.js/i);
+  assert.doesNotMatch(projectWordedWholeProjectInspectionFollowUpResult.assistantText, /^(可以|可以继续|好的|sure|okay)\b/i);
+  assert.equal(
+    projectWordedWholeProjectInspectionFollowUpResult.toolSummaries.filter((summary) => /^node-todo\/package\.json:1-\d+$/.test(summary)).length,
+    1,
+    "expected project-worded whole-project follow-up to anchor back to the recent project entry once"
+  );
+  assert.ok(
+    projectWordedWholeProjectInspectionFollowUpResult.toolSummaries.some((summary) => /^node-todo\/app\.js:1-\d+/.test(summary)),
+    "expected project-worded whole-project follow-up to continue into a core implementation file"
+  );
+  assert.ok(
+    projectWordedWholeProjectInspectionFollowUpResult.toolSummaries.some((summary) => /^node-todo\/views\/index\.ejs:1-\d+/.test(summary)),
+    "expected project-worded whole-project follow-up to continue beyond app.js into a second core project file"
   );
 
   await writeFile(
@@ -1324,8 +1466,11 @@ async function main() {
   assert.match(vagueOptimizationFollowUpResult.assistantText, /process\.env\.PORT/);
   assert.doesNotMatch(vagueOptimizationFollowUpResult.assistantText, /^(可以|可以继续|好的|sure|okay)\b/i);
   assert.ok(
-    vagueOptimizationFollowUpResult.toolSummaries.some((summary) => summary.startsWith("node-todo/package.json:1-13")),
-    "expected vague optimization follow-up to anchor to the recently inspected project entry"
+    vagueOptimizationFollowUpResult.toolSummaries.some((summary) =>
+      /^node-todo\/package\.json:1-\d+$/.test(summary)
+      || /^node-todo\/app\.js:1-\d+$/.test(summary)
+    ),
+    "expected vague optimization follow-up to anchor to the recent project context"
   );
   assert.ok(
     vagueOptimizationFollowUpResult.toolSummaries.some((summary) => /^node-todo\/app\.js:1-\d+/.test(summary)),
@@ -1334,6 +1479,32 @@ async function main() {
   assert.ok(
     vagueOptimizationFollowUpResult.toolSummaries.some((summary) => summary.startsWith("node-todo/app.js:3-3 · updated")),
     "expected vague optimization follow-up to complete a concrete edit"
+  );
+
+  console.log("task: anchor a project-worded vague optimization follow-up to the most recently inspected project");
+  const projectWordedOptimizationFollowUpResult = await runAgentTask({
+    bus,
+    transcriptStore,
+    sessionId: session.sessionId,
+    prompt: "帮我优化项目"
+  });
+
+  const projectWordedOptimizedTodoAppContent = await readFile(join(workspace, "node-todo", "app.js"), "utf8");
+  assert.match(projectWordedOptimizedTodoAppContent, /process\.env\.PORT/);
+  assert.match(projectWordedOptimizationFollowUpResult.assistantText, /process\.env\.PORT/);
+  assert.doesNotMatch(projectWordedOptimizationFollowUpResult.assistantText, /^(可以|可以继续|好的|sure|okay)\b/i);
+  assert.equal(
+    projectWordedOptimizationFollowUpResult.toolSummaries.some((summary) => /^node-todo\/package\.json:1-\d+$/.test(summary)),
+    false,
+    "expected project-worded vague optimization follow-up to skip re-reading the package entry"
+  );
+  assert.ok(
+    projectWordedOptimizationFollowUpResult.toolSummaries.some((summary) => /^node-todo\/app\.js:1-\d+/.test(summary)),
+    "expected project-worded vague optimization follow-up to jump straight to the latest editable working file"
+  );
+  assert.ok(
+    projectWordedOptimizationFollowUpResult.toolSummaries.some((summary) => summary.startsWith("node-todo/app.js:3-3 · updated")),
+    "expected project-worded vague optimization follow-up to complete a concrete edit"
   );
 
   await writeFile(
@@ -1358,7 +1529,7 @@ async function main() {
     "expected broad project improvement flow to start from a workspace listing"
   );
   assert.ok(
-    broadProjectImprovementResult.toolSummaries.some((summary) => summary.startsWith("node-todo/package.json:1-13")),
+    broadProjectImprovementResult.toolSummaries.some((summary) => /^node-todo\/package\.json:1-\d+$/.test(summary)),
     "expected broad project improvement flow to inspect a concrete project entry first"
   );
   assert.ok(
@@ -1400,7 +1571,7 @@ async function main() {
     "expected project-driven multi-target flow to start from a workspace listing"
   );
   assert.equal(
-    projectDrivenMultiTargetResult.toolSummaries.filter((summary) => summary.startsWith("node-todo/package.json:1-13")).length,
+    projectDrivenMultiTargetResult.toolSummaries.filter((summary) => /^node-todo\/package\.json:1-\d+$/.test(summary)).length,
     1,
     "expected project-driven multi-target flow to inspect the package entry once"
   );
@@ -1515,7 +1686,7 @@ async function main() {
     "expected wider multi-file rewrite to still reach package.json"
   );
   assert.ok(
-    projectDrivenWideRewriteResult.toolSummaries.some((summary) => summary.startsWith("node-todo/verify-setup.mjs:1-13")),
+    projectDrivenWideRewriteResult.toolSummaries.some((summary) => /^node-todo\/verify-setup\.mjs:1-\d+/.test(summary)),
     "expected wider multi-file rewrite to continue into the fourth concrete file"
   );
   assert.ok(
@@ -1531,6 +1702,26 @@ async function main() {
   await writeFile(
     join(workspace, "node-todo", "views", "index.ejs"),
     '<!DOCTYPE html>\n<form action="/add" method="post">\n  <input name="title" />\n</form>\n',
+    "utf8"
+  );
+  await writeFile(
+    join(workspace, "node-todo", "verify-setup.mjs"),
+    [
+      'import { readFileSync } from "node:fs";',
+      'const app = readFileSync(new URL("./app.js", import.meta.url), "utf8");',
+      'const view = readFileSync(new URL("./views/index.ejs", import.meta.url), "utf8");',
+      'const appReady = /process\\.env\\.PORT/.test(app);',
+      'const viewReady = /maxlength="100"/.test(view);',
+      'if (appReady && viewReady) {',
+      '  console.log("ready");',
+      '} else if (appReady) {',
+      '  console.log("app-only");',
+      '} else if (viewReady) {',
+      '  console.log("view-only");',
+      '} else {',
+      '  console.log("not-ready");',
+      '}'
+    ].join("\n") + "\n",
     "utf8"
   );
 
@@ -1552,7 +1743,7 @@ async function main() {
     "expected project-driven verification flow to start from a workspace listing"
   );
   assert.ok(
-    projectDrivenVerificationResult.toolSummaries.some((summary) => summary.startsWith("node-todo/package.json:1-13")),
+    projectDrivenVerificationResult.toolSummaries.some((summary) => /^node-todo\/package\.json:1-\d+$/.test(summary)),
     "expected project-driven verification flow to inspect the package entry"
   );
   assert.ok(
@@ -1580,6 +1771,26 @@ async function main() {
   await writeFile(
     join(workspace, "node-todo", "views", "index.ejs"),
     '<!DOCTYPE html>\n<form action="/add" method="post">\n  <input name="title" />\n</form>\n',
+    "utf8"
+  );
+  await writeFile(
+    join(workspace, "node-todo", "verify-setup.mjs"),
+    [
+      'import { readFileSync } from "node:fs";',
+      'const app = readFileSync(new URL("./app.js", import.meta.url), "utf8");',
+      'const view = readFileSync(new URL("./views/index.ejs", import.meta.url), "utf8");',
+      'const appReady = /process\\.env\\.PORT/.test(app);',
+      'const viewReady = /maxlength="100"/.test(view);',
+      'if (appReady && viewReady) {',
+      '  console.log("ready");',
+      '} else if (appReady) {',
+      '  console.log("app-only");',
+      '} else if (viewReady) {',
+      '  console.log("view-only");',
+      '} else {',
+      '  console.log("not-ready");',
+      '}'
+    ].join("\n") + "\n",
     "utf8"
   );
 
@@ -1684,7 +1895,7 @@ async function main() {
   assert.match(recentWorkingFileOptimizedTodoAppContent, /process\.env\.PORT/);
   assert.match(recentWorkingFileOptimizationResult.assistantText, /process\.env\.PORT/);
   assert.equal(
-    recentWorkingFileOptimizationResult.toolSummaries.some((summary) => summary.startsWith("node-todo/package.json:1-13")),
+    recentWorkingFileOptimizationResult.toolSummaries.some((summary) => /^node-todo\/package\.json:1-\d+$/.test(summary)),
     false,
     "expected recent-working-file optimization follow-up to skip re-reading the package entry"
   );
@@ -1707,13 +1918,32 @@ async function main() {
 
   assert.match(recentWorkingFileInspectionResult.assistantText, /node-todo\/app\.js|process\.env\.PORT|端口/i);
   assert.equal(
-    recentWorkingFileInspectionResult.toolSummaries.some((summary) => summary.startsWith("node-todo/package.json:1-13")),
+    recentWorkingFileInspectionResult.toolSummaries.some((summary) => /^node-todo\/package\.json:1-\d+$/.test(summary)),
     false,
     "expected vague inspection follow-up to skip re-reading the package entry"
   );
   assert.ok(
     recentWorkingFileInspectionResult.toolSummaries.some((summary) => /^node-todo\/app\.js:1-\d+/.test(summary)),
     "expected vague inspection follow-up to jump straight to the latest editable working file"
+  );
+
+  console.log("task: prefer the recent editable working file for a project-worded vague inspection follow-up");
+  const projectWordedInspectionResult = await runAgentTask({
+    bus,
+    transcriptStore,
+    sessionId: session.sessionId,
+    prompt: "帮我看看项目"
+  });
+
+  assert.match(projectWordedInspectionResult.assistantText, /node-todo\/app\.js|process\.env\.PORT|端口/i);
+  assert.equal(
+    projectWordedInspectionResult.toolSummaries.some((summary) => /^node-todo\/package\.json:1-\d+$/.test(summary)),
+    false,
+    "expected project-worded vague inspection follow-up to skip re-reading the package entry"
+  );
+  assert.ok(
+    projectWordedInspectionResult.toolSummaries.some((summary) => /^node-todo\/app\.js:1-\d+/.test(summary)),
+    "expected project-worded vague inspection follow-up to jump straight to the latest editable working file"
   );
 
   await writeFile(
@@ -2050,7 +2280,7 @@ async function main() {
   });
 
   const overVerifyReportContent = await readFile(join(workspace, "over-verify-report.mjs"), "utf8");
-  assert.match(overVerifyReportContent, /config\.name:\$\{config\.port\}/);
+  assert.match(overVerifyReportContent, /\$\{config\.name\}:\$\{config\.port\}/);
   assert.match(overVerifyCompletionResult.assistantText, /SelfMe:3000/);
   assert.ok(
     overVerifyCompletionResult.toolSummaries.some((summary) => summary.startsWith("app.config.json:1-4")),
@@ -2061,7 +2291,7 @@ async function main() {
     "expected file read before over-verify completion task"
   );
   assert.ok(
-    overVerifyCompletionResult.toolSummaries.some((summary) => summary.startsWith("over-verify-report.mjs:1-2 · updated")),
+    overVerifyCompletionResult.toolSummaries.some((summary) => /^over-verify-report\.mjs:\d+-\d+\s+· updated/.test(summary)),
     "expected repair edit before terminal completion"
   );
   assert.equal(
@@ -2180,7 +2410,9 @@ async function main() {
     "expected bridge-switch helper read after the newer failure point"
   );
   assert.ok(
-    bridgeSwitchChainResult.toolSummaries.filter((summary) => summary.startsWith("src/bridge-switch-helper.mjs:1-2 · updated")).length >= 2,
+    bridgeSwitchChainResult.toolSummaries.filter((summary) =>
+      /^src\/bridge-switch-helper\.mjs:\d+-\d+\s+· updated/.test(summary)
+    ).length >= 2,
     "expected bridge-switch helper to be repaired twice after newer failure and near-miss output"
   );
   assert.ok(
@@ -2730,7 +2962,7 @@ async function main() {
   const renderAuditContent = await readFile(join(workspace, "src", "shared", "render-audit.mjs"), "utf8");
   const showAuditContent = await readFile(join(workspace, "src", "web", "show-audit.mjs"), "utf8");
   assert.match(renderAuditContent, /audit\.name\}:\$\{audit\.level\}-/);
-  assert.match(showAuditContent, /\$\{renderAudit\(audit\)\} \$\{audit\.region\}/);
+  assert.match(showAuditContent, /\$\{renderAudit\(audit\)\}\$\{audit\.region\}/);
   assert.match(noOverfixChainResult.assistantText, /SelfMe:audit-cn/);
   assert.ok(
     noOverfixChainResult.toolSummaries.some((summary) => /^config\/audit\.json:1-\d+$/.test(summary)),
@@ -3043,7 +3275,9 @@ async function main() {
   await verifyBareContinueResumesInterruptedTask();
   await verifyBareAffirmativeResumesInterruptedTask();
   await verifyBareAffirmativeResumesInterruptedProposalExecution();
-  await verifyVagueRewriteResumesInterruptedProposalExecution();
+  await verifyVagueRewriteResumesInterruptedProposalExecution("你能帮我重新写个项目吗");
+  await verifyVagueRewriteResumesInterruptedProposalExecution("帮我重写项目");
+  await verifyAlternateVagueRewriteResumesInterruptedProposalExecution();
   await verifyVagueOptimizationExecutesPreviousProposal();
   await verifyEnglishPlanningStyleOptimizationProposalExecutesPreviousProposal();
   await verifyChineseOptimizationProposalExecutesPreviousProposal();
@@ -3061,6 +3295,31 @@ async function main() {
   await verifyGenericVerificationCompletionToneStillContinues();
   await verifyProjectInspectionProposalReplyContinuesExecution();
   await verifyWholeProjectInspectionProposalReplyContinuesExecution();
+  await verifyProjectInspectionPromptSwitchesAfterEntryRead();
+  await verifyWholeProjectInspectionFollowsLocalImplementationImport();
+  await verifyWholeProjectImportFollowResumesAtPendingImplementation("帮我看看整个项目");
+  await verifyWholeProjectImportFollowResumesAtPendingImplementation("还能继续吗");
+  await verifyWholeProjectTypeScriptImportFollowResumesAtPendingImplementation();
+  await verifyWholeProjectInspectionPrefersTypeScriptImportSibling();
+  await verifyBroadProjectImprovementPrefersTypeScriptMainEntry();
+  await verifyBroadProjectImprovementMapsDistEntryBackToSource();
+  await verifyBroadProjectImprovementMapsDistEntryBackToJavaScriptSource();
+  await verifyBroadProjectImprovementUsesReadmeSourceHint();
+  await verifyBroadProjectImprovementUsesQuotedReadmeSourceHint();
+  await verifyBroadProjectImprovementUsesExtensionlessScriptEntry();
+  await verifyBroadProjectImprovementSkipsRuntimeLoaderPackage();
+  await verifyBroadProjectImprovementFollowsThinEntryImplementationImport();
+  await verifyBroadProjectImprovementContinuesAfterThinEntryStageSummary();
+  await verifyResumeAfterThinEntryStageSummary();
+  await verifyResumeAfterThinEntryImplementationStageSummary();
+  await verifyVagueFollowUpResumeAfterThinEntryImplementationStageSummary("帮我优化下");
+  await verifyVagueFollowUpResumeAfterThinEntryImplementationStageSummary("帮我看看");
+  await verifyProjectRewriteFollowsThinEntryImplementationImport();
+  await verifyProjectRewriteContinuesAfterThinEntryStageSummary();
+  await verifyResumeAfterThinEntryRewriteImplementationStageSummary();
+  await verifyVagueFollowUpResumeAfterThinEntryRewriteImplementationStageSummary("你能帮我重新写个项目吗");
+  await verifyVagueFollowUpResumeAfterThinEntryRewriteImplementationStageSummary("帮我重写项目");
+  await verifyVagueFollowUpResumeAfterThinEntryRewriteImplementationStageSummary("重写这个项目");
   await verifyProjectWorkfileProposalReplyContinuesExecution();
   await verifyThinTerminalCompletionReplyGetsTightened();
   await verifyThinChineseTerminalCompletionReplyGetsTightened();
@@ -3073,29 +3332,37 @@ async function main() {
   await verifyPlanningStyleInspectionProposalExecutesPreviousProposal();
   await verifyChineseInspectionProposalExecutesPreviousProposal();
   await verifyPlanningStyleRewriteProposalExecutesPreviousProposal();
-  await verifyChineseRewriteProposalExecutesPreviousProposal();
+  await verifyChineseRewriteProposalExecutesPreviousProposal("你能帮我重新写个项目吗");
+  await verifyChineseRewriteProposalExecutesPreviousProposal("帮我重写项目");
   await verifyVagueInspectionResumesInterruptedProposalExecution();
+  await verifyProjectWordedWholeProjectInspectionResumesInterruptedExecution();
   await verifyVagueOptimizationResumesInterruptedProposalExecution();
   await verifyResumeFollowUpAtLatestFailurePoint();
   await verifyResumeFollowUpPullsExplanationBackIntoLatestFailurePoint();
   await verifyResumeFollowUpPullsBlockingQuestionBackIntoLatestFailurePoint();
   await verifyResumeFollowUpInProjectVerificationChain();
   await verifyVagueOptimizationInProjectVerificationChain();
+  await verifyProjectWordedOptimizationInProjectVerificationChain();
   await verifyVagueInspectionInProjectVerificationChain();
+  await verifyProjectWordedInspectionInProjectVerificationChain();
   await verifyResumeFollowUpInProjectStageSummaryChain();
   await verifyResumeFollowUpInImplicitProjectStageSummaryChain();
   await verifyResumeFollowUpInImplicitGenericVerificationStageSummaryChain();
   await verifyResumeFollowUpInImplicitGenericVerificationCompletionToneChain();
   await verifyBareAffirmativeInImplicitGenericVerificationStageSummaryChain();
   await verifyVagueOptimizationInImplicitGenericVerificationStageSummaryChain();
+  await verifyProjectWordedOptimizationInImplicitGenericVerificationStageSummaryChain();
   await verifyVagueInspectionInImplicitGenericVerificationStageSummaryChain();
+  await verifyProjectWordedInspectionInImplicitGenericVerificationStageSummaryChain();
   await verifyVagueOptimizationInImplicitBroadProjectProposalChain();
   await verifyBroadProjectEditRangeFailureCarriesForward();
   await verifyBroadProjectStageSummaryDoesNotConsumeToolBudget();
   await verifyResumeFollowUpInImplicitMultiTargetProposalChain();
   await verifyBareAffirmativeInImplicitMultiTargetProposalChain();
   await verifyVagueOptimizationInImplicitMultiTargetProposalChain();
+  await verifyProjectWordedOptimizationInImplicitMultiTargetProposalChain();
   await verifyVagueInspectionInImplicitMultiTargetProposalChain();
+  await verifyProjectWordedInspectionInImplicitMultiTargetProposalChain();
   await verifyResumeFollowUpInImplicitMultiTargetCompletionToneChain();
   await verifyResumeFollowUpInImplicitMultiTargetQuestionChain();
   await verifyResumeFollowUpDoesNotLeakStalePendingNextTarget();
@@ -3106,6 +3373,7 @@ async function main() {
   await verifyResumeFollowUpAfterApprovalWaitInProjectChain();
   await verifyBareAffirmativeAfterApprovalWaitInProjectChain();
   await verifyVagueOptimizationAfterApprovalWaitInProjectChain();
+  await verifyProjectWordedOptimizationAfterApprovalWaitInProjectChain();
   await verifyNaturalLanguageApprovalShortcuts();
   await verifyPendingNextStepContextGuidesMultiTargetContinuation();
   await verifyAssistantStageSummaryPromotesExplicitNextTarget();
@@ -3357,7 +3625,7 @@ async function verifyResumeFollowUpAfterStop() {
 
   const resumedContent = await readFile(join(workspace, "resume.txt"), "utf8");
   assert.equal(resumedContent, "keep-going\n");
-  assert.match(resumedResult.assistantText, /continued the interrupted task/i);
+  assert.match(resumedResult.assistantText, /continued the interrupted task|已处理 `resume\.txt`|已完成/u);
   assert.doesNotMatch(resumedResult.assistantText, /^(可以|可以继续|好的|sure|okay)\b/i);
   assert.ok(
     resumedResult.toolSummaries.some((summary) => summary.startsWith("resume.txt · created")),
@@ -3467,7 +3735,7 @@ async function verifyBareContinueResumesInterruptedTask() {
 
   const resumedContent = await readFile(join(workspace, "continue.txt"), "utf8");
   assert.equal(resumedContent, "resumed\n");
-  assert.match(resumedResult.assistantText, /resumed the interrupted task/i);
+  assert.match(resumedResult.assistantText, /resumed the interrupted task|已处理 `continue\.txt`|已完成/u);
   assert.doesNotMatch(resumedResult.assistantText, /^(可以|可以继续|好的|sure|okay)\b/i);
   assert.ok(
     resumedResult.toolSummaries.some((summary) => summary.startsWith("continue.txt · created")),
@@ -3577,7 +3845,7 @@ async function verifyBareAffirmativeResumesInterruptedTask() {
 
   const resumedContent = await readFile(join(workspace, "affirmative.txt"), "utf8");
   assert.equal(resumedContent, "resumed\n");
-  assert.match(resumedResult.assistantText, /resumed the interrupted task/i);
+  assert.match(resumedResult.assistantText, /resumed the interrupted task|已处理 `affirmative\.txt`|已完成/u);
   assert.doesNotMatch(resumedResult.assistantText, /^(可以|可以继续|好的|sure|okay)\b/i);
   assert.ok(
     resumedResult.toolSummaries.some((summary) => summary.startsWith("affirmative.txt · created")),
@@ -3787,7 +4055,9 @@ async function verifyBareAffirmativeResumesInterruptedProposalExecution() {
   );
 }
 
-async function verifyVagueRewriteResumesInterruptedProposalExecution() {
+async function verifyVagueRewriteResumesInterruptedProposalExecution(
+  followUpPrompt: "你能帮我重新写个项目吗" | "帮我重写项目"
+) {
   const root = await mkdtemp(join(tmpdir(), "selfme-agent-vague-rewrite-proposal-stop-"));
   const workspace = join(root, "workspace");
   const transcriptPath = join(root, "transcript.jsonl");
@@ -3811,7 +4081,7 @@ async function verifyVagueRewriteResumesInterruptedProposalExecution() {
     async *streamResponse(input: ProviderStreamInput): AsyncIterable<ProviderStreamChunk> {
       const proposalPrompt = "看看项目，但先别改，告诉我如果重写 node-todo 你会怎么做。";
       const executeProposalPrompt = 'The user replied "可以" and wants you to execute the immediately previous rewrite proposal now.';
-      const resumePrompt = 'The user replied "你能帮我重新写个项目吗" and wants to continue the most recent unfinished task.';
+      const resumePrompt = `The user replied "${followUpPrompt}" and wants to continue the most recent unfinished task.`;
 
       if (input.content === proposalPrompt) {
         yield {
@@ -3962,7 +4232,7 @@ async function verifyVagueRewriteResumesInterruptedProposalExecution() {
     bus,
     transcriptStore,
     sessionId: session.sessionId,
-    prompt: "你能帮我重新写个项目吗"
+    prompt: followUpPrompt
   });
 
   const resumedAppContent = await readFile(join(workspace, "node-todo", "app.js"), "utf8");
@@ -3987,6 +4257,209 @@ async function verifyVagueRewriteResumesInterruptedProposalExecution() {
   assert.ok(
     resumedResult.toolSummaries.some((summary) => summary.startsWith("node-todo/views/index.ejs:1-1 · updated")),
     "vague rewrite resume after proposal execution should finish the pending view edit"
+  );
+}
+
+async function verifyAlternateVagueRewriteResumesInterruptedProposalExecution() {
+  const root = await mkdtemp(join(tmpdir(), "selfme-agent-vague-rewrite-proposal-stop-alt-"));
+  const workspace = join(root, "workspace");
+  const transcriptPath = join(root, "transcript.jsonl");
+  const logsPath = join(root, "logs.jsonl");
+  await mkdir(join(workspace, "node-todo", "views"), { recursive: true });
+
+  await writeFile(
+    join(workspace, "node-todo", "app.js"),
+    'const PORT = 3000;\nconsole.log(PORT);\n',
+    "utf8"
+  );
+  await writeFile(
+    join(workspace, "node-todo", "views", "index.ejs"),
+    '<input name="title" />\n',
+    "utf8"
+  );
+
+  class AlternateVagueRewriteProposalResumeProvider implements ProviderClient {
+    readonly name = "alternate-vague-rewrite-proposal-resume-provider";
+
+    async *streamResponse(input: ProviderStreamInput): AsyncIterable<ProviderStreamChunk> {
+      const proposalPrompt = "看看项目，但先别改，告诉我如果重写 node-todo 你会怎么做。";
+      const executeProposalPrompt = 'The user replied "可以" and wants you to execute the immediately previous rewrite proposal now.';
+      const resumePrompt = 'The user replied "重写这个项目" and wants to continue the most recent unfinished task.';
+
+      if (input.content === proposalPrompt) {
+        yield {
+          delta: [
+            "If you want, I can rewrite node-todo by updating node-todo/app.js and node-todo/views/index.ejs.",
+            "I would first switch node-todo/app.js to process.env.PORT, then add maxlength 100 in node-todo/views/index.ejs."
+          ].join(" ")
+        };
+        return;
+      }
+
+      if (input.content.startsWith(executeProposalPrompt)) {
+        yield {
+          delta: toolCall("files", {
+            path: "node-todo/app.js",
+            startLine: 1,
+            endLine: 2
+          })
+        };
+        return;
+      }
+
+      if (input.content.startsWith(`Original user request: ${executeProposalPrompt}`)) {
+        const toolName = extractLine(input.content, "Tool:") ?? extractLine(input.content, "Latest tool:");
+        const summary = extractLine(input.content, "Summary:") ?? extractLine(input.content, "Latest summary:") ?? "";
+
+        if (toolName === "files" && /node-todo\/app\.js/.test(summary)) {
+          yield {
+            delta: toolCall("edit", {
+              path: "node-todo/app.js",
+              startLine: 1,
+              endLine: 1,
+              replacement: "const PORT = Number(process.env.PORT || 3000);"
+            })
+          };
+          return;
+        }
+
+        if (toolName === "edit" && /node-todo\/app\.js/.test(summary)) {
+          await waitForProviderDelay(input.signal, 300);
+          yield {
+            delta: toolCall("files", {
+              path: "node-todo/views/index.ejs",
+              startLine: 1,
+              endLine: 1
+            })
+          };
+          return;
+        }
+      }
+
+      if (input.content.startsWith(resumePrompt)) {
+        assert.match(input.content, /Resume that task now instead of treating this as a broad rewrite follow-up\./);
+        assert.match(input.content, /Original task: 看看项目，但先别改，告诉我如果重写 node-todo 你会怎么做。/);
+        assert.match(input.content, /Latest tool in context: edit/);
+        assert.match(input.content, /Latest tool summary in context: node-todo\/app\.js:1-1 · updated/);
+        yield {
+          delta: toolCall("files", {
+            path: "node-todo/views/index.ejs",
+            startLine: 1,
+            endLine: 1
+          })
+        };
+        return;
+      }
+
+      if (input.content.startsWith(`Original user request: ${resumePrompt}`)) {
+        const toolName = extractLine(input.content, "Tool:") ?? extractLine(input.content, "Latest tool:");
+        const summary = extractLine(input.content, "Summary:") ?? extractLine(input.content, "Latest summary:") ?? "";
+
+        if (toolName === "files" && /node-todo\/views\/index\.ejs/.test(summary)) {
+          yield {
+            delta: toolCall("edit", {
+              path: "node-todo/views/index.ejs",
+              startLine: 1,
+              endLine: 1,
+              replacement: '<input name="title" maxlength="100" />'
+            })
+          };
+          return;
+        }
+
+        if (toolName === "edit" && /node-todo\/views\/index\.ejs/.test(summary)) {
+          yield { delta: "Completed the interrupted rewrite by continuing directly with node-todo/views/index.ejs." };
+          return;
+        }
+      }
+
+      yield { delta: "ok" };
+    }
+  }
+
+  const bus = new EventBus();
+  const transcriptStore = new TranscriptStore(transcriptPath);
+  const logStore = new LogStore(logsPath);
+  await transcriptStore.ensureInitialized();
+  await logStore.ensureInitialized();
+
+  const session = createDefaultSessionRecord(workspace, VERSION);
+  session.model = "regression-stub";
+
+  const runtime = new AgentRuntime({
+    bus,
+    provider: new AlternateVagueRewriteProposalResumeProvider(),
+    tools: new InMemoryToolRegistry(),
+    session,
+    transcriptStore,
+    logStore
+  });
+  await runtime.start();
+
+  const proposalResult = await runAgentTask({
+    bus,
+    transcriptStore,
+    sessionId: session.sessionId,
+    prompt: "看看项目，但先别改，告诉我如果重写 node-todo 你会怎么做。"
+  });
+  assert.match(proposalResult.assistantText, /node-todo\/app\.js/i);
+  assert.match(proposalResult.assistantText, /node-todo\/views\/index\.ejs/i);
+
+  const firstRunCompletion = waitForAssistantTaskCompletion(bus, session.sessionId);
+  const firstEditCompleted = new Promise<void>((resolve) => {
+    const off = bus.on("tool.execution.completed", (event) => {
+      if (event.sessionId !== session.sessionId || !event.payload.summary.startsWith("node-todo/app.js:1-1 · updated")) {
+        return;
+      }
+
+      off();
+      resolve();
+    });
+  });
+
+  bus.emit(createUserMessageSubmittedEvent({
+    sessionId: session.sessionId,
+    content: "可以"
+  }));
+
+  await firstEditCompleted;
+  bus.emit(createRuntimeInterruptRequestedEvent({
+    sessionId: session.sessionId,
+    reason: "cancel"
+  }));
+
+  const cancelledTask = await firstRunCompletion;
+  assert.equal(cancelledTask.payload.state, "cancelled");
+
+  const resumedResult = await runAgentTask({
+    bus,
+    transcriptStore,
+    sessionId: session.sessionId,
+    prompt: "重写这个项目"
+  });
+
+  const resumedAppContent = await readFile(join(workspace, "node-todo", "app.js"), "utf8");
+  const resumedViewContent = await readFile(join(workspace, "node-todo", "views", "index.ejs"), "utf8");
+  assert.match(resumedAppContent, /process\.env\.PORT/);
+  assert.match(resumedViewContent, /maxlength="100"/);
+  assert.doesNotMatch(resumedResult.assistantText, /^(可以|可以继续|好的|sure|okay)\b/i);
+  assert.equal(
+    resumedResult.toolSummaries.some((summary) => summary.startsWith("node-todo/app.js:1-2")),
+    false,
+    "alternate vague rewrite resume after proposal execution should not reread app.js from the original proposal"
+  );
+  assert.equal(
+    resumedResult.toolSummaries.some((summary) => summary.startsWith("node-todo/app.js:1-1 · updated")),
+    false,
+    "alternate vague rewrite resume after proposal execution should not reapply the app.js edit"
+  );
+  assert.ok(
+    resumedResult.toolSummaries.some((summary) => summary.startsWith("node-todo/views/index.ejs:1-1")),
+    "alternate vague rewrite resume after proposal execution should continue into the pending view file"
+  );
+  assert.ok(
+    resumedResult.toolSummaries.some((summary) => summary.startsWith("node-todo/views/index.ejs:1-1 · updated")),
+    "alternate vague rewrite resume after proposal execution should finish the pending view edit"
   );
 }
 
@@ -6383,6 +6856,12 @@ async function verifyProjectInspectionProposalReplyContinuesExecution() {
     'const app = {};\nmodule.exports = app;\n',
     "utf8"
   );
+  await mkdir(join(workspace, "node-todo", "views"), { recursive: true });
+  await writeFile(
+    join(workspace, "node-todo", "views", "index.ejs"),
+    '<input name="title" />\n',
+    "utf8"
+  );
 
   class ProjectInspectionProposalReplyProvider implements ProviderClient {
     readonly name = "project-inspection-proposal-reply-provider";
@@ -6547,7 +7026,24 @@ async function verifyWholeProjectInspectionProposalReplyContinuesExecution() {
         }
 
         if (toolName === "files" && /node-todo\/app\.js/.test(summary)) {
+          if (/You are in the middle of a whole-project inspection request\./.test(input.content)) {
+            assert.match(input.content, /Likely inspection file: node-todo\/views\/index\.ejs/);
+            yield {
+              delta: toolCall("files", {
+                path: "node-todo/views/index.ejs",
+                startLine: 1,
+                endLine: 20
+              })
+            };
+            return;
+          }
+
           yield { delta: "我已经继续看完 node-todo/app.js。" };
+          return;
+        }
+
+        if (toolName === "files" && /node-todo\/views\/index\.ejs/.test(summary)) {
+          yield { delta: "我已经继续看完 node-todo/app.js 和 node-todo/views/index.ejs。" };
           return;
         }
       }
@@ -6591,6 +7087,3517 @@ async function verifyWholeProjectInspectionProposalReplyContinuesExecution() {
   assert.ok(
     result.toolSummaries.some((summary) => summary.startsWith("node-todo/app.js:1-2")),
     "expected whole-project inspection proposal reply flow to continue into app.js"
+  );
+  assert.ok(
+    result.toolSummaries.some((summary) => summary.startsWith("node-todo/views/index.ejs:1-1")),
+    "expected whole-project inspection proposal reply flow to continue into views/index.ejs"
+  );
+}
+
+async function verifyProjectInspectionPromptSwitchesAfterEntryRead() {
+  const root = await mkdtemp(join(tmpdir(), "selfme-agent-project-inspection-prompt-switch-"));
+  const workspace = join(root, "workspace");
+  const transcriptPath = join(root, "transcript.jsonl");
+  const logsPath = join(root, "logs.jsonl");
+  await mkdir(join(workspace, "node-todo"), { recursive: true });
+
+  await writeFile(
+    join(workspace, "node-todo", "package.json"),
+    '{\n  "name": "node-todo",\n  "version": "1.0.0"\n}\n',
+    "utf8"
+  );
+  await writeFile(
+    join(workspace, "node-todo", "app.js"),
+    'const app = {};\nmodule.exports = app;\n',
+    "utf8"
+  );
+
+  class ProjectInspectionPromptSwitchProvider implements ProviderClient {
+    readonly name = "project-inspection-prompt-switch-provider";
+
+    async *streamResponse(input: ProviderStreamInput): AsyncIterable<ProviderStreamChunk> {
+      const originalPrompt = "看看项目";
+
+      if (input.content === originalPrompt) {
+        yield {
+          delta: toolCall("shell", {
+            command: "pwd && ls -la && find . -maxdepth 2 -type f | sed 's#^./##' | sort | head -200"
+          })
+        };
+        return;
+      }
+
+      if (input.content.startsWith(`Original user request: ${originalPrompt}`)) {
+        const toolName = extractLine(input.content, "Tool:") ?? extractLine(input.content, "Latest tool:");
+        const summary = extractLine(input.content, "Summary:") ?? extractLine(input.content, "Latest summary:") ?? "";
+
+        if (toolName === "shell") {
+          assert.match(input.content, /Continue the inspection now by reading the most likely project entry from the listing\./);
+          yield {
+            delta: toolCall("files", {
+              path: "node-todo/package.json",
+              startLine: 1,
+              endLine: 20
+            })
+          };
+          return;
+        }
+
+        if (toolName === "files" && /node-todo\/package\.json/.test(summary)) {
+          assert.match(input.content, /You already inspected a concrete project entry/);
+          assert.match(input.content, /Continue the inspection now by reading the most likely implementation file for this project\./);
+          assert.doesNotMatch(input.content, /Continue the inspection now by reading the most likely project entry from the listing\./);
+          yield {
+            delta: toolCall("files", {
+              path: "node-todo/app.js",
+              startLine: 1,
+              endLine: 20
+            })
+          };
+          return;
+        }
+
+        if (toolName === "files" && /node-todo\/app\.js/.test(summary)) {
+          yield { delta: "我已经继续读了 node-todo/app.js。" };
+          return;
+        }
+      }
+
+      yield { delta: "ok" };
+    }
+  }
+
+  const bus = new EventBus();
+  const transcriptStore = new TranscriptStore(transcriptPath);
+  const logStore = new LogStore(logsPath);
+  await transcriptStore.ensureInitialized();
+  await logStore.ensureInitialized();
+
+  const session = createDefaultSessionRecord(workspace, VERSION);
+  session.model = "regression-stub";
+
+  const runtime = new AgentRuntime({
+    bus,
+    provider: new ProjectInspectionPromptSwitchProvider(),
+    tools: new InMemoryToolRegistry(),
+    session,
+    transcriptStore,
+    logStore
+  });
+  await runtime.start();
+
+  const result = await runAgentTask({
+    bus,
+    transcriptStore,
+    sessionId: session.sessionId,
+    prompt: "看看项目"
+  });
+
+  assert.ok(
+    result.toolSummaries.some((summary) => summary.startsWith("node-todo/package.json:1-3")),
+    "expected prompt-switch inspection to read the project entry"
+  );
+  assert.ok(
+    result.toolSummaries.some((summary) => summary.startsWith("node-todo/app.js:1-2")),
+    "expected prompt-switch inspection to continue into app.js after the entry"
+  );
+}
+
+async function verifyWholeProjectInspectionFollowsLocalImplementationImport() {
+  const root = await mkdtemp(join(tmpdir(), "selfme-agent-whole-project-import-follow-"));
+  const workspace = join(root, "workspace");
+  const transcriptPath = join(root, "transcript.jsonl");
+  const logsPath = join(root, "logs.jsonl");
+  await mkdir(join(workspace, "demo-app", "src"), { recursive: true });
+
+  await writeFile(
+    join(workspace, "demo-app", "package.json"),
+    '{\n  "name": "demo-app",\n  "version": "1.0.0"\n}\n',
+    "utf8"
+  );
+  await writeFile(
+    join(workspace, "demo-app", "app.js"),
+    'import { createServer } from "./src/server.js";\ncreateServer();\n',
+    "utf8"
+  );
+  await writeFile(
+    join(workspace, "demo-app", "src", "server.js"),
+    'export function createServer() {\n  return "ok";\n}\n',
+    "utf8"
+  );
+
+  class WholeProjectImportFollowProvider implements ProviderClient {
+    readonly name = "whole-project-import-follow-provider";
+
+    async *streamResponse(input: ProviderStreamInput): AsyncIterable<ProviderStreamChunk> {
+      const originalPrompt = "你能一次性都帮我看完整个项目吗";
+
+      if (input.content === originalPrompt) {
+        yield {
+          delta: toolCall("shell", {
+            command: "pwd && ls -la && find . -maxdepth 3 -type f | sed 's#^./##' | sort | head -200"
+          })
+        };
+        return;
+      }
+
+      if (input.content.startsWith(`Original user request: ${originalPrompt}`)) {
+        const toolName = extractLine(input.content, "Tool:") ?? extractLine(input.content, "Latest tool:");
+        const summary = extractLine(input.content, "Summary:") ?? extractLine(input.content, "Latest summary:") ?? "";
+
+        if (toolName === "shell") {
+          if (/You are in the middle of a concrete project inspection request\./.test(input.content)) {
+            assert.match(input.content, /Likely project entry: demo-app\/package\.json/);
+            yield {
+              delta: toolCall("files", {
+                path: "demo-app/package.json",
+                startLine: 1,
+                endLine: 20
+              })
+            };
+            return;
+          }
+
+          yield { delta: "我先看了工作区列表，当前最像完整项目的是 demo-app。" };
+          return;
+        }
+
+        if (toolName === "files" && /demo-app\/package\.json/.test(summary)) {
+          if (/You are in the middle of a whole-project inspection request\./.test(input.content)) {
+            assert.match(input.content, /Likely inspection file: demo-app\/app\.js/);
+            yield {
+              delta: toolCall("files", {
+                path: "demo-app/app.js",
+                startLine: 1,
+                endLine: 20
+              })
+            };
+            return;
+          }
+
+          yield { delta: "我已经继续读了 demo-app/package.json，下一步会看核心实现。" };
+          return;
+        }
+
+        if (toolName === "files" && /demo-app\/app\.js/.test(summary)) {
+          if (/You are in the middle of a whole-project inspection request\./.test(input.content)) {
+            assert.match(input.content, /Likely inspection file: demo-app\/src\/server\.js/);
+            yield {
+              delta: toolCall("files", {
+                path: "demo-app/src/server.js",
+                startLine: 1,
+                endLine: 20
+              })
+            };
+            return;
+          }
+
+          yield { delta: "我已经继续读了 demo-app/app.js。" };
+          return;
+        }
+
+        if (toolName === "files" && /demo-app\/src\/server\.js/.test(summary)) {
+          yield { delta: "我已经沿着 app.js 里的本地实现引用继续读到了 demo-app/src/server.js。" };
+          return;
+        }
+      }
+
+      yield { delta: "ok" };
+    }
+  }
+
+  const bus = new EventBus();
+  const transcriptStore = new TranscriptStore(transcriptPath);
+  const logStore = new LogStore(logsPath);
+  await transcriptStore.ensureInitialized();
+  await logStore.ensureInitialized();
+
+  const session = createDefaultSessionRecord(workspace, VERSION);
+  session.model = "regression-stub";
+
+  const runtime = new AgentRuntime({
+    bus,
+    provider: new WholeProjectImportFollowProvider(),
+    tools: new InMemoryToolRegistry(),
+    session,
+    transcriptStore,
+    logStore
+  });
+  await runtime.start();
+
+  const result = await runAgentTask({
+    bus,
+    transcriptStore,
+    sessionId: session.sessionId,
+    prompt: "你能一次性都帮我看完整个项目吗"
+  });
+
+  assert.match(result.assistantText, /demo-app|src\/server\.js/i);
+  assert.ok(
+    result.toolSummaries.some((summary) => summary.startsWith("demo-app/package.json:1-3")),
+    "expected import-follow whole-project inspection to start from the project entry"
+  );
+  assert.ok(
+    result.toolSummaries.some((summary) => summary.startsWith("demo-app/app.js:1-2")),
+    "expected import-follow whole-project inspection to continue into app.js"
+  );
+  assert.ok(
+    result.toolSummaries.some((summary) => summary.startsWith("demo-app/src/server.js:1-3")),
+    "expected import-follow whole-project inspection to continue along the local implementation import"
+  );
+}
+
+async function verifyWholeProjectImportFollowResumesAtPendingImplementation(
+  followUpPrompt: "帮我看看整个项目" | "还能继续吗"
+) {
+  const root = await mkdtemp(join(tmpdir(), "selfme-agent-whole-project-import-resume-"));
+  const workspace = join(root, "workspace");
+  const transcriptPath = join(root, "transcript.jsonl");
+  const logsPath = join(root, "logs.jsonl");
+  await mkdir(join(workspace, "demo-app", "src"), { recursive: true });
+
+  await writeFile(
+    join(workspace, "demo-app", "package.json"),
+    '{\n  "name": "demo-app",\n  "version": "1.0.0"\n}\n',
+    "utf8"
+  );
+  await writeFile(
+    join(workspace, "demo-app", "app.js"),
+    'import { createServer } from "./src/server.js";\ncreateServer();\n',
+    "utf8"
+  );
+  await writeFile(
+    join(workspace, "demo-app", "src", "server.js"),
+    'export function createServer() {\n  return "ok";\n}\n',
+    "utf8"
+  );
+
+  class WholeProjectImportResumeProvider implements ProviderClient {
+    readonly name = "whole-project-import-resume-provider";
+
+    async *streamResponse(input: ProviderStreamInput): AsyncIterable<ProviderStreamChunk> {
+      const originalPrompt = "你能一次性都帮我看完整个项目吗";
+
+      if (input.content === originalPrompt) {
+        yield {
+          delta: toolCall("shell", {
+            command: "pwd && ls -la && find . -maxdepth 3 -type f | sed 's#^./##' | sort | head -200"
+          })
+        };
+        return;
+      }
+
+      if (input.content.startsWith(`Original user request: ${originalPrompt}`)) {
+        const toolName = extractLine(input.content, "Tool:") ?? extractLine(input.content, "Latest tool:");
+        const summary = extractLine(input.content, "Summary:") ?? extractLine(input.content, "Latest summary:") ?? "";
+
+        if (toolName === "shell") {
+          if (/You are in the middle of a concrete project inspection request\./.test(input.content)) {
+            assert.match(input.content, /Likely project entry: demo-app\/package\.json/);
+            yield {
+              delta: toolCall("files", {
+                path: "demo-app/package.json",
+                startLine: 1,
+                endLine: 20
+              })
+            };
+            return;
+          }
+
+          yield { delta: "我先看了工作区列表，当前最像完整项目的是 demo-app。" };
+          return;
+        }
+
+        if (toolName === "files" && /demo-app\/package\.json/.test(summary)) {
+          if (/You are in the middle of a whole-project inspection request\./.test(input.content)) {
+            assert.match(input.content, /Likely inspection file: demo-app\/app\.js/);
+            yield {
+              delta: toolCall("files", {
+                path: "demo-app/app.js",
+                startLine: 1,
+                endLine: 20
+              })
+            };
+            return;
+          }
+
+          yield { delta: "我已经继续读了 demo-app/package.json，下一步会看核心实现。" };
+          return;
+        }
+
+        if (toolName === "files" && /demo-app\/app\.js/.test(summary)) {
+          if (/You are in the middle of a whole-project inspection request\./.test(input.content)) {
+            assert.match(input.content, /Likely inspection file: demo-app\/src\/server\.js/);
+            yield { delta: "我已经沿着 demo-app/app.js 里的本地实现引用定位到 demo-app/src/server.js，下一步会继续检查这个文件。" };
+            return;
+          }
+
+          yield { delta: "我已经继续读了 demo-app/app.js。" };
+          return;
+        }
+      }
+
+      if (input.content.startsWith(`The user replied "${followUpPrompt}" and wants to continue the most recent unfinished task.`)) {
+        assert.match(input.content, /Original task: 你能一次性都帮我看完整个项目吗/);
+        if (followUpPrompt === "帮我看看整个项目") {
+          assert.match(input.content, /Resume that task now instead of treating this as a broad inspection follow-up\./);
+        } else {
+          assert.match(input.content, /Resume that task now instead of treating this as a discussion question\./);
+        }
+        assert.match(input.content, /Pending next step target: demo-app\/src\/server\.js/);
+        assert.match(input.content, /Latest tool in context: files/);
+        assert.match(input.content, /Latest tool summary in context: demo-app\/app\.js:1-2/);
+        yield {
+          delta: toolCall("files", {
+            path: "demo-app/src/server.js",
+            startLine: 1,
+            endLine: 20
+          })
+        };
+        return;
+      }
+
+      if (input.content.startsWith(`Original user request: The user replied "${followUpPrompt}" and wants to continue the most recent unfinished task.`)) {
+        const toolName = extractLine(input.content, "Tool:") ?? extractLine(input.content, "Latest tool:");
+        const summary = extractLine(input.content, "Summary:") ?? extractLine(input.content, "Latest summary:") ?? "";
+
+        if (toolName === "files" && /demo-app\/src\/server\.js/.test(summary)) {
+          yield { delta: "我已经恢复执行，并沿着本地实现引用继续检查了 demo-app/src/server.js。" };
+          return;
+        }
+      }
+
+      yield { delta: "ok" };
+    }
+  }
+
+  const bus = new EventBus();
+  const transcriptStore = new TranscriptStore(transcriptPath);
+  const logStore = new LogStore(logsPath);
+  await transcriptStore.ensureInitialized();
+  await logStore.ensureInitialized();
+
+  const session = createDefaultSessionRecord(workspace, VERSION);
+  session.model = "regression-stub";
+
+  const runtime = new AgentRuntime({
+    bus,
+    provider: new WholeProjectImportResumeProvider(),
+    tools: new InMemoryToolRegistry(),
+    session,
+    transcriptStore,
+    logStore
+  });
+  await runtime.start();
+
+  const completionPromise = waitForAssistantTaskCompletion(bus, session.sessionId);
+  const stageSummaryPromise = waitForAssistantDeltaContaining(
+    bus,
+    session.sessionId,
+    /demo-app\/src\/server\.js/
+  );
+
+  bus.emit(createUserMessageSubmittedEvent({
+    sessionId: session.sessionId,
+    content: "你能一次性都帮我看完整个项目吗"
+  }));
+
+  await stageSummaryPromise;
+  bus.emit(createRuntimeInterruptRequestedEvent({
+    sessionId: session.sessionId,
+    reason: "cancel"
+  }));
+
+  const cancelledTask = await completionPromise;
+  assert.equal(cancelledTask.payload.state, "cancelled");
+
+  const resumedResult = await runAgentTask({
+    bus,
+    transcriptStore,
+    sessionId: session.sessionId,
+    prompt: followUpPrompt
+  });
+
+  assert.match(resumedResult.assistantText, /src\/server\.js|本地实现引用/);
+  assert.equal(
+    resumedResult.toolSummaries.some((summary) => summary.startsWith("demo-app/package.json:1-3")),
+    false,
+    "whole-project import-follow resume should not restart from package.json"
+  );
+  assert.equal(
+    resumedResult.toolSummaries.some((summary) => summary.startsWith("demo-app/app.js:1-2")),
+    false,
+    "whole-project import-follow resume should not reread app.js after the pending implementation target is already known"
+  );
+  assert.ok(
+    resumedResult.toolSummaries.some((summary) => summary.startsWith("demo-app/src/server.js:1-3")),
+    "whole-project import-follow resume should continue directly into the pending implementation file"
+  );
+}
+
+async function verifyWholeProjectInspectionPrefersTypeScriptImportSibling() {
+  const root = await mkdtemp(join(tmpdir(), "selfme-agent-whole-project-ts-import-follow-"));
+  const workspace = join(root, "workspace");
+  const transcriptPath = join(root, "transcript.jsonl");
+  const logsPath = join(root, "logs.jsonl");
+  await mkdir(join(workspace, "demo-ts", "src"), { recursive: true });
+
+  await writeFile(
+    join(workspace, "demo-ts", "package.json"),
+    '{\n  "name": "demo-ts",\n  "version": "1.0.0"\n}\n',
+    "utf8"
+  );
+  await writeFile(
+    join(workspace, "demo-ts", "src", "app.ts"),
+    'import { createServer } from "./server";\ncreateServer();\n',
+    "utf8"
+  );
+  await writeFile(
+    join(workspace, "demo-ts", "src", "server.ts"),
+    'export function createServer() {\n  return "ok";\n}\n',
+    "utf8"
+  );
+
+  class WholeProjectTypeScriptImportFollowProvider implements ProviderClient {
+    readonly name = "whole-project-typescript-import-follow-provider";
+
+    async *streamResponse(input: ProviderStreamInput): AsyncIterable<ProviderStreamChunk> {
+      const originalPrompt = "你能一次性都帮我看完整个项目吗";
+
+      if (input.content === originalPrompt) {
+        yield {
+          delta: toolCall("shell", {
+            command: "pwd && ls -la && find . -maxdepth 3 -type f | sed 's#^./##' | sort | head -200"
+          })
+        };
+        return;
+      }
+
+      if (input.content.startsWith(`Original user request: ${originalPrompt}`)) {
+        const toolName = extractLine(input.content, "Tool:") ?? extractLine(input.content, "Latest tool:");
+        const summary = extractLine(input.content, "Summary:") ?? extractLine(input.content, "Latest summary:") ?? "";
+
+        if (toolName === "shell") {
+          if (/You are in the middle of a concrete project inspection request\./.test(input.content)) {
+            assert.match(input.content, /Likely project entry: demo-ts\/package\.json/);
+            yield {
+              delta: toolCall("files", {
+                path: "demo-ts/package.json",
+                startLine: 1,
+                endLine: 20
+              })
+            };
+            return;
+          }
+
+          yield { delta: "我先看了工作区列表，当前最像完整项目的是 demo-ts。" };
+          return;
+        }
+
+        if (toolName === "files" && /demo-ts\/package\.json/.test(summary)) {
+          if (/You are in the middle of a whole-project inspection request\./.test(input.content)) {
+            yield {
+              delta: toolCall("files", {
+                path: "demo-ts/src/app.ts",
+                startLine: 1,
+                endLine: 20
+              })
+            };
+            return;
+          }
+
+          yield { delta: "我已经继续读了 demo-ts/package.json，下一步会看核心实现。" };
+          return;
+        }
+
+        if (toolName === "files" && /demo-ts\/src\/app\.ts/.test(summary)) {
+          if (/You are in the middle of a whole-project inspection request\./.test(input.content)) {
+            assert.match(input.content, /Likely inspection file: demo-ts\/src\/server\.ts/);
+            yield {
+              delta: toolCall("files", {
+                path: "demo-ts/src/server.ts",
+                startLine: 1,
+                endLine: 20
+              })
+            };
+            return;
+          }
+
+          yield { delta: "我已经继续读了 demo-ts/src/app.ts。" };
+          return;
+        }
+
+        if (toolName === "files" && /demo-ts\/src\/server\.ts/.test(summary)) {
+          yield { delta: "我已经沿着 TypeScript 入口里的本地实现引用继续读到了 demo-ts/src/server.ts。" };
+          return;
+        }
+      }
+
+      yield { delta: "ok" };
+    }
+  }
+
+  const bus = new EventBus();
+  const transcriptStore = new TranscriptStore(transcriptPath);
+  const logStore = new LogStore(logsPath);
+  await transcriptStore.ensureInitialized();
+  await logStore.ensureInitialized();
+
+  const session = createDefaultSessionRecord(workspace, VERSION);
+  session.model = "regression-stub";
+
+  const runtime = new AgentRuntime({
+    bus,
+    provider: new WholeProjectTypeScriptImportFollowProvider(),
+    tools: new InMemoryToolRegistry(),
+    session,
+    transcriptStore,
+    logStore
+  });
+  await runtime.start();
+
+  const result = await runAgentTask({
+    bus,
+    transcriptStore,
+    sessionId: session.sessionId,
+    prompt: "你能一次性都帮我看完整个项目吗"
+  });
+
+  assert.match(result.assistantText, /demo-ts|server\.ts/i);
+  assert.ok(
+    result.toolSummaries.some((summary) => summary.startsWith("demo-ts/package.json:1-3")),
+    "expected TypeScript import-follow inspection to start from the project entry"
+  );
+  assert.ok(
+    result.toolSummaries.some((summary) => summary.startsWith("demo-ts/src/app.ts:1-2")),
+    "expected TypeScript import-follow inspection to continue into src/app.ts"
+  );
+  assert.ok(
+    result.toolSummaries.some((summary) => summary.startsWith("demo-ts/src/server.ts:1-3")),
+    "expected TypeScript import-follow inspection to prefer the TypeScript sibling target"
+  );
+}
+
+async function verifyWholeProjectTypeScriptImportFollowResumesAtPendingImplementation() {
+  const root = await mkdtemp(join(tmpdir(), "selfme-agent-whole-project-ts-import-resume-"));
+  const workspace = join(root, "workspace");
+  const transcriptPath = join(root, "transcript.jsonl");
+  const logsPath = join(root, "logs.jsonl");
+  await mkdir(join(workspace, "demo-ts", "src"), { recursive: true });
+
+  await writeFile(
+    join(workspace, "demo-ts", "package.json"),
+    '{\n  "name": "demo-ts",\n  "version": "1.0.0"\n}\n',
+    "utf8"
+  );
+  await writeFile(
+    join(workspace, "demo-ts", "src", "app.ts"),
+    'import { createServer } from "./server";\ncreateServer();\n',
+    "utf8"
+  );
+  await writeFile(
+    join(workspace, "demo-ts", "src", "server.ts"),
+    'export function createServer() {\n  return "ok";\n}\n',
+    "utf8"
+  );
+
+  class WholeProjectTypeScriptImportResumeProvider implements ProviderClient {
+    readonly name = "whole-project-typescript-import-resume-provider";
+
+    async *streamResponse(input: ProviderStreamInput): AsyncIterable<ProviderStreamChunk> {
+      const originalPrompt = "你能一次性都帮我看完整个项目吗";
+
+      if (input.content === originalPrompt) {
+        yield {
+          delta: toolCall("shell", {
+            command: "pwd && ls -la && find . -maxdepth 3 -type f | sed 's#^./##' | sort | head -200"
+          })
+        };
+        return;
+      }
+
+      if (input.content.startsWith(`Original user request: ${originalPrompt}`)) {
+        const toolName = extractLine(input.content, "Tool:") ?? extractLine(input.content, "Latest tool:");
+        const summary = extractLine(input.content, "Summary:") ?? extractLine(input.content, "Latest summary:") ?? "";
+
+        if (toolName === "shell") {
+          if (/You are in the middle of a concrete project inspection request\./.test(input.content)) {
+            assert.match(input.content, /Likely project entry: demo-ts\/package\.json/);
+            yield {
+              delta: toolCall("files", {
+                path: "demo-ts/package.json",
+                startLine: 1,
+                endLine: 20
+              })
+            };
+            return;
+          }
+
+          yield { delta: "我先看了工作区列表，当前最像完整项目的是 demo-ts。" };
+          return;
+        }
+
+        if (toolName === "files" && /demo-ts\/package\.json/.test(summary)) {
+          if (/You are in the middle of a whole-project inspection request\./.test(input.content)) {
+            assert.match(input.content, /Likely inspection file: demo-ts\/src\/app\.ts/);
+            yield {
+              delta: toolCall("files", {
+                path: "demo-ts/src/app.ts",
+                startLine: 1,
+                endLine: 20
+              })
+            };
+            return;
+          }
+
+          yield { delta: "我已经继续读了 demo-ts/package.json，下一步会看核心实现。" };
+          return;
+        }
+
+        if (toolName === "files" && /demo-ts\/src\/app\.ts/.test(summary)) {
+          if (/You are in the middle of a whole-project inspection request\./.test(input.content)) {
+            assert.match(input.content, /Likely inspection file: demo-ts\/src\/server\.ts/);
+            yield { delta: "我已经沿着 demo-ts/src/app.ts 里的本地实现引用定位到 demo-ts/src/server.ts，下一步会继续检查这个文件。" };
+            return;
+          }
+
+          yield { delta: "我已经继续读了 demo-ts/src/app.ts。" };
+          return;
+        }
+      }
+
+      if (input.content.startsWith('The user replied "帮我看看整个项目" and wants to continue the most recent unfinished task.')) {
+        assert.match(input.content, /Original task: 你能一次性都帮我看完整个项目吗/);
+        assert.match(input.content, /Resume that task now instead of treating this as a broad inspection follow-up\./);
+        assert.match(input.content, /Pending next step target: demo-ts\/src\/server\.ts/);
+        assert.match(input.content, /Latest tool in context: files/);
+        assert.match(input.content, /Latest tool summary in context: demo-ts\/src\/app\.ts:1-2/);
+        yield {
+          delta: toolCall("files", {
+            path: "demo-ts/src/server.ts",
+            startLine: 1,
+            endLine: 20
+          })
+        };
+        return;
+      }
+
+      if (input.content.startsWith('Original user request: The user replied "帮我看看整个项目" and wants to continue the most recent unfinished task.')) {
+        const toolName = extractLine(input.content, "Tool:") ?? extractLine(input.content, "Latest tool:");
+        const summary = extractLine(input.content, "Summary:") ?? extractLine(input.content, "Latest summary:") ?? "";
+
+        if (toolName === "files" && /demo-ts\/src\/server\.ts/.test(summary)) {
+          yield { delta: "我已经恢复执行，并沿着 TypeScript 本地实现引用继续检查了 demo-ts/src/server.ts。" };
+          return;
+        }
+      }
+
+      yield { delta: "ok" };
+    }
+  }
+
+  const bus = new EventBus();
+  const transcriptStore = new TranscriptStore(transcriptPath);
+  const logStore = new LogStore(logsPath);
+  await transcriptStore.ensureInitialized();
+  await logStore.ensureInitialized();
+
+  const session = createDefaultSessionRecord(workspace, VERSION);
+  session.model = "regression-stub";
+
+  const runtime = new AgentRuntime({
+    bus,
+    provider: new WholeProjectTypeScriptImportResumeProvider(),
+    tools: new InMemoryToolRegistry(),
+    session,
+    transcriptStore,
+    logStore
+  });
+  await runtime.start();
+
+  const completionPromise = waitForAssistantTaskCompletion(bus, session.sessionId);
+  const stageSummaryPromise = waitForAssistantDeltaContaining(
+    bus,
+    session.sessionId,
+    /demo-ts\/src\/server\.ts/
+  );
+
+  bus.emit(createUserMessageSubmittedEvent({
+    sessionId: session.sessionId,
+    content: "你能一次性都帮我看完整个项目吗"
+  }));
+
+  await stageSummaryPromise;
+  bus.emit(createRuntimeInterruptRequestedEvent({
+    sessionId: session.sessionId,
+    reason: "cancel"
+  }));
+
+  const cancelledTask = await completionPromise;
+  assert.equal(cancelledTask.payload.state, "cancelled");
+
+  const resumedResult = await runAgentTask({
+    bus,
+    transcriptStore,
+    sessionId: session.sessionId,
+    prompt: "帮我看看整个项目"
+  });
+
+  assert.match(resumedResult.assistantText, /src\/server\.ts|TypeScript/);
+  assert.equal(
+    resumedResult.toolSummaries.some((summary) => summary.startsWith("demo-ts/package.json:1-3")),
+    false,
+    "whole-project TypeScript import-follow resume should not restart from package.json"
+  );
+  assert.equal(
+    resumedResult.toolSummaries.some((summary) => summary.startsWith("demo-ts/src/app.ts:1-2")),
+    false,
+    "whole-project TypeScript import-follow resume should not reread app.ts after the pending implementation target is already known"
+  );
+  assert.ok(
+    resumedResult.toolSummaries.some((summary) => summary.startsWith("demo-ts/src/server.ts:1-3")),
+    "whole-project TypeScript import-follow resume should continue directly into the pending implementation file"
+  );
+}
+
+async function verifyBroadProjectImprovementPrefersTypeScriptMainEntry() {
+  const root = await mkdtemp(join(tmpdir(), "selfme-agent-project-improvement-ts-main-"));
+  const workspace = join(root, "workspace");
+  const transcriptPath = join(root, "transcript.jsonl");
+  const logsPath = join(root, "logs.jsonl");
+  await mkdir(join(workspace, "demo-ts", "src"), { recursive: true });
+
+  await writeFile(
+    join(workspace, "demo-ts", "package.json"),
+    '{\n  "name": "demo-ts",\n  "version": "1.0.0",\n  "main": "src/app.ts"\n}\n',
+    "utf8"
+  );
+  await writeFile(
+    join(workspace, "demo-ts", "src", "app.ts"),
+    'const port = 3000;\nconsole.log(port);\n',
+    "utf8"
+  );
+
+  class BroadProjectImprovementTypeScriptMainProvider implements ProviderClient {
+    readonly name = "broad-project-improvement-typescript-main-provider";
+
+    async *streamResponse(input: ProviderStreamInput): AsyncIterable<ProviderStreamChunk> {
+      const originalPrompt = "看看项目然后帮我优化下";
+
+      if (input.content === originalPrompt) {
+        yield {
+          delta: toolCall("shell", {
+            command: "pwd && ls -la && find . -maxdepth 3 -type f | sed 's#^./##' | sort | head -200"
+          })
+        };
+        return;
+      }
+
+      if (input.content.startsWith(`Original user request: ${originalPrompt}`)) {
+        const toolName = extractLine(input.content, "Tool:") ?? extractLine(input.content, "Latest tool:");
+        const summary = extractLine(input.content, "Summary:") ?? extractLine(input.content, "Latest summary:") ?? "";
+
+        if (toolName === "shell") {
+          if (/You are in the middle of a concrete project inspection request\./.test(input.content)) {
+            assert.match(input.content, /Likely project entry: demo-ts\/package\.json/);
+            yield {
+              delta: toolCall("files", {
+                path: "demo-ts/package.json",
+                startLine: 1,
+                endLine: 20
+              })
+            };
+            return;
+          }
+
+          yield { delta: "我先看了工作区列表，demo-ts 看起来是最像要继续优化的项目。" };
+          return;
+        }
+
+        if (toolName === "files" && /demo-ts\/package\.json/.test(summary)) {
+          if (/You are in the middle of a project improvement task\./.test(input.content)) {
+            assert.match(input.content, /Likely working file: demo-ts\/src\/app\.ts/);
+            yield {
+              delta: toolCall("files", {
+                path: "demo-ts/src/app.ts",
+                startLine: 1,
+                endLine: 20
+              })
+            };
+            return;
+          }
+
+          yield { delta: "demo-ts 看起来是个小型 TypeScript 项目。我先从 src/app.ts 开始。" };
+          return;
+        }
+
+        if (toolName === "files" && /demo-ts\/src\/app\.ts/.test(summary)) {
+          yield {
+            delta: toolCall("edit", {
+              path: "demo-ts/src/app.ts",
+              startLine: 1,
+              endLine: 2,
+              replacement: 'const port = Number(process.env.PORT ?? 3000);\nconsole.log(port);\n'
+            })
+          };
+          return;
+        }
+
+        if (toolName === "edit" && /demo-ts\/src\/app\.ts/.test(summary)) {
+          yield { delta: "我已经把 demo-ts/src/app.ts 改成优先读取 process.env.PORT。" };
+          return;
+        }
+      }
+
+      yield { delta: "ok" };
+    }
+  }
+
+  const bus = new EventBus();
+  const transcriptStore = new TranscriptStore(transcriptPath);
+  const logStore = new LogStore(logsPath);
+  await transcriptStore.ensureInitialized();
+  await logStore.ensureInitialized();
+
+  const session = createDefaultSessionRecord(workspace, VERSION);
+  session.model = "regression-stub";
+
+  const runtime = new AgentRuntime({
+    bus,
+    provider: new BroadProjectImprovementTypeScriptMainProvider(),
+    tools: new InMemoryToolRegistry(),
+    session,
+    transcriptStore,
+    logStore
+  });
+  await runtime.start();
+
+  const result = await runAgentTask({
+    bus,
+    transcriptStore,
+    sessionId: session.sessionId,
+    prompt: "看看项目然后帮我优化下"
+  });
+
+  const appContent = await readFile(join(workspace, "demo-ts", "src", "app.ts"), "utf8");
+  assert.match(appContent, /process\.env\.PORT/);
+  assert.match(result.assistantText, /src\/app\.ts|process\.env\.PORT/i);
+  assert.ok(
+    result.toolSummaries.some((summary) => summary.startsWith("demo-ts/package.json:1-4")),
+    "expected TypeScript-main improvement flow to inspect the project entry first"
+  );
+  assert.ok(
+    result.toolSummaries.some((summary) => summary.startsWith("demo-ts/src/app.ts:1-2")),
+    "expected TypeScript-main improvement flow to continue into src/app.ts"
+  );
+  assert.ok(
+    result.toolSummaries.some((summary) => summary.startsWith("demo-ts/src/app.ts:1-2 · updated")),
+    "expected TypeScript-main improvement flow to edit the inferred TypeScript entry file"
+  );
+}
+
+async function verifyBroadProjectImprovementMapsDistEntryBackToSource() {
+  const root = await mkdtemp(join(tmpdir(), "selfme-agent-project-improvement-dist-main-"));
+  const workspace = join(root, "workspace");
+  const transcriptPath = join(root, "transcript.jsonl");
+  const logsPath = join(root, "logs.jsonl");
+  await mkdir(join(workspace, "demo-dist", "src"), { recursive: true });
+  await mkdir(join(workspace, "demo-dist", "dist"), { recursive: true });
+
+  await writeFile(
+    join(workspace, "demo-dist", "package.json"),
+    '{\n  "name": "demo-dist",\n  "version": "1.0.0",\n  "main": "dist/index.js"\n}\n',
+    "utf8"
+  );
+  await writeFile(
+    join(workspace, "demo-dist", "src", "index.ts"),
+    'const port = 3000;\nconsole.log(port);\n',
+    "utf8"
+  );
+  await writeFile(
+    join(workspace, "demo-dist", "dist", "index.js"),
+    'console.log(3000);\n',
+    "utf8"
+  );
+
+  class BroadProjectImprovementDistMainProvider implements ProviderClient {
+    readonly name = "broad-project-improvement-dist-main-provider";
+
+    async *streamResponse(input: ProviderStreamInput): AsyncIterable<ProviderStreamChunk> {
+      const originalPrompt = "看看项目然后帮我优化下";
+
+      if (input.content === originalPrompt) {
+        yield {
+          delta: toolCall("shell", {
+            command: "pwd && ls -la && find . -maxdepth 3 -type f | sed 's#^./##' | sort | head -200"
+          })
+        };
+        return;
+      }
+
+      if (input.content.startsWith(`Original user request: ${originalPrompt}`)) {
+        const toolName = extractLine(input.content, "Tool:") ?? extractLine(input.content, "Latest tool:");
+        const summary = extractLine(input.content, "Summary:") ?? extractLine(input.content, "Latest summary:") ?? "";
+
+        if (toolName === "shell") {
+          if (/You are in the middle of a concrete project inspection request\./.test(input.content)) {
+            assert.match(input.content, /Likely project entry: demo-dist\/package\.json/);
+            yield {
+              delta: toolCall("files", {
+                path: "demo-dist/package.json",
+                startLine: 1,
+                endLine: 20
+              })
+            };
+            return;
+          }
+
+          yield { delta: "我先看了工作区列表，demo-dist 看起来是最像要继续优化的项目。" };
+          return;
+        }
+
+        if (toolName === "files" && /demo-dist\/package\.json/.test(summary)) {
+          if (/You are in the middle of a project improvement task\./.test(input.content)) {
+            assert.match(input.content, /Likely working file: demo-dist\/src\/index\.ts/);
+            assert.doesNotMatch(input.content, /Likely working file: demo-dist\/dist\/index\.js/);
+            yield {
+              delta: toolCall("files", {
+                path: "demo-dist/src/index.ts",
+                startLine: 1,
+                endLine: 20
+              })
+            };
+            return;
+          }
+
+          yield { delta: "demo-dist 看起来是个有构建产物的 TypeScript 项目。我先从 src/index.ts 开始。" };
+          return;
+        }
+
+        if (toolName === "files" && /demo-dist\/src\/index\.ts/.test(summary)) {
+          yield {
+            delta: toolCall("edit", {
+              path: "demo-dist/src/index.ts",
+              startLine: 1,
+              endLine: 2,
+              replacement: 'const port = Number(process.env.PORT ?? 3000);\nconsole.log(port);\n'
+            })
+          };
+          return;
+        }
+
+        if (toolName === "edit" && /demo-dist\/src\/index\.ts/.test(summary)) {
+          yield { delta: "我已经把 demo-dist/src/index.ts 改成优先读取 process.env.PORT。" };
+          return;
+        }
+      }
+
+      yield { delta: "ok" };
+    }
+  }
+
+  const bus = new EventBus();
+  const transcriptStore = new TranscriptStore(transcriptPath);
+  const logStore = new LogStore(logsPath);
+  await transcriptStore.ensureInitialized();
+  await logStore.ensureInitialized();
+
+  const session = createDefaultSessionRecord(workspace, VERSION);
+  session.model = "regression-stub";
+
+  const runtime = new AgentRuntime({
+    bus,
+    provider: new BroadProjectImprovementDistMainProvider(),
+    tools: new InMemoryToolRegistry(),
+    session,
+    transcriptStore,
+    logStore
+  });
+  await runtime.start();
+
+  const result = await runAgentTask({
+    bus,
+    transcriptStore,
+    sessionId: session.sessionId,
+    prompt: "看看项目然后帮我优化下"
+  });
+
+  const sourceContent = await readFile(join(workspace, "demo-dist", "src", "index.ts"), "utf8");
+  const builtContent = await readFile(join(workspace, "demo-dist", "dist", "index.js"), "utf8");
+  assert.match(sourceContent, /process\.env\.PORT/);
+  assert.doesNotMatch(builtContent, /process\.env\.PORT/);
+  assert.ok(
+    result.toolSummaries.some((summary) => summary.startsWith("demo-dist/package.json:1-4")),
+    "expected dist-main improvement flow to inspect the project entry first"
+  );
+  assert.ok(
+    result.toolSummaries.some((summary) => summary.startsWith("demo-dist/src/index.ts:1-2")),
+    "expected dist-main improvement flow to map back to src/index.ts"
+  );
+  assert.ok(
+    result.toolSummaries.some((summary) => summary.startsWith("demo-dist/src/index.ts:1-2 · updated")),
+    "expected dist-main improvement flow to edit the source file instead of the built artifact"
+  );
+}
+
+async function verifyBroadProjectImprovementMapsDistEntryBackToJavaScriptSource() {
+  const root = await mkdtemp(join(tmpdir(), "selfme-agent-project-improvement-dist-js-main-"));
+  const workspace = join(root, "workspace");
+  const transcriptPath = join(root, "transcript.jsonl");
+  const logsPath = join(root, "logs.jsonl");
+  await mkdir(join(workspace, "demo-dist-js", "src"), { recursive: true });
+  await mkdir(join(workspace, "demo-dist-js", "dist"), { recursive: true });
+
+  await writeFile(
+    join(workspace, "demo-dist-js", "package.json"),
+    '{\n  "name": "demo-dist-js",\n  "version": "1.0.0",\n  "main": "dist/index.js"\n}\n',
+    "utf8"
+  );
+  await writeFile(
+    join(workspace, "demo-dist-js", "src", "index.js"),
+    'const port = 3000;\nconsole.log(port);\n',
+    "utf8"
+  );
+  await writeFile(
+    join(workspace, "demo-dist-js", "dist", "index.js"),
+    'console.log(3000);\n',
+    "utf8"
+  );
+
+  class BroadProjectImprovementDistJavaScriptMainProvider implements ProviderClient {
+    readonly name = "broad-project-improvement-dist-javascript-main-provider";
+
+    async *streamResponse(input: ProviderStreamInput): AsyncIterable<ProviderStreamChunk> {
+      const originalPrompt = "看看项目然后帮我优化下";
+
+      if (input.content === originalPrompt) {
+        yield {
+          delta: toolCall("shell", {
+            command: "pwd && ls -la && find . -maxdepth 3 -type f | sed 's#^./##' | sort | head -200"
+          })
+        };
+        return;
+      }
+
+      if (input.content.startsWith(`Original user request: ${originalPrompt}`)) {
+        const toolName = extractLine(input.content, "Tool:") ?? extractLine(input.content, "Latest tool:");
+        const summary = extractLine(input.content, "Summary:") ?? extractLine(input.content, "Latest summary:") ?? "";
+
+        if (toolName === "shell") {
+          if (/You are in the middle of a concrete project inspection request\./.test(input.content)) {
+            assert.match(input.content, /Likely project entry: demo-dist-js\/package\.json/);
+            yield {
+              delta: toolCall("files", {
+                path: "demo-dist-js/package.json",
+                startLine: 1,
+                endLine: 20
+              })
+            };
+            return;
+          }
+
+          yield { delta: "我先看了工作区列表，demo-dist-js 看起来是最像要继续优化的项目。" };
+          return;
+        }
+
+        if (toolName === "files" && /demo-dist-js\/package\.json/.test(summary)) {
+          if (/You are in the middle of a project improvement task\./.test(input.content)) {
+            assert.match(input.content, /Likely working file: demo-dist-js\/src\/index\.js/);
+            assert.doesNotMatch(input.content, /Likely working file: demo-dist-js\/src\/index\.ts/);
+            assert.doesNotMatch(input.content, /Likely working file: demo-dist-js\/dist\/index\.js/);
+            yield {
+              delta: toolCall("files", {
+                path: "demo-dist-js/src/index.js",
+                startLine: 1,
+                endLine: 20
+              })
+            };
+            return;
+          }
+
+          yield { delta: "demo-dist-js 看起来是个有构建产物的 JavaScript 项目。我先从 src/index.js 开始。" };
+          return;
+        }
+
+        if (toolName === "files" && /demo-dist-js\/src\/index\.js/.test(summary)) {
+          yield {
+            delta: toolCall("edit", {
+              path: "demo-dist-js/src/index.js",
+              startLine: 1,
+              endLine: 2,
+              replacement: 'const port = Number(process.env.PORT ?? 3000);\nconsole.log(port);\n'
+            })
+          };
+          return;
+        }
+
+        if (toolName === "edit" && /demo-dist-js\/src\/index\.js/.test(summary)) {
+          yield { delta: "我已经把 demo-dist-js/src/index.js 改成优先读取 process.env.PORT。" };
+          return;
+        }
+      }
+
+      yield { delta: "ok" };
+    }
+  }
+
+  const bus = new EventBus();
+  const transcriptStore = new TranscriptStore(transcriptPath);
+  const logStore = new LogStore(logsPath);
+  await transcriptStore.ensureInitialized();
+  await logStore.ensureInitialized();
+
+  const session = createDefaultSessionRecord(workspace, VERSION);
+  session.model = "regression-stub";
+
+  const runtime = new AgentRuntime({
+    bus,
+    provider: new BroadProjectImprovementDistJavaScriptMainProvider(),
+    tools: new InMemoryToolRegistry(),
+    session,
+    transcriptStore,
+    logStore
+  });
+  await runtime.start();
+
+  const result = await runAgentTask({
+    bus,
+    transcriptStore,
+    sessionId: session.sessionId,
+    prompt: "看看项目然后帮我优化下"
+  });
+
+  const sourceContent = await readFile(join(workspace, "demo-dist-js", "src", "index.js"), "utf8");
+  const builtContent = await readFile(join(workspace, "demo-dist-js", "dist", "index.js"), "utf8");
+  assert.match(sourceContent, /process\.env\.PORT/);
+  assert.doesNotMatch(builtContent, /process\.env\.PORT/);
+  assert.ok(
+    result.toolSummaries.some((summary) => summary.startsWith("demo-dist-js/package.json:1-4")),
+    "expected dist-main JavaScript improvement flow to inspect the project entry first"
+  );
+  assert.ok(
+    result.toolSummaries.some((summary) => summary.startsWith("demo-dist-js/src/index.js:1-2")),
+    "expected dist-main JavaScript improvement flow to map back to src/index.js"
+  );
+  assert.ok(
+    result.toolSummaries.some((summary) => summary.startsWith("demo-dist-js/src/index.js:1-2 · updated")),
+    "expected dist-main JavaScript improvement flow to edit the JavaScript source file instead of the built artifact"
+  );
+}
+
+async function verifyBroadProjectImprovementUsesReadmeSourceHint() {
+  const root = await mkdtemp(join(tmpdir(), "selfme-agent-project-improvement-readme-hint-"));
+  const workspace = join(root, "workspace");
+  const transcriptPath = join(root, "transcript.jsonl");
+  const logsPath = join(root, "logs.jsonl");
+  await mkdir(join(workspace, "demo-readme", "src"), { recursive: true });
+
+  await writeFile(
+    join(workspace, "demo-readme", "README.md"),
+    [
+      "# demo-readme",
+      "",
+      "Run the app with `node src/main.ts`.",
+      "",
+      "Main source file: `src/main.ts`."
+    ].join("\n"),
+    "utf8"
+  );
+  await writeFile(
+    join(workspace, "demo-readme", "src", "main.ts"),
+    'const port = 3000;\nconsole.log(port);\n',
+    "utf8"
+  );
+
+  class BroadProjectImprovementReadmeHintProvider implements ProviderClient {
+    readonly name = "broad-project-improvement-readme-hint-provider";
+
+    async *streamResponse(input: ProviderStreamInput): AsyncIterable<ProviderStreamChunk> {
+      const originalPrompt = "看看项目然后帮我优化下";
+
+      if (input.content === originalPrompt) {
+        yield {
+          delta: toolCall("shell", {
+            command: "pwd && ls -la && find . -maxdepth 3 -type f | sed 's#^./##' | sort | head -200"
+          })
+        };
+        return;
+      }
+
+      if (input.content.startsWith(`Original user request: ${originalPrompt}`)) {
+        const toolName = extractLine(input.content, "Tool:") ?? extractLine(input.content, "Latest tool:");
+        const summary = extractLine(input.content, "Summary:") ?? extractLine(input.content, "Latest summary:") ?? "";
+
+        if (toolName === "shell") {
+          if (/You are in the middle of a concrete project inspection request\./.test(input.content)) {
+            assert.match(input.content, /Likely project entry: demo-readme\/README\.md/);
+            yield {
+              delta: toolCall("files", {
+                path: "demo-readme/README.md",
+                startLine: 1,
+                endLine: 20
+              })
+            };
+            return;
+          }
+
+          yield { delta: "我先看了工作区列表，demo-readme 看起来是最像要继续优化的项目。" };
+          return;
+        }
+
+        if (toolName === "files" && /demo-readme\/README\.md/.test(summary)) {
+          if (/You are in the middle of a project improvement task\./.test(input.content)) {
+            assert.match(input.content, /Likely working file: demo-readme\/src\/main\.ts/);
+            yield {
+              delta: toolCall("files", {
+                path: "demo-readme/src/main.ts",
+                startLine: 1,
+                endLine: 20
+              })
+            };
+            return;
+          }
+
+          yield { delta: "demo-readme 的 README 已经给出了源码入口，我先从 src/main.ts 开始。" };
+          return;
+        }
+
+        if (toolName === "files" && /demo-readme\/src\/main\.ts/.test(summary)) {
+          yield {
+            delta: toolCall("edit", {
+              path: "demo-readme/src/main.ts",
+              startLine: 1,
+              endLine: 2,
+              replacement: 'const port = Number(process.env.PORT ?? 3000);\nconsole.log(port);\n'
+            })
+          };
+          return;
+        }
+
+        if (toolName === "edit" && /demo-readme\/src\/main\.ts/.test(summary)) {
+          yield { delta: "我已经把 demo-readme/src/main.ts 改成优先读取 process.env.PORT。" };
+          return;
+        }
+      }
+
+      yield { delta: "ok" };
+    }
+  }
+
+  const bus = new EventBus();
+  const transcriptStore = new TranscriptStore(transcriptPath);
+  const logStore = new LogStore(logsPath);
+  await transcriptStore.ensureInitialized();
+  await logStore.ensureInitialized();
+
+  const session = createDefaultSessionRecord(workspace, VERSION);
+  session.model = "regression-stub";
+
+  const runtime = new AgentRuntime({
+    bus,
+    provider: new BroadProjectImprovementReadmeHintProvider(),
+    tools: new InMemoryToolRegistry(),
+    session,
+    transcriptStore,
+    logStore
+  });
+  await runtime.start();
+
+  const result = await runAgentTask({
+    bus,
+    transcriptStore,
+    sessionId: session.sessionId,
+    prompt: "看看项目然后帮我优化下"
+  });
+
+  const sourceContent = await readFile(join(workspace, "demo-readme", "src", "main.ts"), "utf8");
+  assert.match(sourceContent, /process\.env\.PORT/);
+  assert.ok(
+    result.toolSummaries.some((summary) => summary.startsWith("demo-readme/README.md:1-5")),
+    "expected README-hint improvement flow to inspect README.md as the project entry"
+  );
+  assert.ok(
+    result.toolSummaries.some((summary) => summary.startsWith("demo-readme/src/main.ts:1-2")),
+    "expected README-hint improvement flow to continue into src/main.ts"
+  );
+  assert.ok(
+    result.toolSummaries.some((summary) => summary.startsWith("demo-readme/src/main.ts:1-2 · updated")),
+    "expected README-hint improvement flow to edit the source file inferred from README.md"
+  );
+}
+
+async function verifyBroadProjectImprovementUsesQuotedReadmeSourceHint() {
+  const root = await mkdtemp(join(tmpdir(), "selfme-agent-project-improvement-readme-quoted-hint-"));
+  const workspace = join(root, "workspace");
+  const transcriptPath = join(root, "transcript.jsonl");
+  const logsPath = join(root, "logs.jsonl");
+  await mkdir(join(workspace, "demo-readme-quoted", "src"), { recursive: true });
+
+  await writeFile(
+    join(workspace, "demo-readme-quoted", "README.md"),
+    '# demo-readme-quoted\n\nRun with:\n\n`node "./src/main"`\n',
+    "utf8"
+  );
+  await writeFile(
+    join(workspace, "demo-readme-quoted", "src", "main.ts"),
+    'const port = 3000;\nconsole.log(port);\n',
+    "utf8"
+  );
+
+  class BroadProjectImprovementQuotedReadmeProvider implements ProviderClient {
+    readonly name = "broad-project-improvement-quoted-readme-provider";
+
+    async *streamResponse(input: ProviderStreamInput): AsyncIterable<ProviderStreamChunk> {
+      const originalPrompt = "看看项目然后帮我优化下";
+
+      if (input.content === originalPrompt) {
+        yield {
+          delta: toolCall("shell", {
+            command: "pwd && ls -la && find . -maxdepth 3 -type f | sed 's#^./##' | sort | head -200"
+          })
+        };
+        return;
+      }
+
+      if (input.content.startsWith(`Original user request: ${originalPrompt}`)) {
+        const toolName = extractLine(input.content, "Tool:") ?? extractLine(input.content, "Latest tool:");
+        const summary = extractLine(input.content, "Summary:") ?? extractLine(input.content, "Latest summary:") ?? "";
+
+        if (toolName === "shell") {
+          if (/You are in the middle of a concrete project inspection request\./.test(input.content)) {
+            assert.match(input.content, /Likely project entry: demo-readme-quoted\/README\.md/);
+            yield {
+              delta: toolCall("files", {
+                path: "demo-readme-quoted/README.md",
+                startLine: 1,
+                endLine: 20
+              })
+            };
+            return;
+          }
+
+          yield { delta: "我先看了工作区列表，demo-readme-quoted 看起来是最像要继续优化的项目。" };
+          return;
+        }
+
+        if (toolName === "files" && /demo-readme-quoted\/README\.md/.test(summary)) {
+          if (/You are in the middle of a project improvement task\./.test(input.content)) {
+            assert.match(input.content, /Likely working file: demo-readme-quoted\/src\/main\.ts/);
+            yield {
+              delta: toolCall("files", {
+                path: "demo-readme-quoted/src/main.ts",
+                startLine: 1,
+                endLine: 20
+              })
+            };
+            return;
+          }
+
+          yield { delta: "README 里已经给了源码入口提示，我先继续看具体实现文件。" };
+          return;
+        }
+
+        if (toolName === "files" && /demo-readme-quoted\/src\/main\.ts/.test(summary)) {
+          yield {
+            delta: toolCall("edit", {
+              path: "demo-readme-quoted/src/main.ts",
+              startLine: 1,
+              endLine: 2,
+              replacement: 'const port = Number(process.env.PORT ?? 3000);\nconsole.log(port);\n'
+            })
+          };
+          return;
+        }
+
+        if (toolName === "edit" && /demo-readme-quoted\/src\/main\.ts/.test(summary)) {
+          yield { delta: "我已经把 demo-readme-quoted/src/main.ts 改成优先读取 process.env.PORT。" };
+          return;
+        }
+      }
+
+      yield { delta: "ok" };
+    }
+  }
+
+  const bus = new EventBus();
+  const transcriptStore = new TranscriptStore(transcriptPath);
+  const logStore = new LogStore(logsPath);
+  await transcriptStore.ensureInitialized();
+  await logStore.ensureInitialized();
+
+  const session = createDefaultSessionRecord(workspace, VERSION);
+  session.model = "regression-stub";
+
+  const runtime = new AgentRuntime({
+    bus,
+    provider: new BroadProjectImprovementQuotedReadmeProvider(),
+    tools: new InMemoryToolRegistry(),
+    session,
+    transcriptStore,
+    logStore
+  });
+  await runtime.start();
+
+  const result = await runAgentTask({
+    bus,
+    transcriptStore,
+    sessionId: session.sessionId,
+    prompt: "看看项目然后帮我优化下"
+  });
+
+  const sourceContent = await readFile(join(workspace, "demo-readme-quoted", "src", "main.ts"), "utf8");
+  assert.match(sourceContent, /process\.env\.PORT/);
+  assert.ok(
+    result.toolSummaries.some((summary) => summary.startsWith("demo-readme-quoted/README.md:1-5")),
+    "expected quoted-README improvement flow to inspect README.md first"
+  );
+  assert.ok(
+    result.toolSummaries.some((summary) => summary.startsWith("demo-readme-quoted/src/main.ts:1-2")),
+    "expected quoted-README improvement flow to continue into src/main.ts"
+  );
+  assert.ok(
+    result.toolSummaries.some((summary) => summary.startsWith("demo-readme-quoted/src/main.ts:1-2 · updated")),
+    "expected quoted-README improvement flow to edit the inferred source file"
+  );
+}
+
+async function verifyBroadProjectImprovementUsesExtensionlessScriptEntry() {
+  const root = await mkdtemp(join(tmpdir(), "selfme-agent-project-improvement-extensionless-entry-"));
+  const workspace = join(root, "workspace");
+  const transcriptPath = join(root, "transcript.jsonl");
+  const logsPath = join(root, "logs.jsonl");
+  await mkdir(join(workspace, "demo-script", "src"), { recursive: true });
+
+  await writeFile(
+    join(workspace, "demo-script", "package.json"),
+    '{\n  "name": "demo-script",\n  "version": "1.0.0",\n  "scripts": {\n    "start": "node src/server"\n  }\n}\n',
+    "utf8"
+  );
+  await writeFile(
+    join(workspace, "demo-script", "src", "server.js"),
+    'const port = 3000;\nconsole.log(port);\n',
+    "utf8"
+  );
+
+  class BroadProjectImprovementExtensionlessScriptProvider implements ProviderClient {
+    readonly name = "broad-project-improvement-extensionless-script-provider";
+
+    async *streamResponse(input: ProviderStreamInput): AsyncIterable<ProviderStreamChunk> {
+      const originalPrompt = "看看项目然后帮我优化下";
+
+      if (input.content === originalPrompt) {
+        yield {
+          delta: toolCall("shell", {
+            command: "pwd && ls -la && find . -maxdepth 3 -type f | sed 's#^./##' | sort | head -200"
+          })
+        };
+        return;
+      }
+
+      if (input.content.startsWith(`Original user request: ${originalPrompt}`)) {
+        const toolName = extractLine(input.content, "Tool:") ?? extractLine(input.content, "Latest tool:");
+        const summary = extractLine(input.content, "Summary:") ?? extractLine(input.content, "Latest summary:") ?? "";
+
+        if (toolName === "shell") {
+          if (/You are in the middle of a concrete project inspection request\./.test(input.content)) {
+            assert.match(input.content, /Likely project entry: demo-script\/package\.json/);
+            yield {
+              delta: toolCall("files", {
+                path: "demo-script/package.json",
+                startLine: 1,
+                endLine: 20
+              })
+            };
+            return;
+          }
+
+          yield { delta: "我先看了工作区列表，demo-script 看起来是最像要继续优化的项目。" };
+          return;
+        }
+
+        if (toolName === "files" && /demo-script\/package\.json/.test(summary)) {
+          if (/You are in the middle of a project improvement task\./.test(input.content)) {
+            assert.match(input.content, /Likely working file: demo-script\/src\/server\.js/);
+            yield {
+              delta: toolCall("files", {
+                path: "demo-script/src/server.js",
+                startLine: 1,
+                endLine: 20
+              })
+            };
+            return;
+          }
+
+          yield { delta: "demo-script 的 start 脚本已经指向源码入口，我先继续看具体实现文件。" };
+          return;
+        }
+
+        if (toolName === "files" && /demo-script\/src\/server\.js/.test(summary)) {
+          yield {
+            delta: toolCall("edit", {
+              path: "demo-script/src/server.js",
+              startLine: 1,
+              endLine: 2,
+              replacement: 'const port = Number(process.env.PORT ?? 3000);\nconsole.log(port);\n'
+            })
+          };
+          return;
+        }
+
+        if (toolName === "edit" && /demo-script\/src\/server\.js/.test(summary)) {
+          yield { delta: "我已经把 demo-script/src/server.js 改成优先读取 process.env.PORT。" };
+          return;
+        }
+      }
+
+      yield { delta: "ok" };
+    }
+  }
+
+  const bus = new EventBus();
+  const transcriptStore = new TranscriptStore(transcriptPath);
+  const logStore = new LogStore(logsPath);
+  await transcriptStore.ensureInitialized();
+  await logStore.ensureInitialized();
+
+  const session = createDefaultSessionRecord(workspace, VERSION);
+  session.model = "regression-stub";
+
+  const runtime = new AgentRuntime({
+    bus,
+    provider: new BroadProjectImprovementExtensionlessScriptProvider(),
+    tools: new InMemoryToolRegistry(),
+    session,
+    transcriptStore,
+    logStore
+  });
+  await runtime.start();
+
+  const result = await runAgentTask({
+    bus,
+    transcriptStore,
+    sessionId: session.sessionId,
+    prompt: "看看项目然后帮我优化下"
+  });
+
+  const sourceContent = await readFile(join(workspace, "demo-script", "src", "server.js"), "utf8");
+  assert.match(sourceContent, /process\.env\.PORT/);
+  assert.ok(
+    result.toolSummaries.some((summary) => summary.startsWith("demo-script/package.json:1-6")),
+    "expected extensionless-entry improvement flow to inspect package.json first"
+  );
+  assert.ok(
+    result.toolSummaries.some((summary) => summary.startsWith("demo-script/src/server.js:1-2")),
+    "expected extensionless-entry improvement flow to continue into src/server.js"
+  );
+  assert.ok(
+    result.toolSummaries.some((summary) => summary.startsWith("demo-script/src/server.js:1-2 · updated")),
+    "expected extensionless-entry improvement flow to edit the inferred source file"
+  );
+}
+
+async function verifyBroadProjectImprovementSkipsRuntimeLoaderPackage() {
+  const root = await mkdtemp(join(tmpdir(), "selfme-agent-project-improvement-loader-script-entry-"));
+  const workspace = join(root, "workspace");
+  const transcriptPath = join(root, "transcript.jsonl");
+  const logsPath = join(root, "logs.jsonl");
+  await mkdir(join(workspace, "demo-loader", "src"), { recursive: true });
+
+  await writeFile(
+    join(workspace, "demo-loader", "package.json"),
+    '{\n  "name": "demo-loader",\n  "version": "1.0.0",\n  "scripts": {\n    "start": "node --loader ts-node/esm src/server.ts"\n  }\n}\n',
+    "utf8"
+  );
+  await writeFile(
+    join(workspace, "demo-loader", "src", "server.ts"),
+    'const port = 3000;\nconsole.log(port);\n',
+    "utf8"
+  );
+
+  class BroadProjectImprovementLoaderScriptProvider implements ProviderClient {
+    readonly name = "broad-project-improvement-loader-script-provider";
+
+    async *streamResponse(input: ProviderStreamInput): AsyncIterable<ProviderStreamChunk> {
+      const originalPrompt = "看看项目然后帮我优化下";
+
+      if (input.content === originalPrompt) {
+        yield {
+          delta: toolCall("shell", {
+            command: "pwd && ls -la && find . -maxdepth 3 -type f | sed 's#^./##' | sort | head -200"
+          })
+        };
+        return;
+      }
+
+      if (input.content.startsWith(`Original user request: ${originalPrompt}`)) {
+        const toolName = extractLine(input.content, "Tool:") ?? extractLine(input.content, "Latest tool:");
+        const summary = extractLine(input.content, "Summary:") ?? extractLine(input.content, "Latest summary:") ?? "";
+
+        if (toolName === "shell") {
+          if (/You are in the middle of a concrete project inspection request\./.test(input.content)) {
+            assert.match(input.content, /Likely project entry: demo-loader\/package\.json/);
+            yield {
+              delta: toolCall("files", {
+                path: "demo-loader/package.json",
+                startLine: 1,
+                endLine: 20
+              })
+            };
+            return;
+          }
+
+          yield { delta: "我先看了工作区列表，demo-loader 看起来是最像要继续优化的项目。" };
+          return;
+        }
+
+        if (toolName === "files" && /demo-loader\/package\.json/.test(summary)) {
+          if (/You are in the middle of a project improvement task\./.test(input.content)) {
+            assert.match(input.content, /Likely working file: demo-loader\/src\/server\.ts/);
+            assert.doesNotMatch(input.content, /ts-node\/esm/);
+            yield {
+              delta: toolCall("files", {
+                path: "demo-loader/src/server.ts",
+                startLine: 1,
+                endLine: 20
+              })
+            };
+            return;
+          }
+
+          yield { delta: "demo-loader 的 start 脚本已经指向源码入口，我先继续看具体实现文件。" };
+          return;
+        }
+
+        if (toolName === "files" && /demo-loader\/src\/server\.ts/.test(summary)) {
+          yield {
+            delta: toolCall("edit", {
+              path: "demo-loader/src/server.ts",
+              startLine: 1,
+              endLine: 2,
+              replacement: 'const port = Number(process.env.PORT ?? 3000);\nconsole.log(port);\n'
+            })
+          };
+          return;
+        }
+
+        if (toolName === "edit" && /demo-loader\/src\/server\.ts/.test(summary)) {
+          yield { delta: "我已经把 demo-loader/src/server.ts 改成优先读取 process.env.PORT。" };
+          return;
+        }
+      }
+
+      yield { delta: "ok" };
+    }
+  }
+
+  const bus = new EventBus();
+  const transcriptStore = new TranscriptStore(transcriptPath);
+  const logStore = new LogStore(logsPath);
+  await transcriptStore.ensureInitialized();
+  await logStore.ensureInitialized();
+
+  const session = createDefaultSessionRecord(workspace, VERSION);
+  session.model = "regression-stub";
+
+  const runtime = new AgentRuntime({
+    bus,
+    provider: new BroadProjectImprovementLoaderScriptProvider(),
+    tools: new InMemoryToolRegistry(),
+    session,
+    transcriptStore,
+    logStore
+  });
+  await runtime.start();
+
+  const result = await runAgentTask({
+    bus,
+    transcriptStore,
+    sessionId: session.sessionId,
+    prompt: "看看项目然后帮我优化下"
+  });
+
+  const sourceContent = await readFile(join(workspace, "demo-loader", "src", "server.ts"), "utf8");
+  assert.match(sourceContent, /process\.env\.PORT/);
+  assert.ok(
+    result.toolSummaries.some((summary) => summary.startsWith("demo-loader/package.json:1-6")),
+    "expected loader-script improvement flow to inspect package.json first"
+  );
+  assert.ok(
+    result.toolSummaries.some((summary) => summary.startsWith("demo-loader/src/server.ts:1-2")),
+    "expected loader-script improvement flow to continue into src/server.ts"
+  );
+  assert.ok(
+    result.toolSummaries.some((summary) => summary.startsWith("demo-loader/src/server.ts:1-2 · updated")),
+    "expected loader-script improvement flow to edit the inferred source file instead of the loader package"
+  );
+}
+
+async function verifyBroadProjectImprovementFollowsThinEntryImplementationImport() {
+  const root = await mkdtemp(join(tmpdir(), "selfme-agent-project-improvement-thin-entry-import-"));
+  const workspace = join(root, "workspace");
+  const transcriptPath = join(root, "transcript.jsonl");
+  const logsPath = join(root, "logs.jsonl");
+  await mkdir(join(workspace, "demo-thin", "src"), { recursive: true });
+
+  await writeFile(
+    join(workspace, "demo-thin", "package.json"),
+    '{\n  "name": "demo-thin",\n  "version": "1.0.0",\n  "main": "app.js"\n}\n',
+    "utf8"
+  );
+  await writeFile(
+    join(workspace, "demo-thin", "app.js"),
+    'const { createServer } = require("./src/server");\ncreateServer();\n',
+    "utf8"
+  );
+  await writeFile(
+    join(workspace, "demo-thin", "src", "server.js"),
+    'function createServer() {\n  const port = 3000;\n  return port;\n}\n\nmodule.exports = { createServer };\n',
+    "utf8"
+  );
+
+  class BroadProjectImprovementThinEntryImportProvider implements ProviderClient {
+    readonly name = "broad-project-improvement-thin-entry-import-provider";
+
+    async *streamResponse(input: ProviderStreamInput): AsyncIterable<ProviderStreamChunk> {
+      const originalPrompt = "看看项目然后帮我优化下";
+
+      if (input.content === originalPrompt) {
+        yield {
+          delta: toolCall("shell", {
+            command: "pwd && ls -la && find . -maxdepth 3 -type f | sed 's#^./##' | sort | head -200"
+          })
+        };
+        return;
+      }
+
+      if (input.content.startsWith(`Original user request: ${originalPrompt}`)) {
+        const toolName = extractLine(input.content, "Tool:") ?? extractLine(input.content, "Latest tool:");
+        const summary = extractLine(input.content, "Summary:") ?? extractLine(input.content, "Latest summary:") ?? "";
+
+        if (toolName === "shell") {
+          if (/You are in the middle of a concrete project inspection request\./.test(input.content)) {
+            assert.match(input.content, /Likely project entry: demo-thin\/package\.json/);
+            yield {
+              delta: toolCall("files", {
+                path: "demo-thin/package.json",
+                startLine: 1,
+                endLine: 20
+              })
+            };
+            return;
+          }
+
+          yield { delta: "我先看了工作区列表，demo-thin 看起来是最像要继续优化的项目。" };
+          return;
+        }
+
+        if (toolName === "files" && /demo-thin\/package\.json/.test(summary)) {
+          if (/You are in the middle of a project improvement task\./.test(input.content)) {
+            assert.match(input.content, /Likely working file: demo-thin\/app\.js/);
+            yield {
+              delta: toolCall("files", {
+                path: "demo-thin/app.js",
+                startLine: 1,
+                endLine: 20
+              })
+            };
+            return;
+          }
+
+          yield { delta: "demo-thin 的入口已经定位到 app.js，我先继续看实现。" };
+          return;
+        }
+
+        if (toolName === "files" && /demo-thin\/app\.js/.test(summary)) {
+          if (/You are in the middle of a project improvement task\./.test(input.content)) {
+            assert.match(input.content, /Likely working file: demo-thin\/src\/server\.js/);
+            yield {
+              delta: toolCall("files", {
+                path: "demo-thin/src/server.js",
+                startLine: 1,
+                endLine: 20
+              })
+            };
+            return;
+          }
+
+          yield { delta: "app.js 只是薄入口，我先继续跟到本地实现文件。" };
+          return;
+        }
+
+        if (toolName === "files" && /demo-thin\/src\/server\.js/.test(summary)) {
+          yield {
+            delta: toolCall("edit", {
+              path: "demo-thin/src/server.js",
+              startLine: 2,
+              endLine: 2,
+              replacement: '  const port = Number(process.env.PORT ?? 3000);\n'
+            })
+          };
+          return;
+        }
+
+        if (toolName === "edit" && /demo-thin\/src\/server\.js/.test(summary)) {
+          yield { delta: "我已经把 demo-thin/src/server.js 改成优先读取 process.env.PORT。" };
+          return;
+        }
+      }
+
+      yield { delta: "ok" };
+    }
+  }
+
+  const bus = new EventBus();
+  const transcriptStore = new TranscriptStore(transcriptPath);
+  const logStore = new LogStore(logsPath);
+  await transcriptStore.ensureInitialized();
+  await logStore.ensureInitialized();
+
+  const session = createDefaultSessionRecord(workspace, VERSION);
+  session.model = "regression-stub";
+
+  const runtime = new AgentRuntime({
+    bus,
+    provider: new BroadProjectImprovementThinEntryImportProvider(),
+    tools: new InMemoryToolRegistry(),
+    session,
+    transcriptStore,
+    logStore
+  });
+  await runtime.start();
+
+  const result = await runAgentTask({
+    bus,
+    transcriptStore,
+    sessionId: session.sessionId,
+    prompt: "看看项目然后帮我优化下"
+  });
+
+  const sourceContent = await readFile(join(workspace, "demo-thin", "src", "server.js"), "utf8");
+  assert.match(sourceContent, /process\.env\.PORT/);
+  assert.ok(
+    result.toolSummaries.some((summary) => summary.startsWith("demo-thin/package.json:1-4")),
+    "expected thin-entry improvement flow to inspect package.json first"
+  );
+  assert.ok(
+    result.toolSummaries.some((summary) => summary.startsWith("demo-thin/app.js:1-2")),
+    "expected thin-entry improvement flow to continue into the entry source first"
+  );
+  assert.ok(
+    result.toolSummaries.some((summary) => summary.startsWith("demo-thin/src/server.js:1-6")),
+    "expected thin-entry improvement flow to continue from the thin entry into the imported implementation"
+  );
+  assert.ok(
+    result.toolSummaries.some((summary) => summary.startsWith("demo-thin/src/server.js:2-2 · updated")),
+    "expected thin-entry improvement flow to edit the imported implementation file"
+  );
+}
+
+async function verifyBroadProjectImprovementContinuesAfterThinEntryStageSummary() {
+  const root = await mkdtemp(join(tmpdir(), "selfme-agent-project-improvement-thin-entry-stage-summary-"));
+  const workspace = join(root, "workspace");
+  const transcriptPath = join(root, "transcript.jsonl");
+  const logsPath = join(root, "logs.jsonl");
+  await mkdir(join(workspace, "demo-thin-stage", "src"), { recursive: true });
+
+  await writeFile(
+    join(workspace, "demo-thin-stage", "package.json"),
+    '{\n  "name": "demo-thin-stage",\n  "version": "1.0.0",\n  "main": "app.js"\n}\n',
+    "utf8"
+  );
+  await writeFile(
+    join(workspace, "demo-thin-stage", "app.js"),
+    'const { createServer } = require("./src/server");\ncreateServer();\n',
+    "utf8"
+  );
+  await writeFile(
+    join(workspace, "demo-thin-stage", "src", "server.js"),
+    'function createServer() {\n  const port = 3000;\n  return port;\n}\n\nmodule.exports = { createServer };\n',
+    "utf8"
+  );
+
+  class BroadProjectImprovementThinEntryStageSummaryProvider implements ProviderClient {
+    readonly name = "broad-project-improvement-thin-entry-stage-summary-provider";
+
+    async *streamResponse(input: ProviderStreamInput): AsyncIterable<ProviderStreamChunk> {
+      const originalPrompt = "看看项目然后帮我优化下";
+
+      if (input.content === originalPrompt) {
+        yield {
+          delta: toolCall("shell", {
+            command: "pwd && ls -la && find . -maxdepth 3 -type f | sed 's#^./##' | sort | head -200"
+          })
+        };
+        return;
+      }
+
+      if (input.content.startsWith(`Original user request: ${originalPrompt}`)) {
+        const toolName = extractLine(input.content, "Tool:") ?? extractLine(input.content, "Latest tool:");
+        const summary = extractLine(input.content, "Summary:") ?? extractLine(input.content, "Latest summary:") ?? "";
+
+        if (toolName === "shell") {
+          if (/You are in the middle of a concrete project inspection request\./.test(input.content)) {
+            assert.match(input.content, /Likely project entry: demo-thin-stage\/package\.json/);
+            yield {
+              delta: toolCall("files", {
+                path: "demo-thin-stage/package.json",
+                startLine: 1,
+                endLine: 20
+              })
+            };
+            return;
+          }
+
+          yield { delta: "我先看了工作区列表，demo-thin-stage 看起来是最像要继续优化的项目。" };
+          return;
+        }
+
+        if (toolName === "files" && /demo-thin-stage\/package\.json/.test(summary)) {
+          if (/You are in the middle of a project improvement task\./.test(input.content)) {
+            assert.match(input.content, /Likely working file: demo-thin-stage\/app\.js/);
+            yield {
+              delta: toolCall("files", {
+                path: "demo-thin-stage/app.js",
+                startLine: 1,
+                endLine: 20
+              })
+            };
+            return;
+          }
+
+          yield { delta: "demo-thin-stage 的入口已经定位到 app.js，我先继续看实现。" };
+          return;
+        }
+
+        if (
+          toolName === "files"
+          && /demo-thin-stage\/app\.js/.test(summary)
+          && /Likely working file: demo-thin-stage\/src\/server\.js/.test(input.content)
+        ) {
+          yield {
+            delta: toolCall("files", {
+              path: "demo-thin-stage/src/server.js",
+              startLine: 1,
+              endLine: 20
+            })
+          };
+          return;
+        }
+
+        if (toolName === "files" && /demo-thin-stage\/app\.js/.test(summary)) {
+          if (/You are in the middle of a project improvement task\./.test(input.content)) {
+            assert.match(input.content, /Likely working file: demo-thin-stage\/src\/server\.js/);
+            yield { delta: "app.js 只是薄入口，我下一步会继续看 demo-thin-stage/src/server.js 并在那里改端口逻辑。" };
+            return;
+          }
+
+          yield { delta: "app.js 只是薄入口，我先继续跟到本地实现文件。" };
+          return;
+        }
+
+        if (toolName === "files" && /demo-thin-stage\/src\/server\.js/.test(summary)) {
+          yield {
+            delta: toolCall("edit", {
+              path: "demo-thin-stage/src/server.js",
+              startLine: 2,
+              endLine: 2,
+              replacement: '  const port = Number(process.env.PORT ?? 3000);\n'
+            })
+          };
+          return;
+        }
+
+        if (toolName === "edit" && /demo-thin-stage\/src\/server\.js/.test(summary)) {
+          yield { delta: "我已经把 demo-thin-stage/src/server.js 改成优先读取 process.env.PORT。" };
+          return;
+        }
+      }
+
+      yield { delta: "ok" };
+    }
+  }
+
+  const bus = new EventBus();
+  const transcriptStore = new TranscriptStore(transcriptPath);
+  const logStore = new LogStore(logsPath);
+  await transcriptStore.ensureInitialized();
+  await logStore.ensureInitialized();
+
+  const session = createDefaultSessionRecord(workspace, VERSION);
+  session.model = "regression-stub";
+
+  const runtime = new AgentRuntime({
+    bus,
+    provider: new BroadProjectImprovementThinEntryStageSummaryProvider(),
+    tools: new InMemoryToolRegistry(),
+    session,
+    transcriptStore,
+    logStore
+  });
+  await runtime.start();
+
+  const result = await runAgentTask({
+    bus,
+    transcriptStore,
+    sessionId: session.sessionId,
+    prompt: "看看项目然后帮我优化下"
+  });
+
+  const sourceContent = await readFile(join(workspace, "demo-thin-stage", "src", "server.js"), "utf8");
+  assert.match(sourceContent, /process\.env\.PORT/);
+  assert.match(result.assistantText, /process\.env\.PORT|src\/server\.js/i);
+  assert.ok(
+    result.toolSummaries.some((summary) => summary.startsWith("demo-thin-stage/package.json:1-4")),
+    "expected thin-entry stage-summary flow to inspect package.json first"
+  );
+  assert.ok(
+    result.toolSummaries.some((summary) => summary.startsWith("demo-thin-stage/app.js:1-2")),
+    "expected thin-entry stage-summary flow to inspect app.js before the stage summary"
+  );
+  assert.ok(
+    result.toolSummaries.some((summary) => summary.startsWith("demo-thin-stage/src/server.js:1-6")),
+    "expected thin-entry stage-summary flow to continue into the imported implementation after the stage summary"
+  );
+  assert.ok(
+    result.toolSummaries.some((summary) => summary.startsWith("demo-thin-stage/src/server.js:2-2 · updated")),
+    "expected thin-entry stage-summary flow to edit the imported implementation file"
+  );
+}
+
+async function verifyResumeAfterThinEntryStageSummary() {
+  const root = await mkdtemp(join(tmpdir(), "selfme-agent-resume-thin-entry-stage-summary-"));
+  const workspace = join(root, "workspace");
+  const transcriptPath = join(root, "transcript.jsonl");
+  const logsPath = join(root, "logs.jsonl");
+  const originalPrompt = "看看项目然后帮我优化下";
+  await mkdir(join(workspace, "demo-thin-resume", "src"), { recursive: true });
+
+  await writeFile(
+    join(workspace, "demo-thin-resume", "package.json"),
+    '{\n  "name": "demo-thin-resume",\n  "version": "1.0.0",\n  "main": "app.js"\n}\n',
+    "utf8"
+  );
+  await writeFile(
+    join(workspace, "demo-thin-resume", "app.js"),
+    'const { createServer } = require("./src/server");\ncreateServer();\n',
+    "utf8"
+  );
+  await writeFile(
+    join(workspace, "demo-thin-resume", "src", "server.js"),
+    'function createServer() {\n  const port = 3000;\n  return port;\n}\n\nmodule.exports = { createServer };\n',
+    "utf8"
+  );
+
+  class ResumeThinEntryStageSummaryProvider implements ProviderClient {
+    readonly name = "resume-thin-entry-stage-summary-provider";
+
+    async *streamResponse(input: ProviderStreamInput): AsyncIterable<ProviderStreamChunk> {
+      if (input.content === originalPrompt) {
+        yield {
+          delta: toolCall("shell", {
+            command: "pwd && ls -la && find . -maxdepth 3 -type f | sed 's#^./##' | sort | head -200"
+          })
+        };
+        return;
+      }
+
+      if (input.content.startsWith(`Original user request: ${originalPrompt}`)) {
+        const toolName = extractLine(input.content, "Tool:") ?? extractLine(input.content, "Latest tool:");
+        const summary = extractLine(input.content, "Summary:") ?? extractLine(input.content, "Latest summary:") ?? "";
+
+        if (toolName === "shell") {
+          if (/You are in the middle of a concrete project inspection request\./.test(input.content)) {
+            assert.match(input.content, /Likely project entry: demo-thin-resume\/package\.json/);
+            yield {
+              delta: toolCall("files", {
+                path: "demo-thin-resume/package.json",
+                startLine: 1,
+                endLine: 20
+              })
+            };
+            return;
+          }
+
+          yield { delta: "我先看了工作区列表，demo-thin-resume 看起来是最像要继续优化的项目。" };
+          return;
+        }
+
+        if (toolName === "files" && /demo-thin-resume\/package\.json/.test(summary)) {
+          if (/You are in the middle of a project improvement task\./.test(input.content)) {
+            assert.match(input.content, /Likely working file: demo-thin-resume\/app\.js/);
+            yield {
+              delta: toolCall("files", {
+                path: "demo-thin-resume/app.js",
+                startLine: 1,
+                endLine: 20
+              })
+            };
+            return;
+          }
+
+          yield { delta: "demo-thin-resume 的入口已经定位到 app.js，我先继续看实现。" };
+          return;
+        }
+
+        if (
+          toolName === "files"
+          && /demo-thin-resume\/app\.js/.test(summary)
+          && /Likely working file: demo-thin-resume\/src\/server\.js/.test(input.content)
+        ) {
+          yield { delta: "app.js 只是薄入口，我下一步会继续看 demo-thin-resume/src/server.js 并在那里改端口逻辑。" };
+          return;
+        }
+      }
+
+      if (input.content.startsWith('The user replied "还能继续吗" and wants to continue the most recent unfinished task.')) {
+        assert.match(input.content, /Original task: 看看项目然后帮我优化下/);
+        assert.match(input.content, /Recent editable working file: demo-thin-resume\/app\.js/);
+        assert.match(input.content, /Pending next step target: demo-thin-resume\/src\/server\.js/);
+        assert.match(input.content, /Latest tool in context: files/);
+        assert.match(input.content, /Latest tool summary in context: demo-thin-resume\/app\.js:1-2/);
+        yield {
+          delta: toolCall("files", {
+            path: "demo-thin-resume/src/server.js",
+            startLine: 1,
+            endLine: 20
+          })
+        };
+        return;
+      }
+
+      if (input.content.startsWith('Original user request: The user replied "还能继续吗" and wants to continue the most recent unfinished task.')) {
+        const toolName = extractLine(input.content, "Tool:") ?? extractLine(input.content, "Latest tool:");
+        const summary = extractLine(input.content, "Summary:") ?? extractLine(input.content, "Latest summary:") ?? "";
+
+        if (toolName === "files" && /demo-thin-resume\/src\/server\.js/.test(summary)) {
+          yield {
+            delta: toolCall("edit", {
+              path: "demo-thin-resume/src/server.js",
+              startLine: 2,
+              endLine: 2,
+              replacement: '  const port = Number(process.env.PORT ?? 3000);\n'
+            })
+          };
+          return;
+        }
+
+        if (toolName === "edit" && /demo-thin-resume\/src\/server\.js/.test(summary)) {
+          yield { delta: "我已经恢复执行，并把 demo-thin-resume/src/server.js 改成优先读取 process.env.PORT。" };
+          return;
+        }
+      }
+
+      yield { delta: "ok" };
+    }
+  }
+
+  const bus = new EventBus();
+  const transcriptStore = new TranscriptStore(transcriptPath);
+  const logStore = new LogStore(logsPath);
+  await transcriptStore.ensureInitialized();
+  await logStore.ensureInitialized();
+
+  const session = createDefaultSessionRecord(workspace, VERSION);
+  session.model = "regression-stub";
+
+  const runtime = new AgentRuntime({
+    bus,
+    provider: new ResumeThinEntryStageSummaryProvider(),
+    tools: new InMemoryToolRegistry(),
+    session,
+    transcriptStore,
+    logStore
+  });
+  await runtime.start();
+
+  const completionPromise = waitForAssistantTaskCompletion(bus, session.sessionId);
+  const stageSummaryPromise = waitForAssistantDeltaContaining(
+    bus,
+    session.sessionId,
+    /demo-thin-resume\/src\/server\.js/
+  );
+
+  bus.emit(createUserMessageSubmittedEvent({
+    sessionId: session.sessionId,
+    content: originalPrompt
+  }));
+
+  await stageSummaryPromise;
+  bus.emit(createRuntimeInterruptRequestedEvent({
+    sessionId: session.sessionId,
+    reason: "cancel"
+  }));
+
+  const cancelledTask = await completionPromise;
+  assert.equal(cancelledTask.payload.state, "cancelled");
+
+  const interruptedEvents = await transcriptStore.readEventsBySession(session.sessionId);
+  assert.ok(
+    interruptedEvents.some((event) =>
+      event.type === "tool.execution.completed" && event.payload.summary.startsWith("demo-thin-resume/package.json:1-4")
+    ),
+    "thin-entry resume chain should preserve the package entry read before stop"
+  );
+  assert.ok(
+    interruptedEvents.some((event) =>
+      event.type === "tool.execution.completed" && event.payload.summary.startsWith("demo-thin-resume/app.js:1-2")
+    ),
+    "thin-entry resume chain should preserve the thin entry read before stop"
+  );
+  assert.equal(
+    interruptedEvents.some((event) =>
+      event.type === "tool.execution.completed" && event.payload.summary.startsWith("demo-thin-resume/src/server.js:1-"))
+    ,
+    false,
+    "thin-entry resume chain should stop before reading the pending implementation file"
+  );
+
+  const resumedResult = await runAgentTask({
+    bus,
+    transcriptStore,
+    sessionId: session.sessionId,
+    prompt: "还能继续吗"
+  });
+
+  const sourceContent = await readFile(join(workspace, "demo-thin-resume", "src", "server.js"), "utf8");
+  assert.match(sourceContent, /process\.env\.PORT/);
+  assert.match(resumedResult.assistantText, /process\.env\.PORT|src\/server\.js/i);
+  assert.equal(
+    resumedResult.toolSummaries.some((summary) => summary.startsWith("demo-thin-resume/package.json:1-")),
+    false,
+    "thin-entry resume follow-up should not restart from package.json"
+  );
+  assert.equal(
+    resumedResult.toolSummaries.some((summary) => summary.startsWith("demo-thin-resume/app.js:1-")),
+    false,
+    "thin-entry resume follow-up should not reread app.js after the pending implementation target is already known"
+  );
+  assert.ok(
+    resumedResult.toolSummaries.some((summary) => summary.startsWith("demo-thin-resume/src/server.js:1-6")),
+    "thin-entry resume follow-up should continue directly into the pending implementation file"
+  );
+  assert.ok(
+    resumedResult.toolSummaries.some((summary) => summary.startsWith("demo-thin-resume/src/server.js:2-2 · updated")),
+    "thin-entry resume follow-up should complete the pending implementation edit"
+  );
+}
+
+async function verifyResumeAfterThinEntryImplementationStageSummary() {
+  const root = await mkdtemp(join(tmpdir(), "selfme-agent-resume-thin-entry-implementation-stage-summary-"));
+  const workspace = join(root, "workspace");
+  const transcriptPath = join(root, "transcript.jsonl");
+  const logsPath = join(root, "logs.jsonl");
+  const originalPrompt = "看看项目然后帮我优化下";
+  await mkdir(join(workspace, "demo-thin-resume-late", "src"), { recursive: true });
+
+  await writeFile(
+    join(workspace, "demo-thin-resume-late", "package.json"),
+    '{\n  "name": "demo-thin-resume-late",\n  "version": "1.0.0",\n  "main": "app.js"\n}\n',
+    "utf8"
+  );
+  await writeFile(
+    join(workspace, "demo-thin-resume-late", "app.js"),
+    'const { createServer } = require("./src/server");\ncreateServer();\n',
+    "utf8"
+  );
+  await writeFile(
+    join(workspace, "demo-thin-resume-late", "src", "server.js"),
+    'function createServer() {\n  const port = 3000;\n  return port;\n}\n\nmodule.exports = { createServer };\n',
+    "utf8"
+  );
+
+  class ResumeThinEntryImplementationStageSummaryProvider implements ProviderClient {
+    readonly name = "resume-thin-entry-implementation-stage-summary-provider";
+
+    async *streamResponse(input: ProviderStreamInput): AsyncIterable<ProviderStreamChunk> {
+      if (input.content === originalPrompt) {
+        yield {
+          delta: toolCall("shell", {
+            command: "pwd && ls -la && find . -maxdepth 3 -type f | sed 's#^./##' | sort | head -200"
+          })
+        };
+        return;
+      }
+
+      if (input.content.startsWith(`Original user request: ${originalPrompt}`)) {
+        const toolName = extractLine(input.content, "Tool:") ?? extractLine(input.content, "Latest tool:");
+        const summary = extractLine(input.content, "Summary:") ?? extractLine(input.content, "Latest summary:") ?? "";
+
+        if (toolName === "shell") {
+          if (/You are in the middle of a concrete project inspection request\./.test(input.content)) {
+            assert.match(input.content, /Likely project entry: demo-thin-resume-late\/package\.json/);
+            yield {
+              delta: toolCall("files", {
+                path: "demo-thin-resume-late/package.json",
+                startLine: 1,
+                endLine: 20
+              })
+            };
+            return;
+          }
+
+          yield { delta: "我先看了工作区列表，demo-thin-resume-late 看起来是最像要继续优化的项目。" };
+          return;
+        }
+
+        if (toolName === "files" && /demo-thin-resume-late\/package\.json/.test(summary)) {
+          if (/You are in the middle of a project improvement task\./.test(input.content)) {
+            assert.match(input.content, /Likely working file: demo-thin-resume-late\/app\.js/);
+            yield {
+              delta: toolCall("files", {
+                path: "demo-thin-resume-late/app.js",
+                startLine: 1,
+                endLine: 20
+              })
+            };
+            return;
+          }
+
+          yield { delta: "demo-thin-resume-late 的入口已经定位到 app.js，我先继续看实现。" };
+          return;
+        }
+
+        if (toolName === "files" && /demo-thin-resume-late\/app\.js/.test(summary)) {
+          if (/You are in the middle of a project improvement task\./.test(input.content)) {
+            assert.match(input.content, /Likely working file: demo-thin-resume-late\/src\/server\.js/);
+            yield {
+              delta: toolCall("files", {
+                path: "demo-thin-resume-late/src/server.js",
+                startLine: 1,
+                endLine: 20
+              })
+            };
+            return;
+          }
+
+          yield { delta: "app.js 只是薄入口，我先继续跟到本地实现文件。" };
+          return;
+        }
+
+        if (toolName === "files" && /demo-thin-resume-late\/src\/server\.js/.test(summary)) {
+          if (/You are in the middle of a project improvement task\./.test(input.content)) {
+            yield { delta: "我已经看了 demo-thin-resume-late/src/server.js，下一步会直接在这个文件里改端口逻辑。" };
+            return;
+          }
+
+          await waitForProviderDelay(input.signal, 120);
+          yield {
+            delta: toolCall("edit", {
+              path: "demo-thin-resume-late/src/server.js",
+              startLine: 2,
+              endLine: 2,
+              replacement: '  const port = Number(process.env.PORT ?? 3000);\n'
+            })
+          };
+          return;
+        }
+      }
+
+      if (input.content.startsWith('The user replied "还能继续吗" and wants to continue the most recent unfinished task.')) {
+        assert.match(input.content, /Original task: 看看项目然后帮我优化下/);
+        assert.match(input.content, /Recent editable working file: demo-thin-resume-late\/src\/server\.js/);
+        assert.match(input.content, /Pending next step target: demo-thin-resume-late\/src\/server\.js/);
+        assert.match(input.content, /Latest tool in context: files/);
+        assert.match(input.content, /Latest tool summary in context: demo-thin-resume-late\/src\/server\.js:1-6/);
+        yield {
+          delta: toolCall("edit", {
+            path: "demo-thin-resume-late/src/server.js",
+            startLine: 2,
+            endLine: 2,
+            replacement: '  const port = Number(process.env.PORT ?? 3000);\n'
+          })
+        };
+        return;
+      }
+
+      if (input.content.startsWith('Original user request: The user replied "还能继续吗" and wants to continue the most recent unfinished task.')) {
+        const toolName = extractLine(input.content, "Tool:") ?? extractLine(input.content, "Latest tool:");
+        const summary = extractLine(input.content, "Summary:") ?? extractLine(input.content, "Latest summary:") ?? "";
+
+        if (toolName === "edit" && /demo-thin-resume-late\/src\/server\.js/.test(summary)) {
+          yield { delta: "我已经恢复执行，并把 demo-thin-resume-late/src/server.js 改成优先读取 process.env.PORT。" };
+          return;
+        }
+      }
+
+      yield { delta: "ok" };
+    }
+  }
+
+  const bus = new EventBus();
+  const transcriptStore = new TranscriptStore(transcriptPath);
+  const logStore = new LogStore(logsPath);
+  await transcriptStore.ensureInitialized();
+  await logStore.ensureInitialized();
+
+  const session = createDefaultSessionRecord(workspace, VERSION);
+  session.model = "regression-stub";
+
+  const runtime = new AgentRuntime({
+    bus,
+    provider: new ResumeThinEntryImplementationStageSummaryProvider(),
+    tools: new InMemoryToolRegistry(),
+    session,
+    transcriptStore,
+    logStore
+  });
+  await runtime.start();
+
+  const completionPromise = waitForAssistantTaskCompletion(bus, session.sessionId);
+  const stageSummaryPromise = waitForAssistantDeltaContaining(
+    bus,
+    session.sessionId,
+    /demo-thin-resume-late\/src\/server\.js/
+  );
+
+  bus.emit(createUserMessageSubmittedEvent({
+    sessionId: session.sessionId,
+    content: originalPrompt
+  }));
+
+  await stageSummaryPromise;
+  bus.emit(createRuntimeInterruptRequestedEvent({
+    sessionId: session.sessionId,
+    reason: "cancel"
+  }));
+
+  const cancelledTask = await completionPromise;
+  assert.equal(cancelledTask.payload.state, "cancelled");
+
+  const interruptedEvents = await transcriptStore.readEventsBySession(session.sessionId);
+  assert.ok(
+    interruptedEvents.some((event) =>
+      event.type === "tool.execution.completed" && event.payload.summary.startsWith("demo-thin-resume-late/src/server.js:1-6")
+    ),
+    "late thin-entry resume chain should preserve the implementation read before stop"
+  );
+  assert.equal(
+    interruptedEvents.some((event) =>
+      event.type === "tool.execution.completed" && event.payload.summary.startsWith("demo-thin-resume-late/src/server.js:2-2 · updated")
+    ),
+    false,
+    "late thin-entry resume chain should stop before the pending implementation edit is applied"
+  );
+
+  const resumedResult = await runAgentTask({
+    bus,
+    transcriptStore,
+    sessionId: session.sessionId,
+    prompt: "还能继续吗"
+  });
+
+  const sourceContent = await readFile(join(workspace, "demo-thin-resume-late", "src", "server.js"), "utf8");
+  assert.match(sourceContent, /process\.env\.PORT/);
+  assert.match(resumedResult.assistantText, /process\.env\.PORT|src\/server\.js/i);
+  assert.equal(
+    resumedResult.toolSummaries.some((summary) => summary.startsWith("demo-thin-resume-late/package.json:1-")),
+    false,
+    "late thin-entry resume follow-up should not restart from package.json"
+  );
+  assert.equal(
+    resumedResult.toolSummaries.some((summary) => summary.startsWith("demo-thin-resume-late/app.js:1-")),
+    false,
+    "late thin-entry resume follow-up should not reread app.js"
+  );
+  assert.equal(
+    resumedResult.toolSummaries.some((summary) => summary.startsWith("demo-thin-resume-late/src/server.js:1-")),
+    false,
+    "late thin-entry resume follow-up should not reread the implementation file when the pending edit target is already known"
+  );
+  assert.ok(
+    resumedResult.toolSummaries.some((summary) => summary.startsWith("demo-thin-resume-late/src/server.js:2-2 · updated")),
+    "late thin-entry resume follow-up should jump straight to the pending implementation edit"
+  );
+}
+
+async function verifyVagueFollowUpResumeAfterThinEntryImplementationStageSummary(
+  followUpPrompt: "帮我优化下" | "帮我看看"
+) {
+  const root = await mkdtemp(join(tmpdir(), `selfme-agent-resume-thin-entry-implementation-stage-summary-${followUpPrompt === "帮我优化下" ? "optimize" : "inspect"}-`));
+  const workspace = join(root, "workspace");
+  const transcriptPath = join(root, "transcript.jsonl");
+  const logsPath = join(root, "logs.jsonl");
+  const originalPrompt = "看看项目然后帮我优化下";
+  await mkdir(join(workspace, "demo-thin-resume-vague", "src"), { recursive: true });
+
+  await writeFile(
+    join(workspace, "demo-thin-resume-vague", "package.json"),
+    '{\n  "name": "demo-thin-resume-vague",\n  "version": "1.0.0",\n  "main": "app.js"\n}\n',
+    "utf8"
+  );
+  await writeFile(
+    join(workspace, "demo-thin-resume-vague", "app.js"),
+    'const { createServer } = require("./src/server");\ncreateServer();\n',
+    "utf8"
+  );
+  await writeFile(
+    join(workspace, "demo-thin-resume-vague", "src", "server.js"),
+    'function createServer() {\n  const port = 3000;\n  return port;\n}\n\nmodule.exports = { createServer };\n',
+    "utf8"
+  );
+
+  class ResumeThinEntryImplementationStageSummaryVagueProvider implements ProviderClient {
+    readonly name = "resume-thin-entry-implementation-stage-summary-vague-provider";
+
+    async *streamResponse(input: ProviderStreamInput): AsyncIterable<ProviderStreamChunk> {
+      if (input.content === originalPrompt) {
+        yield {
+          delta: toolCall("shell", {
+            command: "pwd && ls -la && find . -maxdepth 3 -type f | sed 's#^./##' | sort | head -200"
+          })
+        };
+        return;
+      }
+
+      if (input.content.startsWith(`Original user request: ${originalPrompt}`)) {
+        const toolName = extractLine(input.content, "Tool:") ?? extractLine(input.content, "Latest tool:");
+        const summary = extractLine(input.content, "Summary:") ?? extractLine(input.content, "Latest summary:") ?? "";
+
+        if (toolName === "shell") {
+          if (/You are in the middle of a concrete project inspection request\./.test(input.content)) {
+            yield {
+              delta: toolCall("files", {
+                path: "demo-thin-resume-vague/package.json",
+                startLine: 1,
+                endLine: 20
+              })
+            };
+            return;
+          }
+
+          yield { delta: "我先看了工作区列表，demo-thin-resume-vague 看起来是最像要继续优化的项目。" };
+          return;
+        }
+
+        if (toolName === "files" && /demo-thin-resume-vague\/package\.json/.test(summary)) {
+          if (/You are in the middle of a project improvement task\./.test(input.content)) {
+            yield {
+              delta: toolCall("files", {
+                path: "demo-thin-resume-vague/app.js",
+                startLine: 1,
+                endLine: 20
+              })
+            };
+            return;
+          }
+
+          yield { delta: "demo-thin-resume-vague 的入口已经定位到 app.js，我先继续看实现。" };
+          return;
+        }
+
+        if (toolName === "files" && /demo-thin-resume-vague\/app\.js/.test(summary)) {
+          if (/You are in the middle of a project improvement task\./.test(input.content)) {
+            yield {
+              delta: toolCall("files", {
+                path: "demo-thin-resume-vague/src/server.js",
+                startLine: 1,
+                endLine: 20
+              })
+            };
+            return;
+          }
+
+          yield { delta: "app.js 只是薄入口，我先继续跟到本地实现文件。" };
+          return;
+        }
+
+        if (toolName === "files" && /demo-thin-resume-vague\/src\/server\.js/.test(summary)) {
+          if (/You are in the middle of a project improvement task\./.test(input.content)) {
+            yield { delta: "我已经看了 demo-thin-resume-vague/src/server.js，下一步会直接在这个文件里改端口逻辑。" };
+            return;
+          }
+
+          await waitForProviderDelay(input.signal, 120);
+          yield {
+            delta: toolCall("edit", {
+              path: "demo-thin-resume-vague/src/server.js",
+              startLine: 2,
+              endLine: 2,
+              replacement: '  const port = Number(process.env.PORT ?? 3000);\n'
+            })
+          };
+          return;
+        }
+      }
+
+      if (input.content.startsWith(`The user replied "${followUpPrompt}" and wants to continue the most recent unfinished task.`)) {
+        assert.match(input.content, /Original task: 看看项目然后帮我优化下/);
+        if (followUpPrompt === "帮我优化下") {
+          assert.match(input.content, /Resume that task now instead of treating this as a broad optimization follow-up\./);
+        } else {
+          assert.match(input.content, /Resume that task now instead of treating this as a broad inspection follow-up\./);
+        }
+        assert.match(input.content, /Recent editable working file: demo-thin-resume-vague\/src\/server\.js/);
+        assert.match(input.content, /Pending next step target: demo-thin-resume-vague\/src\/server\.js/);
+        assert.match(input.content, /Latest tool in context: files/);
+        assert.match(input.content, /Latest tool summary in context: demo-thin-resume-vague\/src\/server\.js:1-6/);
+        yield {
+          delta: toolCall("edit", {
+            path: "demo-thin-resume-vague/src/server.js",
+            startLine: 2,
+            endLine: 2,
+            replacement: '  const port = Number(process.env.PORT ?? 3000);\n'
+          })
+        };
+        return;
+      }
+
+      if (input.content.startsWith(`Original user request: The user replied "${followUpPrompt}" and wants to continue the most recent unfinished task.`)) {
+        const toolName = extractLine(input.content, "Tool:") ?? extractLine(input.content, "Latest tool:");
+        const summary = extractLine(input.content, "Summary:") ?? extractLine(input.content, "Latest summary:") ?? "";
+
+        if (toolName === "edit" && /demo-thin-resume-vague\/src\/server\.js/.test(summary)) {
+          yield { delta: "我已经恢复执行，并把 demo-thin-resume-vague/src/server.js 改成优先读取 process.env.PORT。" };
+          return;
+        }
+      }
+
+      yield { delta: "ok" };
+    }
+  }
+
+  const bus = new EventBus();
+  const transcriptStore = new TranscriptStore(transcriptPath);
+  const logStore = new LogStore(logsPath);
+  await transcriptStore.ensureInitialized();
+  await logStore.ensureInitialized();
+
+  const session = createDefaultSessionRecord(workspace, VERSION);
+  session.model = "regression-stub";
+
+  const runtime = new AgentRuntime({
+    bus,
+    provider: new ResumeThinEntryImplementationStageSummaryVagueProvider(),
+    tools: new InMemoryToolRegistry(),
+    session,
+    transcriptStore,
+    logStore
+  });
+  await runtime.start();
+
+  const completionPromise = waitForAssistantTaskCompletion(bus, session.sessionId);
+  const stageSummaryPromise = waitForAssistantDeltaContaining(
+    bus,
+    session.sessionId,
+    /demo-thin-resume-vague\/src\/server\.js/
+  );
+
+  bus.emit(createUserMessageSubmittedEvent({
+    sessionId: session.sessionId,
+    content: originalPrompt
+  }));
+
+  await stageSummaryPromise;
+  bus.emit(createRuntimeInterruptRequestedEvent({
+    sessionId: session.sessionId,
+    reason: "cancel"
+  }));
+
+  const cancelledTask = await completionPromise;
+  assert.equal(cancelledTask.payload.state, "cancelled");
+
+  const resumedResult = await runAgentTask({
+    bus,
+    transcriptStore,
+    sessionId: session.sessionId,
+    prompt: followUpPrompt
+  });
+
+  const sourceContent = await readFile(join(workspace, "demo-thin-resume-vague", "src", "server.js"), "utf8");
+  assert.match(sourceContent, /process\.env\.PORT/);
+  assert.equal(
+    resumedResult.toolSummaries.some((summary) => summary.startsWith("demo-thin-resume-vague/package.json:1-")),
+    false,
+    "vague thin-entry resume follow-up should not restart from package.json"
+  );
+  assert.equal(
+    resumedResult.toolSummaries.some((summary) => summary.startsWith("demo-thin-resume-vague/app.js:1-")),
+    false,
+    "vague thin-entry resume follow-up should not reread app.js"
+  );
+  assert.equal(
+    resumedResult.toolSummaries.some((summary) => summary.startsWith("demo-thin-resume-vague/src/server.js:1-")),
+    false,
+    "vague thin-entry resume follow-up should not reread the implementation file when the pending edit target is already known"
+  );
+  assert.ok(
+    resumedResult.toolSummaries.some((summary) => summary.startsWith("demo-thin-resume-vague/src/server.js:2-2 · updated")),
+    "vague thin-entry resume follow-up should jump straight to the pending implementation edit"
+  );
+}
+
+async function verifyProjectRewriteFollowsThinEntryImplementationImport() {
+  const root = await mkdtemp(join(tmpdir(), "selfme-agent-project-rewrite-thin-entry-import-"));
+  const workspace = join(root, "workspace");
+  const transcriptPath = join(root, "transcript.jsonl");
+  const logsPath = join(root, "logs.jsonl");
+  await mkdir(join(workspace, "demo-rewrite-thin", "src"), { recursive: true });
+
+  await writeFile(
+    join(workspace, "demo-rewrite-thin", "package.json"),
+    '{\n  "name": "demo-rewrite-thin",\n  "version": "1.0.0",\n  "main": "app.js"\n}\n',
+    "utf8"
+  );
+  await writeFile(
+    join(workspace, "demo-rewrite-thin", "app.js"),
+    'const { createServer } = require("./src/server");\nmodule.exports = createServer();\n',
+    "utf8"
+  );
+  await writeFile(
+    join(workspace, "demo-rewrite-thin", "src", "server.js"),
+    'function createServer() {\n  return { port: 3000 };\n}\n\nmodule.exports = { createServer };\n',
+    "utf8"
+  );
+
+  class ProjectRewriteThinEntryImportProvider implements ProviderClient {
+    readonly name = "project-rewrite-thin-entry-import-provider";
+
+    async *streamResponse(input: ProviderStreamInput): AsyncIterable<ProviderStreamChunk> {
+      const originalPrompt = "看看项目，然后帮我重新写一下 demo-rewrite-thin，让端口来自 process.env.PORT。";
+
+      if (input.content === originalPrompt) {
+        yield {
+          delta: toolCall("shell", {
+            command: "pwd && ls -la && find . -maxdepth 3 -type f | sed 's#^./##' | sort | head -200"
+          })
+        };
+        return;
+      }
+
+      if (input.content.startsWith(`Original user request: ${originalPrompt}`)) {
+        const toolName = extractLine(input.content, "Tool:") ?? extractLine(input.content, "Latest tool:");
+        const summary = extractLine(input.content, "Summary:") ?? extractLine(input.content, "Latest summary:") ?? "";
+
+        if (toolName === "shell") {
+          if (/You are in the middle of a concrete project inspection request\./.test(input.content)) {
+            assert.match(input.content, /Likely project entry: demo-rewrite-thin\/package\.json/);
+            yield {
+              delta: toolCall("files", {
+                path: "demo-rewrite-thin/package.json",
+                startLine: 1,
+                endLine: 20
+              })
+            };
+            return;
+          }
+
+          yield { delta: "我先看了工作区列表，demo-rewrite-thin 看起来是最像要继续改造的项目。" };
+          return;
+        }
+
+        if (toolName === "files" && /demo-rewrite-thin\/package\.json/.test(summary)) {
+          if (/You are in the middle of a project improvement task\./.test(input.content)) {
+            assert.match(input.content, /Likely working file: demo-rewrite-thin\/app\.js/);
+            yield {
+              delta: toolCall("files", {
+                path: "demo-rewrite-thin/app.js",
+                startLine: 1,
+                endLine: 20
+              })
+            };
+            return;
+          }
+
+          yield { delta: "入口已经定位到 app.js，我先继续跟进实现。" };
+          return;
+        }
+
+        if (toolName === "files" && /demo-rewrite-thin\/app\.js/.test(summary)) {
+          if (/You are in the middle of a project improvement task\./.test(input.content)) {
+            assert.match(input.content, /Likely working file: demo-rewrite-thin\/src\/server\.js/);
+            yield {
+              delta: toolCall("files", {
+                path: "demo-rewrite-thin/src/server.js",
+                startLine: 1,
+                endLine: 20
+              })
+            };
+            return;
+          }
+
+          yield { delta: "app.js 只是薄入口，我先继续跟到本地实现文件。" };
+          return;
+        }
+
+        if (toolName === "files" && /demo-rewrite-thin\/src\/server\.js/.test(summary)) {
+          yield {
+            delta: toolCall("edit", {
+              path: "demo-rewrite-thin/src/server.js",
+              startLine: 2,
+              endLine: 2,
+              replacement: '  return { port: Number(process.env.PORT ?? 3000) };\n'
+            })
+          };
+          return;
+        }
+
+        if (toolName === "edit" && /demo-rewrite-thin\/src\/server\.js/.test(summary)) {
+          yield { delta: "我已经把 demo-rewrite-thin/src/server.js 改成优先读取 process.env.PORT。" };
+          return;
+        }
+      }
+
+      yield { delta: "ok" };
+    }
+  }
+
+  const bus = new EventBus();
+  const transcriptStore = new TranscriptStore(transcriptPath);
+  const logStore = new LogStore(logsPath);
+  await transcriptStore.ensureInitialized();
+  await logStore.ensureInitialized();
+
+  const session = createDefaultSessionRecord(workspace, VERSION);
+  session.model = "regression-stub";
+
+  const runtime = new AgentRuntime({
+    bus,
+    provider: new ProjectRewriteThinEntryImportProvider(),
+    tools: new InMemoryToolRegistry(),
+    session,
+    transcriptStore,
+    logStore
+  });
+  await runtime.start();
+
+  const result = await runAgentTask({
+    bus,
+    transcriptStore,
+    sessionId: session.sessionId,
+    prompt: "看看项目，然后帮我重新写一下 demo-rewrite-thin，让端口来自 process.env.PORT。"
+  });
+
+  const sourceContent = await readFile(join(workspace, "demo-rewrite-thin", "src", "server.js"), "utf8");
+  assert.match(sourceContent, /process\.env\.PORT/);
+  assert.ok(
+    result.toolSummaries.some((summary) => summary.startsWith("demo-rewrite-thin/package.json:1-4")),
+    "expected thin-entry rewrite flow to inspect package.json first"
+  );
+  assert.ok(
+    result.toolSummaries.some((summary) => summary.startsWith("demo-rewrite-thin/app.js:1-2")),
+    "expected thin-entry rewrite flow to continue into the entry source first"
+  );
+  assert.ok(
+    result.toolSummaries.some((summary) => summary.startsWith("demo-rewrite-thin/src/server.js:1-5")),
+    "expected thin-entry rewrite flow to continue from the thin entry into the imported implementation"
+  );
+  assert.ok(
+    result.toolSummaries.some((summary) => summary.startsWith("demo-rewrite-thin/src/server.js:2-2 · updated")),
+    "expected thin-entry rewrite flow to edit the imported implementation file"
+  );
+}
+
+async function verifyProjectRewriteContinuesAfterThinEntryStageSummary() {
+  const root = await mkdtemp(join(tmpdir(), "selfme-agent-project-rewrite-thin-entry-stage-summary-"));
+  const workspace = join(root, "workspace");
+  const transcriptPath = join(root, "transcript.jsonl");
+  const logsPath = join(root, "logs.jsonl");
+  await mkdir(join(workspace, "demo-rewrite-thin-stage", "src"), { recursive: true });
+
+  await writeFile(
+    join(workspace, "demo-rewrite-thin-stage", "package.json"),
+    '{\n  "name": "demo-rewrite-thin-stage",\n  "version": "1.0.0",\n  "main": "app.js"\n}\n',
+    "utf8"
+  );
+  await writeFile(
+    join(workspace, "demo-rewrite-thin-stage", "app.js"),
+    'const { createServer } = require("./src/server");\nmodule.exports = createServer();\n',
+    "utf8"
+  );
+  await writeFile(
+    join(workspace, "demo-rewrite-thin-stage", "src", "server.js"),
+    'function createServer() {\n  return { port: 3000 };\n}\n\nmodule.exports = { createServer };\n',
+    "utf8"
+  );
+
+  class ProjectRewriteThinEntryStageSummaryProvider implements ProviderClient {
+    readonly name = "project-rewrite-thin-entry-stage-summary-provider";
+
+    async *streamResponse(input: ProviderStreamInput): AsyncIterable<ProviderStreamChunk> {
+      const originalPrompt = "看看项目，然后帮我重新写一下 demo-rewrite-thin-stage，让端口来自 process.env.PORT。";
+
+      if (input.content === originalPrompt) {
+        yield {
+          delta: toolCall("shell", {
+            command: "pwd && ls -la && find . -maxdepth 3 -type f | sed 's#^./##' | sort | head -200"
+          })
+        };
+        return;
+      }
+
+      if (input.content.startsWith(`Original user request: ${originalPrompt}`)) {
+        const toolName = extractLine(input.content, "Tool:") ?? extractLine(input.content, "Latest tool:");
+        const summary = extractLine(input.content, "Summary:") ?? extractLine(input.content, "Latest summary:") ?? "";
+
+        if (toolName === "shell") {
+          if (/You are in the middle of a concrete project inspection request\./.test(input.content)) {
+            assert.match(input.content, /Likely project entry: demo-rewrite-thin-stage\/package\.json/);
+            yield {
+              delta: toolCall("files", {
+                path: "demo-rewrite-thin-stage/package.json",
+                startLine: 1,
+                endLine: 20
+              })
+            };
+            return;
+          }
+
+          yield { delta: "我先看了工作区列表，demo-rewrite-thin-stage 看起来是最像要继续改造的项目。" };
+          return;
+        }
+
+        if (toolName === "files" && /demo-rewrite-thin-stage\/package\.json/.test(summary)) {
+          if (/You are in the middle of a project improvement task\./.test(input.content)) {
+            assert.match(input.content, /Likely working file: demo-rewrite-thin-stage\/app\.js/);
+            yield {
+              delta: toolCall("files", {
+                path: "demo-rewrite-thin-stage/app.js",
+                startLine: 1,
+                endLine: 20
+              })
+            };
+            return;
+          }
+
+          yield { delta: "入口已经定位到 app.js，我先继续跟进实现。" };
+          return;
+        }
+
+        if (
+          toolName === "files"
+          && /demo-rewrite-thin-stage\/app\.js/.test(summary)
+          && /Likely working file: demo-rewrite-thin-stage\/src\/server\.js/.test(input.content)
+        ) {
+          yield {
+            delta: toolCall("files", {
+              path: "demo-rewrite-thin-stage/src/server.js",
+              startLine: 1,
+              endLine: 20
+            })
+          };
+          return;
+        }
+
+        if (toolName === "files" && /demo-rewrite-thin-stage\/app\.js/.test(summary)) {
+          if (/You are in the middle of a project improvement task\./.test(input.content)) {
+            assert.match(input.content, /Likely working file: demo-rewrite-thin-stage\/src\/server\.js/);
+            yield { delta: "app.js 只是薄入口，我下一步会继续看 demo-rewrite-thin-stage/src/server.js 并在那里改端口逻辑。" };
+            return;
+          }
+
+          yield { delta: "app.js 只是薄入口，我先继续跟到本地实现文件。" };
+          return;
+        }
+
+        if (toolName === "files" && /demo-rewrite-thin-stage\/src\/server\.js/.test(summary)) {
+          yield {
+            delta: toolCall("edit", {
+              path: "demo-rewrite-thin-stage/src/server.js",
+              startLine: 2,
+              endLine: 2,
+              replacement: '  return { port: Number(process.env.PORT ?? 3000) };\n'
+            })
+          };
+          return;
+        }
+
+        if (toolName === "edit" && /demo-rewrite-thin-stage\/src\/server\.js/.test(summary)) {
+          yield { delta: "我已经把 demo-rewrite-thin-stage/src/server.js 改成优先读取 process.env.PORT。" };
+          return;
+        }
+      }
+
+      yield { delta: "ok" };
+    }
+  }
+
+  const bus = new EventBus();
+  const transcriptStore = new TranscriptStore(transcriptPath);
+  const logStore = new LogStore(logsPath);
+  await transcriptStore.ensureInitialized();
+  await logStore.ensureInitialized();
+
+  const session = createDefaultSessionRecord(workspace, VERSION);
+  session.model = "regression-stub";
+
+  const runtime = new AgentRuntime({
+    bus,
+    provider: new ProjectRewriteThinEntryStageSummaryProvider(),
+    tools: new InMemoryToolRegistry(),
+    session,
+    transcriptStore,
+    logStore
+  });
+  await runtime.start();
+
+  const result = await runAgentTask({
+    bus,
+    transcriptStore,
+    sessionId: session.sessionId,
+    prompt: "看看项目，然后帮我重新写一下 demo-rewrite-thin-stage，让端口来自 process.env.PORT。"
+  });
+
+  const sourceContent = await readFile(join(workspace, "demo-rewrite-thin-stage", "src", "server.js"), "utf8");
+  assert.match(sourceContent, /process\.env\.PORT/);
+  assert.match(result.assistantText, /process\.env\.PORT|src\/server\.js/i);
+  assert.ok(
+    result.toolSummaries.some((summary) => summary.startsWith("demo-rewrite-thin-stage/package.json:1-4")),
+    "expected thin-entry rewrite stage-summary flow to inspect package.json first"
+  );
+  assert.ok(
+    result.toolSummaries.some((summary) => summary.startsWith("demo-rewrite-thin-stage/app.js:1-2")),
+    "expected thin-entry rewrite stage-summary flow to inspect app.js before the stage summary"
+  );
+  assert.ok(
+    result.toolSummaries.some((summary) => summary.startsWith("demo-rewrite-thin-stage/src/server.js:1-5")),
+    "expected thin-entry rewrite stage-summary flow to continue into the imported implementation after the stage summary"
+  );
+  assert.ok(
+    result.toolSummaries.some((summary) => summary.startsWith("demo-rewrite-thin-stage/src/server.js:2-2 · updated")),
+    "expected thin-entry rewrite stage-summary flow to edit the imported implementation file"
+  );
+}
+
+async function verifyResumeAfterThinEntryRewriteImplementationStageSummary() {
+  const root = await mkdtemp(join(tmpdir(), "selfme-agent-resume-thin-entry-rewrite-implementation-stage-summary-"));
+  const workspace = join(root, "workspace");
+  const transcriptPath = join(root, "transcript.jsonl");
+  const logsPath = join(root, "logs.jsonl");
+  const originalPrompt = "看看项目，然后帮我重新写一下 demo-rewrite-thin-resume，让端口来自 process.env.PORT。";
+  await mkdir(join(workspace, "demo-rewrite-thin-resume", "src"), { recursive: true });
+
+  await writeFile(
+    join(workspace, "demo-rewrite-thin-resume", "package.json"),
+    '{\n  "name": "demo-rewrite-thin-resume",\n  "version": "1.0.0",\n  "main": "app.js"\n}\n',
+    "utf8"
+  );
+  await writeFile(
+    join(workspace, "demo-rewrite-thin-resume", "app.js"),
+    'const { createServer } = require("./src/server");\nmodule.exports = createServer();\n',
+    "utf8"
+  );
+  await writeFile(
+    join(workspace, "demo-rewrite-thin-resume", "src", "server.js"),
+    'function createServer() {\n  return { port: 3000 };\n}\n\nmodule.exports = { createServer };\n',
+    "utf8"
+  );
+
+  class ResumeThinEntryRewriteImplementationStageSummaryProvider implements ProviderClient {
+    readonly name = "resume-thin-entry-rewrite-implementation-stage-summary-provider";
+
+    async *streamResponse(input: ProviderStreamInput): AsyncIterable<ProviderStreamChunk> {
+      if (input.content === originalPrompt) {
+        yield {
+          delta: toolCall("shell", {
+            command: "pwd && ls -la && find . -maxdepth 3 -type f | sed 's#^./##' | sort | head -200"
+          })
+        };
+        return;
+      }
+
+      if (input.content.startsWith(`Original user request: ${originalPrompt}`)) {
+        const toolName = extractLine(input.content, "Tool:") ?? extractLine(input.content, "Latest tool:");
+        const summary = extractLine(input.content, "Summary:") ?? extractLine(input.content, "Latest summary:") ?? "";
+
+        if (toolName === "shell") {
+          if (/You are in the middle of a concrete project inspection request\./.test(input.content)) {
+            assert.match(input.content, /Likely project entry: demo-rewrite-thin-resume\/package\.json/);
+            yield {
+              delta: toolCall("files", {
+                path: "demo-rewrite-thin-resume/package.json",
+                startLine: 1,
+                endLine: 20
+              })
+            };
+            return;
+          }
+
+          yield { delta: "我先看了工作区列表，demo-rewrite-thin-resume 看起来是最像要继续改造的项目。" };
+          return;
+        }
+
+        if (toolName === "files" && /demo-rewrite-thin-resume\/package\.json/.test(summary)) {
+          if (/You are in the middle of a project improvement task\./.test(input.content)) {
+            assert.match(input.content, /Likely working file: demo-rewrite-thin-resume\/app\.js/);
+            yield {
+              delta: toolCall("files", {
+                path: "demo-rewrite-thin-resume/app.js",
+                startLine: 1,
+                endLine: 20
+              })
+            };
+            return;
+          }
+
+          yield { delta: "入口已经定位到 app.js，我先继续跟进实现。" };
+          return;
+        }
+
+        if (toolName === "files" && /demo-rewrite-thin-resume\/app\.js/.test(summary)) {
+          if (/You are in the middle of a project improvement task\./.test(input.content)) {
+            assert.match(input.content, /Likely working file: demo-rewrite-thin-resume\/src\/server\.js/);
+            yield {
+              delta: toolCall("files", {
+                path: "demo-rewrite-thin-resume/src/server.js",
+                startLine: 1,
+                endLine: 20
+              })
+            };
+            return;
+          }
+
+          yield { delta: "app.js 只是薄入口，我先继续跟到本地实现文件。" };
+          return;
+        }
+
+        if (toolName === "files" && /demo-rewrite-thin-resume\/src\/server\.js/.test(summary)) {
+          if (/You are in the middle of a project improvement task\./.test(input.content)) {
+            yield { delta: "我已经看了 demo-rewrite-thin-resume/src/server.js，下一步会直接在这个文件里改端口逻辑。" };
+            return;
+          }
+
+          await waitForProviderDelay(input.signal, 120);
+          yield {
+            delta: toolCall("edit", {
+              path: "demo-rewrite-thin-resume/src/server.js",
+              startLine: 2,
+              endLine: 2,
+              replacement: '  return { port: Number(process.env.PORT ?? 3000) };\n'
+            })
+          };
+          return;
+        }
+      }
+
+      if (input.content.startsWith('The user replied "还能继续吗" and wants to continue the most recent unfinished task.')) {
+        assert.match(input.content, /Original task: 看看项目，然后帮我重新写一下 demo-rewrite-thin-resume/);
+        assert.match(input.content, /Recent editable working file: demo-rewrite-thin-resume\/src\/server\.js/);
+        assert.match(input.content, /Pending next step target: demo-rewrite-thin-resume\/src\/server\.js/);
+        assert.match(input.content, /Latest tool in context: files/);
+        assert.match(input.content, /Latest tool summary in context: demo-rewrite-thin-resume\/src\/server\.js:1-5/);
+        yield {
+          delta: toolCall("edit", {
+            path: "demo-rewrite-thin-resume/src/server.js",
+            startLine: 2,
+            endLine: 2,
+            replacement: '  return { port: Number(process.env.PORT ?? 3000) };\n'
+          })
+        };
+        return;
+      }
+
+      if (input.content.startsWith('Original user request: The user replied "还能继续吗" and wants to continue the most recent unfinished task.')) {
+        const toolName = extractLine(input.content, "Tool:") ?? extractLine(input.content, "Latest tool:");
+        const summary = extractLine(input.content, "Summary:") ?? extractLine(input.content, "Latest summary:") ?? "";
+
+        if (toolName === "edit" && /demo-rewrite-thin-resume\/src\/server\.js/.test(summary)) {
+          yield { delta: "我已经恢复执行，并把 demo-rewrite-thin-resume/src/server.js 改成优先读取 process.env.PORT。" };
+          return;
+        }
+      }
+
+      yield { delta: "ok" };
+    }
+  }
+
+  const bus = new EventBus();
+  const transcriptStore = new TranscriptStore(transcriptPath);
+  const logStore = new LogStore(logsPath);
+  await transcriptStore.ensureInitialized();
+  await logStore.ensureInitialized();
+
+  const session = createDefaultSessionRecord(workspace, VERSION);
+  session.model = "regression-stub";
+
+  const runtime = new AgentRuntime({
+    bus,
+    provider: new ResumeThinEntryRewriteImplementationStageSummaryProvider(),
+    tools: new InMemoryToolRegistry(),
+    session,
+    transcriptStore,
+    logStore
+  });
+  await runtime.start();
+
+  const completionPromise = waitForAssistantTaskCompletion(bus, session.sessionId);
+  const stageSummaryPromise = waitForAssistantDeltaContaining(
+    bus,
+    session.sessionId,
+    /demo-rewrite-thin-resume\/src\/server\.js/
+  );
+
+  bus.emit(createUserMessageSubmittedEvent({
+    sessionId: session.sessionId,
+    content: originalPrompt
+  }));
+
+  await stageSummaryPromise;
+  bus.emit(createRuntimeInterruptRequestedEvent({
+    sessionId: session.sessionId,
+    reason: "cancel"
+  }));
+
+  const cancelledTask = await completionPromise;
+  assert.equal(cancelledTask.payload.state, "cancelled");
+
+  const interruptedEvents = await transcriptStore.readEventsBySession(session.sessionId);
+  assert.ok(
+    interruptedEvents.some((event) =>
+      event.type === "tool.execution.completed" && event.payload.summary.startsWith("demo-rewrite-thin-resume/src/server.js:1-5")
+    ),
+    "late thin-entry rewrite resume chain should preserve the implementation read before stop"
+  );
+  assert.equal(
+    interruptedEvents.some((event) =>
+      event.type === "tool.execution.completed" && event.payload.summary.startsWith("demo-rewrite-thin-resume/src/server.js:2-2 · updated")
+    ),
+    false,
+    "late thin-entry rewrite resume chain should stop before the pending implementation edit is applied"
+  );
+
+  const resumedResult = await runAgentTask({
+    bus,
+    transcriptStore,
+    sessionId: session.sessionId,
+    prompt: "还能继续吗"
+  });
+
+  const sourceContent = await readFile(join(workspace, "demo-rewrite-thin-resume", "src", "server.js"), "utf8");
+  assert.match(sourceContent, /process\.env\.PORT/);
+  assert.match(resumedResult.assistantText, /process\.env\.PORT|src\/server\.js/i);
+  assert.equal(
+    resumedResult.toolSummaries.some((summary) => summary.startsWith("demo-rewrite-thin-resume/package.json:1-")),
+    false,
+    "late thin-entry rewrite resume follow-up should not restart from package.json"
+  );
+  assert.equal(
+    resumedResult.toolSummaries.some((summary) => summary.startsWith("demo-rewrite-thin-resume/app.js:1-")),
+    false,
+    "late thin-entry rewrite resume follow-up should not reread app.js"
+  );
+  assert.equal(
+    resumedResult.toolSummaries.some((summary) => summary.startsWith("demo-rewrite-thin-resume/src/server.js:1-")),
+    false,
+    "late thin-entry rewrite resume follow-up should not reread the implementation file when the pending edit target is already known"
+  );
+  assert.ok(
+    resumedResult.toolSummaries.some((summary) => summary.startsWith("demo-rewrite-thin-resume/src/server.js:2-2 · updated")),
+    "late thin-entry rewrite resume follow-up should jump straight to the pending implementation edit"
+  );
+}
+
+async function verifyVagueFollowUpResumeAfterThinEntryRewriteImplementationStageSummary(
+  followUpPrompt: "你能帮我重新写个项目吗" | "帮我重写项目" | "重写这个项目"
+) {
+  const root = await mkdtemp(join(tmpdir(), "selfme-agent-vague-resume-thin-entry-rewrite-implementation-stage-summary-"));
+  const workspace = join(root, "workspace");
+  const transcriptPath = join(root, "transcript.jsonl");
+  const logsPath = join(root, "logs.jsonl");
+  const originalPrompt = "看看项目，然后帮我重新写一下 demo-rewrite-thin-resume-vague，让端口来自 process.env.PORT。";
+  await mkdir(join(workspace, "demo-rewrite-thin-resume-vague", "src"), { recursive: true });
+
+  await writeFile(
+    join(workspace, "demo-rewrite-thin-resume-vague", "package.json"),
+    '{\n  "name": "demo-rewrite-thin-resume-vague",\n  "version": "1.0.0",\n  "main": "app.js"\n}\n',
+    "utf8"
+  );
+  await writeFile(
+    join(workspace, "demo-rewrite-thin-resume-vague", "app.js"),
+    'const { createServer } = require("./src/server");\nmodule.exports = createServer();\n',
+    "utf8"
+  );
+  await writeFile(
+    join(workspace, "demo-rewrite-thin-resume-vague", "src", "server.js"),
+    'function createServer() {\n  return { port: 3000 };\n}\n\nmodule.exports = { createServer };\n',
+    "utf8"
+  );
+
+  class ResumeThinEntryRewriteImplementationStageSummaryVagueProvider implements ProviderClient {
+    readonly name = "resume-thin-entry-rewrite-implementation-stage-summary-vague-provider";
+
+    async *streamResponse(input: ProviderStreamInput): AsyncIterable<ProviderStreamChunk> {
+      if (input.content === originalPrompt) {
+        yield {
+          delta: toolCall("shell", {
+            command: "pwd && ls -la && find . -maxdepth 3 -type f | sed 's#^./##' | sort | head -200"
+          })
+        };
+        return;
+      }
+
+      if (input.content.startsWith(`Original user request: ${originalPrompt}`)) {
+        const toolName = extractLine(input.content, "Tool:") ?? extractLine(input.content, "Latest tool:");
+        const summary = extractLine(input.content, "Summary:") ?? extractLine(input.content, "Latest summary:") ?? "";
+
+        if (toolName === "shell") {
+          if (/You are in the middle of a concrete project inspection request\./.test(input.content)) {
+            assert.match(input.content, /Likely project entry: demo-rewrite-thin-resume-vague\/package\.json/);
+            yield {
+              delta: toolCall("files", {
+                path: "demo-rewrite-thin-resume-vague/package.json",
+                startLine: 1,
+                endLine: 20
+              })
+            };
+            return;
+          }
+
+          yield { delta: "我先看了工作区列表，demo-rewrite-thin-resume-vague 看起来是最像要继续改造的项目。" };
+          return;
+        }
+
+        if (toolName === "files" && /demo-rewrite-thin-resume-vague\/package\.json/.test(summary)) {
+          if (/You are in the middle of a project improvement task\./.test(input.content)) {
+            assert.match(input.content, /Likely working file: demo-rewrite-thin-resume-vague\/app\.js/);
+            yield {
+              delta: toolCall("files", {
+                path: "demo-rewrite-thin-resume-vague/app.js",
+                startLine: 1,
+                endLine: 20
+              })
+            };
+            return;
+          }
+
+          yield { delta: "入口已经定位到 app.js，我先继续跟进实现。" };
+          return;
+        }
+
+        if (toolName === "files" && /demo-rewrite-thin-resume-vague\/app\.js/.test(summary)) {
+          if (/You are in the middle of a project improvement task\./.test(input.content)) {
+            assert.match(input.content, /Likely working file: demo-rewrite-thin-resume-vague\/src\/server\.js/);
+            yield {
+              delta: toolCall("files", {
+                path: "demo-rewrite-thin-resume-vague/src/server.js",
+                startLine: 1,
+                endLine: 20
+              })
+            };
+            return;
+          }
+
+          yield { delta: "app.js 只是薄入口，我先继续跟到本地实现文件。" };
+          return;
+        }
+
+        if (toolName === "files" && /demo-rewrite-thin-resume-vague\/src\/server\.js/.test(summary)) {
+          if (/You are in the middle of a project improvement task\./.test(input.content)) {
+            yield { delta: "我已经看了 demo-rewrite-thin-resume-vague/src/server.js，下一步会直接在这个文件里改端口逻辑。" };
+            return;
+          }
+
+          await waitForProviderDelay(input.signal, 120);
+          yield {
+            delta: toolCall("edit", {
+              path: "demo-rewrite-thin-resume-vague/src/server.js",
+              startLine: 2,
+              endLine: 2,
+              replacement: '  return { port: Number(process.env.PORT ?? 3000) };\n'
+            })
+          };
+          return;
+        }
+      }
+
+      if (input.content.startsWith(`The user replied "${followUpPrompt}" and wants to continue the most recent unfinished task.`)) {
+        assert.match(input.content, /Resume that task now instead of treating this as a broad rewrite follow-up\./);
+        assert.match(input.content, /Original task: 看看项目，然后帮我重新写一下 demo-rewrite-thin-resume-vague/);
+        assert.match(input.content, /Recent editable working file: demo-rewrite-thin-resume-vague\/src\/server\.js/);
+        assert.match(input.content, /Pending next step target: demo-rewrite-thin-resume-vague\/src\/server\.js/);
+        assert.match(input.content, /Latest tool in context: files/);
+        assert.match(input.content, /Latest tool summary in context: demo-rewrite-thin-resume-vague\/src\/server\.js:1-5/);
+        yield {
+          delta: toolCall("edit", {
+            path: "demo-rewrite-thin-resume-vague/src/server.js",
+            startLine: 2,
+            endLine: 2,
+            replacement: '  return { port: Number(process.env.PORT ?? 3000) };\n'
+          })
+        };
+        return;
+      }
+
+      if (input.content.startsWith(`Original user request: The user replied "${followUpPrompt}" and wants to continue the most recent unfinished task.`)) {
+        const toolName = extractLine(input.content, "Tool:") ?? extractLine(input.content, "Latest tool:");
+        const summary = extractLine(input.content, "Summary:") ?? extractLine(input.content, "Latest summary:") ?? "";
+
+        if (toolName === "edit" && /demo-rewrite-thin-resume-vague\/src\/server\.js/.test(summary)) {
+          yield { delta: "我已经恢复执行，并把 demo-rewrite-thin-resume-vague/src/server.js 改成优先读取 process.env.PORT。" };
+          return;
+        }
+      }
+
+      yield { delta: "ok" };
+    }
+  }
+
+  const bus = new EventBus();
+  const transcriptStore = new TranscriptStore(transcriptPath);
+  const logStore = new LogStore(logsPath);
+  await transcriptStore.ensureInitialized();
+  await logStore.ensureInitialized();
+
+  const session = createDefaultSessionRecord(workspace, VERSION);
+  session.model = "regression-stub";
+
+  const runtime = new AgentRuntime({
+    bus,
+    provider: new ResumeThinEntryRewriteImplementationStageSummaryVagueProvider(),
+    tools: new InMemoryToolRegistry(),
+    session,
+    transcriptStore,
+    logStore
+  });
+  await runtime.start();
+
+  const completionPromise = waitForAssistantTaskCompletion(bus, session.sessionId);
+  const stageSummaryPromise = waitForAssistantDeltaContaining(
+    bus,
+    session.sessionId,
+    /demo-rewrite-thin-resume-vague\/src\/server\.js/
+  );
+
+  bus.emit(createUserMessageSubmittedEvent({
+    sessionId: session.sessionId,
+    content: originalPrompt
+  }));
+
+  await stageSummaryPromise;
+  bus.emit(createRuntimeInterruptRequestedEvent({
+    sessionId: session.sessionId,
+    reason: "cancel"
+  }));
+
+  const cancelledTask = await completionPromise;
+  assert.equal(cancelledTask.payload.state, "cancelled");
+
+  const resumedResult = await runAgentTask({
+    bus,
+    transcriptStore,
+    sessionId: session.sessionId,
+    prompt: followUpPrompt
+  });
+
+  const sourceContent = await readFile(join(workspace, "demo-rewrite-thin-resume-vague", "src", "server.js"), "utf8");
+  assert.match(sourceContent, /process\.env\.PORT/);
+  assert.equal(
+    resumedResult.toolSummaries.some((summary) => summary.startsWith("demo-rewrite-thin-resume-vague/package.json:1-")),
+    false,
+    "vague thin-entry rewrite resume follow-up should not restart from package.json"
+  );
+  assert.equal(
+    resumedResult.toolSummaries.some((summary) => summary.startsWith("demo-rewrite-thin-resume-vague/app.js:1-")),
+    false,
+    "vague thin-entry rewrite resume follow-up should not reread app.js"
+  );
+  assert.equal(
+    resumedResult.toolSummaries.some((summary) => summary.startsWith("demo-rewrite-thin-resume-vague/src/server.js:1-")),
+    false,
+    "vague thin-entry rewrite resume follow-up should not reread the implementation file when the pending edit target is already known"
+  );
+  assert.ok(
+    resumedResult.toolSummaries.some((summary) => summary.startsWith("demo-rewrite-thin-resume-vague/src/server.js:2-2 · updated")),
+    "vague thin-entry rewrite resume follow-up should jump straight to the pending implementation edit"
   );
 }
 
@@ -8067,7 +12074,9 @@ async function verifyPlanningStyleRewriteProposalExecutesPreviousProposal() {
   );
 }
 
-async function verifyChineseRewriteProposalExecutesPreviousProposal() {
+async function verifyChineseRewriteProposalExecutesPreviousProposal(
+  followUpPrompt: "你能帮我重新写个项目吗" | "帮我重写项目"
+) {
   const root = await mkdtemp(join(tmpdir(), "selfme-agent-chinese-rewrite-proposal-"));
   const workspace = join(root, "workspace");
   const transcriptPath = join(root, "transcript.jsonl");
@@ -8090,7 +12099,7 @@ async function verifyChineseRewriteProposalExecutesPreviousProposal() {
 
     async *streamResponse(input: ProviderStreamInput): AsyncIterable<ProviderStreamChunk> {
       const proposalPrompt = "看看项目，但先别改，告诉我如果重写 node-todo 你会怎么做。";
-      const executeProposalPrompt = 'The user replied "你能帮我重新写个项目吗" and wants you to execute the immediately previous rewrite proposal now.';
+      const executeProposalPrompt = `The user replied "${followUpPrompt}" and wants you to execute the immediately previous rewrite proposal now.`;
 
       if (input.content === proposalPrompt) {
         yield {
@@ -8192,7 +12201,7 @@ async function verifyChineseRewriteProposalExecutesPreviousProposal() {
     bus,
     transcriptStore,
     sessionId: session.sessionId,
-    prompt: "你能帮我重新写个项目吗"
+    prompt: followUpPrompt
   });
 
   const rewrittenAppContent = await readFile(join(workspace, "node-todo", "app.js"), "utf8");
@@ -8396,6 +12405,184 @@ async function verifyVagueInspectionResumesInterruptedProposalExecution() {
   assert.ok(
     resumedResult.toolSummaries.some((summary) => summary.startsWith("node-todo/views/index.ejs:1-1")),
     "vague inspect resume after proposal execution should continue into the pending view file"
+  );
+}
+
+async function verifyProjectWordedWholeProjectInspectionResumesInterruptedExecution() {
+  const root = await mkdtemp(join(tmpdir(), "selfme-agent-whole-project-inspection-resume-"));
+  const workspace = join(root, "workspace");
+  const transcriptPath = join(root, "transcript.jsonl");
+  const logsPath = join(root, "logs.jsonl");
+  await mkdir(join(workspace, "node-todo"), { recursive: true });
+  await mkdir(join(workspace, "node-todo", "views"), { recursive: true });
+
+  await writeFile(
+    join(workspace, "node-todo", "package.json"),
+    '{\n  "name": "node-todo",\n  "version": "1.0.0"\n}\n',
+    "utf8"
+  );
+  await writeFile(
+    join(workspace, "node-todo", "app.js"),
+    'const app = {};\nmodule.exports = app;\n',
+    "utf8"
+  );
+  await writeFile(
+    join(workspace, "node-todo", "views", "index.ejs"),
+    '<input name="title" />\n',
+    "utf8"
+  );
+
+  class WholeProjectInspectionResumeProvider implements ProviderClient {
+    readonly name = "whole-project-inspection-resume-provider";
+
+    async *streamResponse(input: ProviderStreamInput): AsyncIterable<ProviderStreamChunk> {
+      const originalPrompt = "你能一次性都帮我看完整个项目吗";
+
+      if (input.content === originalPrompt) {
+        yield {
+          delta: toolCall("shell", {
+            command: "pwd && ls -la && find . -maxdepth 2 -type f | sed 's#^./##' | sort | head -200"
+          })
+        };
+        return;
+      }
+
+      if (input.content.startsWith(`Original user request: ${originalPrompt}`)) {
+        const toolName = extractLine(input.content, "Tool:") ?? extractLine(input.content, "Latest tool:");
+        const summary = extractLine(input.content, "Summary:") ?? extractLine(input.content, "Latest summary:") ?? "";
+
+        if (toolName === "shell") {
+          if (/You are in the middle of a concrete project inspection request\./.test(input.content)) {
+            assert.match(input.content, /Likely project entry: node-todo\/package\.json/);
+            yield {
+              delta: toolCall("files", {
+                path: "node-todo/package.json",
+                startLine: 1,
+                endLine: 20
+              })
+            };
+            return;
+          }
+
+          yield { delta: "我先看了工作区列表，当前最像完整项目的是 node-todo。" };
+          return;
+        }
+
+        if (toolName === "files" && /node-todo\/package\.json/.test(summary)) {
+          if (/You are in the middle of a whole-project inspection request\./.test(input.content)) {
+            assert.match(input.content, /Likely inspection file: node-todo\/app\.js/);
+            yield {
+              delta: toolCall("files", {
+                path: "node-todo/app.js",
+                startLine: 1,
+                endLine: 20
+              })
+            };
+            return;
+          }
+
+          yield { delta: "我已经读了 node-todo/package.json，接下来会继续看核心实现。" };
+          return;
+        }
+
+        if (toolName === "files" && /node-todo\/app\.js/.test(summary)) {
+          if (/You are in the middle of a whole-project inspection request\./.test(input.content)) {
+            yield { delta: "我已经看了 node-todo/app.js，下一步会继续检查 node-todo/views/index.ejs。" };
+            return;
+          }
+
+          yield { delta: "我已经继续看完 node-todo/app.js。" };
+          return;
+        }
+      }
+
+      if (input.content.startsWith('The user replied "帮我看看整个项目" and wants to continue the most recent unfinished task.')) {
+        assert.match(input.content, /Original task: 你能一次性都帮我看完整个项目吗/);
+        assert.match(input.content, /Resume that task now instead of treating this as a broad inspection follow-up\./);
+        assert.match(input.content, /Pending next step target: node-todo\/views\/index\.ejs/);
+        assert.match(input.content, /Latest tool in context: files/);
+        assert.match(input.content, /Latest tool summary in context: node-todo\/app\.js:1-2/);
+        yield {
+          delta: toolCall("files", {
+            path: "node-todo/views/index.ejs",
+            startLine: 1,
+            endLine: 20
+          })
+        };
+        return;
+      }
+
+      if (input.content.startsWith('Original user request: The user replied "帮我看看整个项目" and wants to continue the most recent unfinished task.')) {
+        const toolName = extractLine(input.content, "Tool:") ?? extractLine(input.content, "Latest tool:");
+        const summary = extractLine(input.content, "Summary:") ?? extractLine(input.content, "Latest summary:") ?? "";
+
+        if (toolName === "files" && /node-todo\/views\/index\.ejs/.test(summary)) {
+          yield { delta: "我已经恢复执行，并继续检查了 node-todo/views/index.ejs。" };
+          return;
+        }
+      }
+
+      yield { delta: "ok" };
+    }
+  }
+
+  const bus = new EventBus();
+  const transcriptStore = new TranscriptStore(transcriptPath);
+  const logStore = new LogStore(logsPath);
+  await transcriptStore.ensureInitialized();
+  await logStore.ensureInitialized();
+
+  const session = createDefaultSessionRecord(workspace, VERSION);
+  session.model = "regression-stub";
+
+  const runtime = new AgentRuntime({
+    bus,
+    provider: new WholeProjectInspectionResumeProvider(),
+    tools: new InMemoryToolRegistry(),
+    session,
+    transcriptStore,
+    logStore
+  });
+  await runtime.start();
+
+  const completionPromise = waitForAssistantTaskCompletion(bus, session.sessionId);
+  const appReadPromise = waitForToolExecutionCompleted(bus, session.sessionId, (summary) => summary.startsWith("node-todo/app.js:1-2"));
+
+  bus.emit(createUserMessageSubmittedEvent({
+    sessionId: session.sessionId,
+    content: "你能一次性都帮我看完整个项目吗"
+  }));
+
+  await appReadPromise;
+  bus.emit(createRuntimeInterruptRequestedEvent({
+    sessionId: session.sessionId,
+    reason: "cancel"
+  }));
+
+  const cancelledTask = await completionPromise;
+  assert.equal(cancelledTask.payload.state, "cancelled");
+
+  const resumedResult = await runAgentTask({
+    bus,
+    transcriptStore,
+    sessionId: session.sessionId,
+    prompt: "帮我看看整个项目"
+  });
+
+  assert.match(resumedResult.assistantText, /views\/index\.ejs|继续检查/);
+  assert.equal(
+    resumedResult.toolSummaries.some((summary) => summary.startsWith("node-todo/package.json:1-")),
+    false,
+    "project-worded whole-project inspection resume should not restart from package.json"
+  );
+  assert.equal(
+    resumedResult.toolSummaries.some((summary) => summary.startsWith("node-todo/app.js:1-2")),
+    false,
+    "project-worded whole-project inspection resume should not reread app.js after the pending next target is already known"
+  );
+  assert.ok(
+    resumedResult.toolSummaries.some((summary) => summary.startsWith("node-todo/views/index.ejs:1-1")),
+    "project-worded whole-project inspection resume should continue directly into the pending view file"
   );
 }
 
@@ -9220,11 +13407,21 @@ async function verifyVagueOptimizationInProjectVerificationChain() {
   await verifyProjectVerificationChainResume("帮我优化下");
 }
 
+async function verifyProjectWordedOptimizationInProjectVerificationChain() {
+  await verifyProjectVerificationChainResume("帮我优化项目");
+}
+
 async function verifyVagueInspectionInProjectVerificationChain() {
   await verifyProjectVerificationChainResume("帮我看看");
 }
 
-async function verifyProjectVerificationChainResume(followUpPrompt: "还能继续吗" | "帮我优化下" | "帮我看看") {
+async function verifyProjectWordedInspectionInProjectVerificationChain() {
+  await verifyProjectVerificationChainResume("帮我看看项目");
+}
+
+async function verifyProjectVerificationChainResume(
+  followUpPrompt: "还能继续吗" | "帮我优化下" | "帮我优化项目" | "帮我看看" | "帮我看看项目"
+) {
   const root = await mkdtemp(join(tmpdir(), "selfme-agent-resume-project-chain-"));
   const workspace = join(root, "workspace");
   const transcriptPath = join(root, "transcript.jsonl");
@@ -9371,12 +13568,12 @@ async function verifyProjectVerificationChainResume(followUpPrompt: "还能继�
         }
       }
 
-      if (/^The user replied "(还能继续吗|帮我优化下|帮我看看)" and wants to continue the most recent unfinished task\./.test(input.content)) {
+      if (/^The user replied "(还能继续吗|帮我优化下|帮我优化项目|帮我看看|帮我看看项目)" and wants to continue the most recent unfinished task\./.test(input.content)) {
         assert.match(input.content, /Original task: 看看项目，然后直接优化 node-todo/);
-        if (/帮我优化下/.test(input.content)) {
+        if (/帮我优化(?:下|项目)/.test(input.content)) {
           assert.match(input.content, /Resume that task now instead of treating this as a broad optimization follow-up\./);
         }
-        if (/帮我看看/.test(input.content)) {
+        if (/帮我看看(?:项目)?/.test(input.content)) {
           assert.match(input.content, /Resume that task now instead of treating this as a broad inspection follow-up\./);
         }
         assert.match(input.content, /Latest tool in context: files/);
@@ -9393,7 +13590,7 @@ async function verifyProjectVerificationChainResume(followUpPrompt: "还能继�
         return;
       }
 
-      if (/^Original user request: The user replied "(还能继续吗|帮我优化下|帮我看看)" and wants to continue the most recent unfinished task\./.test(input.content)) {
+      if (/^Original user request: The user replied "(还能继续吗|帮我优化下|帮我优化项目|帮我看看|帮我看看项目)" and wants to continue the most recent unfinished task\./.test(input.content)) {
         const toolName = extractLine(input.content, "Tool:") ?? extractLine(input.content, "Latest tool:");
         const summary = extractLine(input.content, "Summary:") ?? extractLine(input.content, "Latest summary:") ?? "";
 
@@ -10455,8 +14652,16 @@ async function verifyVagueOptimizationInImplicitGenericVerificationStageSummaryC
   await verifyImplicitGenericVerificationStageSummaryResume("帮我优化下");
 }
 
+async function verifyProjectWordedOptimizationInImplicitGenericVerificationStageSummaryChain() {
+  await verifyImplicitGenericVerificationStageSummaryResume("帮我优化项目");
+}
+
 async function verifyVagueInspectionInImplicitGenericVerificationStageSummaryChain() {
   await verifyImplicitGenericVerificationStageSummaryResume("帮我看看");
+}
+
+async function verifyProjectWordedInspectionInImplicitGenericVerificationStageSummaryChain() {
+  await verifyImplicitGenericVerificationStageSummaryResume("帮我看看项目");
 }
 
 async function verifyVagueOptimizationInImplicitBroadProjectProposalChain() {
@@ -11091,8 +15296,16 @@ async function verifyVagueOptimizationInImplicitMultiTargetProposalChain() {
   await verifyImplicitMultiTargetProposalResume("帮我优化下");
 }
 
+async function verifyProjectWordedOptimizationInImplicitMultiTargetProposalChain() {
+  await verifyImplicitMultiTargetProposalResume("帮我优化项目");
+}
+
 async function verifyVagueInspectionInImplicitMultiTargetProposalChain() {
   await verifyImplicitMultiTargetProposalResume("帮我看看");
+}
+
+async function verifyProjectWordedInspectionInImplicitMultiTargetProposalChain() {
+  await verifyImplicitMultiTargetProposalResume("帮我看看项目");
 }
 
 async function verifyResumeFollowUpInImplicitMultiTargetCompletionToneChain() {
@@ -11537,7 +15750,7 @@ async function verifyResumeFollowUpInImplicitMultiTargetQuestionChain() {
 }
 
 async function verifyImplicitMultiTargetProposalResume(
-  followUpPrompt: "还能继续吗" | "可以" | "帮我优化下" | "帮我看看"
+  followUpPrompt: "还能继续吗" | "可以" | "帮我优化下" | "帮我优化项目" | "帮我看看" | "帮我看看项目"
 ) {
   const root = await mkdtemp(join(tmpdir(), "selfme-agent-resume-implicit-multi-target-proposal-"));
   const workspace = join(root, "workspace");
@@ -11636,12 +15849,12 @@ async function verifyImplicitMultiTargetProposalResume(
         }
       }
 
-      if (/^The user replied "(还能继续吗|可以|帮我优化下|帮我看看)" and wants to continue the most recent unfinished task\./.test(input.content)) {
+      if (/^The user replied "(还能继续吗|可以|帮我优化下|帮我优化项目|帮我看看|帮我看看项目)" and wants to continue the most recent unfinished task\./.test(input.content)) {
         assert.match(input.content, /Original task: 直接优化 node-todo/);
-        if (/帮我优化下/.test(input.content)) {
+        if (/帮我优化(?:下|项目)/.test(input.content)) {
           assert.match(input.content, /Resume that task now instead of treating this as a broad optimization follow-up\./);
         }
-        if (/帮我看看/.test(input.content)) {
+        if (/帮我看看(?:项目)?/.test(input.content)) {
           assert.match(input.content, /Resume that task now instead of treating this as a broad inspection follow-up\./);
         }
         assert.match(input.content, /Recent editable working file: node-todo\/app\.js/);
@@ -11659,7 +15872,7 @@ async function verifyImplicitMultiTargetProposalResume(
         return;
       }
 
-      if (/^Original user request: The user replied "(还能继续吗|可以|帮我优化下|帮我看看)" and wants to continue the most recent unfinished task\./.test(input.content)) {
+      if (/^Original user request: The user replied "(还能继续吗|可以|帮我优化下|帮我优化项目|帮我看看|帮我看看项目)" and wants to continue the most recent unfinished task\./.test(input.content)) {
         const toolName = extractLine(input.content, "Tool:") ?? extractLine(input.content, "Latest tool:");
         const summary = extractLine(input.content, "Summary:") ?? extractLine(input.content, "Latest summary:") ?? "";
 
@@ -11777,7 +15990,7 @@ async function verifyImplicitMultiTargetProposalResume(
 }
 
 async function verifyImplicitGenericVerificationStageSummaryResume(
-  followUpPrompt: "还能继续吗" | "可以" | "帮我优化下" | "帮我看看"
+  followUpPrompt: "还能继续吗" | "可以" | "帮我优化下" | "帮我优化项目" | "帮我看看" | "帮我看看项目"
 ) {
   const root = await mkdtemp(join(tmpdir(), "selfme-agent-resume-implicit-generic-stage-"));
   const workspace = join(root, "workspace");
@@ -11937,12 +16150,12 @@ async function verifyImplicitGenericVerificationStageSummaryResume(
         }
       }
 
-      if (/^The user replied "(还能继续吗|可以|帮我优化下|帮我看看)" and wants to continue the most recent unfinished task\./.test(input.content)) {
+      if (/^The user replied "(还能继续吗|可以|帮我优化下|帮我优化项目|帮我看看|帮我看看项目)" and wants to continue the most recent unfinished task\./.test(input.content)) {
         assert.match(input.content, /Original task: 看看项目，然后直接把 node-todo 优化到正确/);
-        if (/帮我优化下/.test(input.content)) {
+        if (/帮我优化(?:下|项目)/.test(input.content)) {
           assert.match(input.content, /Resume that task now instead of treating this as a broad optimization follow-up\./);
         }
-        if (/帮我看看/.test(input.content)) {
+        if (/帮我看看(?:项目)?/.test(input.content)) {
           assert.match(input.content, /Resume that task now instead of treating this as a broad inspection follow-up\./);
         }
         assert.match(input.content, /Recent editable working file: node-todo\/app\.js/);
@@ -11959,7 +16172,7 @@ async function verifyImplicitGenericVerificationStageSummaryResume(
         return;
       }
 
-      if (/^Original user request: The user replied "(还能继续吗|可以|帮我优化下|帮我看看)" and wants to continue the most recent unfinished task\./.test(input.content)) {
+      if (/^Original user request: The user replied "(还能继续吗|可以|帮我优化下|帮我优化项目|帮我看看|帮我看看项目)" and wants to continue the most recent unfinished task\./.test(input.content)) {
         const toolName = extractLine(input.content, "Tool:") ?? extractLine(input.content, "Latest tool:");
         const summary = extractLine(input.content, "Summary:") ?? extractLine(input.content, "Latest summary:") ?? "";
 
@@ -13182,7 +17395,13 @@ async function verifyVagueOptimizationAfterApprovalWaitInProjectChain() {
   await verifyApprovalWaitResumeInProjectChain("帮我优化下");
 }
 
-async function verifyApprovalWaitResumeInProjectChain(followUpPrompt: "还能继续吗" | "可以" | "帮我优化下") {
+async function verifyProjectWordedOptimizationAfterApprovalWaitInProjectChain() {
+  await verifyApprovalWaitResumeInProjectChain("帮我优化项目");
+}
+
+async function verifyApprovalWaitResumeInProjectChain(
+  followUpPrompt: "还能继续吗" | "可以" | "帮我优化下" | "帮我优化项目"
+) {
   const root = await mkdtemp(join(tmpdir(), "selfme-agent-resume-project-approval-"));
   const workspace = join(root, "workspace");
   const transcriptPath = join(root, "transcript.jsonl");
@@ -13328,9 +17547,9 @@ async function verifyApprovalWaitResumeInProjectChain(followUpPrompt: "还能继
         }
       }
 
-      if (/^The user replied "(还能继续吗|可以|帮我优化下)" and wants to continue the most recent unfinished task\./.test(input.content)) {
+      if (/^The user replied "(还能继续吗|可以|帮我优化下|帮我优化项目)" and wants to continue the most recent unfinished task\./.test(input.content)) {
         assert.match(input.content, /Original task: 看看项目，然后直接优化 node-todo/);
-        if (/帮我优化下/.test(input.content)) {
+        if (/帮我优化(?:下|项目)/.test(input.content)) {
           assert.match(input.content, /Resume that task now instead of treating this as a broad optimization follow-up\./);
         }
         assert.match(input.content, /Latest tool in context: files/);
@@ -13347,7 +17566,7 @@ async function verifyApprovalWaitResumeInProjectChain(followUpPrompt: "还能继
         return;
       }
 
-      if (/^Original user request: The user replied "(还能继续吗|可以|帮我优化下)" and wants to continue the most recent unfinished task\./.test(input.content)) {
+      if (/^Original user request: The user replied "(还能继续吗|可以|帮我优化下|帮我优化项目)" and wants to continue the most recent unfinished task\./.test(input.content)) {
         const toolName = extractLine(input.content, "Tool:") ?? extractLine(input.content, "Latest tool:");
         const summary = extractLine(input.content, "Summary:") ?? extractLine(input.content, "Latest summary:") ?? "";
 
@@ -14904,6 +19123,27 @@ function waitForBusyPhase(
   });
 }
 
+function waitForAssistantDeltaContaining(
+  bus: EventBus,
+  sessionId: string,
+  pattern: RegExp
+) {
+  return new Promise<void>((resolve) => {
+    const off = bus.on("assistant.delta.received", (event) => {
+      if (event.sessionId !== sessionId) {
+        return;
+      }
+
+      if (!pattern.test(event.payload.delta)) {
+        return;
+      }
+
+      off();
+      resolve();
+    });
+  });
+}
+
 function waitForApprovalRequest(bus: EventBus, sessionId: string) {
   return new Promise<Extract<RuntimeEvent, { type: "approval.requested" }>>((resolve) => {
     const off = bus.on("approval.requested", (event) => {
@@ -15805,7 +20045,7 @@ function resolveProviderResponse(content: string) {
     });
   }
 
-  if (content.startsWith('The user replied "帮我优化下" and wants you to optimize the most recently inspected project or file now.')) {
+  if (/^The user replied "(帮我优化下|帮我优化项目)" and wants you to optimize the most recently inspected project or file now\./.test(content)) {
     if (/Recent editable working file: node-todo\/app\.js/.test(content)) {
       return toolCall("files", {
         path: "node-todo/app.js",
@@ -15821,7 +20061,7 @@ function resolveProviderResponse(content: string) {
     });
   }
 
-  if (content.startsWith('The user replied "你能帮我重新写个项目吗" and wants you to rewrite the most recently inspected project or file now.')) {
+  if (/^The user replied "(?:你能帮我重新写个项目吗|帮我重写项目)" and wants you to rewrite the most recently inspected project or file now\./.test(content)) {
     if (/Recent editable working file: node-todo\/app\.js/.test(content)) {
       return toolCall("files", {
         path: "node-todo/app.js",
@@ -15837,7 +20077,10 @@ function resolveProviderResponse(content: string) {
     });
   }
 
-  if (/^The user replied ".+" and wants you to inspect the most recently active whole project now\./.test(content)) {
+  if (
+    /^The user replied ".+" and wants you to inspect the most recently active whole project now\./.test(content)
+    || /^The user replied ".+" and wants you to execute the immediately previous inspect proposal now\./.test(content)
+  ) {
     return toolCall("files", {
       path: "node-todo/package.json",
       startLine: 1,
@@ -15898,6 +20141,14 @@ function resolveProviderResponse(content: string) {
   }
 
   if (content.startsWith("Read app.config.json and fix converge-report.mjs")) {
+    return toolCall("files", {
+      path: "app.config.json",
+      startLine: 1,
+      endLine: 20
+    });
+  }
+
+  if (content.startsWith("Read app.config.json and fix converge-question-report.mjs")) {
     return toolCall("files", {
       path: "app.config.json",
       startLine: 1,
@@ -17013,6 +21264,19 @@ function resolveProviderResponse(content: string) {
     }
 
     if (toolName === "files" && /explain-report\.mjs/.test(summary)) {
+      if (/You are already inside the execution phase of a concrete task\./.test(content)) {
+        assert.match(content, /Working file anchor: explain-report\.mjs/);
+        return toolCall("edit", {
+          path: "explain-report.mjs",
+          startLine: 1,
+          endLine: 3,
+          replacement: [
+            'import config from "./app.config.json" with { type: "json" };',
+            'console.log(`${config.name}:${config.port}`);'
+          ].join("\n")
+        });
+      }
+
       return "The mismatch is already clear in explain-report.mjs, because it still prints two separate lines instead of one exact output.";
     }
 
@@ -17025,19 +21289,6 @@ function resolveProviderResponse(content: string) {
     if (toolName === "shell") {
       assert.match(content, /SelfMe:3000/);
       return "Repaired explain-report.mjs and confirmed it now prints exactly SelfMe:3000.";
-    }
-
-    if (/You are already inside the execution phase of a concrete task\./.test(content)) {
-      assert.match(content, /Working file anchor: explain-report\.mjs/);
-      return toolCall("edit", {
-        path: "explain-report.mjs",
-        startLine: 1,
-        endLine: 3,
-        replacement: [
-          'import config from "./app.config.json" with { type: "json" };',
-          'console.log(`${config.name}:${config.port}`);'
-        ].join("\n")
-      });
     }
   }
 
@@ -17103,6 +21354,15 @@ function resolveProviderResponse(content: string) {
           path: "stubborn-report.mjs",
           startLine: 1,
           endLine: 20
+        });
+      }
+
+      if (/You are already inside the execution phase of a concrete task\./.test(content)) {
+        return toolCall("edit", {
+          path: "stubborn-report.mjs",
+          startLine: 2,
+          endLine: 2,
+          replacement: 'console.log(`${config.name}:${config.port}`);'
         });
       }
 
@@ -17302,6 +21562,14 @@ function resolveProviderResponse(content: string) {
     }
 
     if (toolName === "shell") {
+      if (/A single failed tool result does not complete this task\./.test(content)) {
+        return toolCall("files", {
+          path: "failure-question-report.mjs",
+          startLine: 1,
+          endLine: 20
+        });
+      }
+
       if (/The latest tool attempt failed\./.test(content)) {
         return "Should I repair failure-question-report.mjs now, or stop here?";
       }
@@ -17342,6 +21610,18 @@ function resolveProviderResponse(content: string) {
     }
 
     if (toolName === "files" && /converge-report\.mjs/.test(summary)) {
+      if (/You are already inside the execution phase of a concrete task\./.test(content)) {
+        return toolCall("edit", {
+          path: "converge-report.mjs",
+          startLine: 1,
+          endLine: 3,
+          replacement: [
+            'import config from "./app.config.json" with { type: "json" };',
+            'console.log(`${config.name}:${config.port}`);'
+          ].join("\n")
+        });
+      }
+
       return "The problem is in converge-report.mjs: it still prints an extra line instead of one exact output.";
     }
 
@@ -17354,18 +21634,6 @@ function resolveProviderResponse(content: string) {
     if (toolName === "shell") {
       assert.match(content, /SelfMe:3000/);
       return "Repaired converge-report.mjs and confirmed it now prints exactly SelfMe:3000.";
-    }
-
-    if (/You are already inside the execution phase of a concrete task\./.test(content)) {
-      return toolCall("edit", {
-        path: "converge-report.mjs",
-        startLine: 1,
-        endLine: 3,
-        replacement: [
-          'import config from "./app.config.json" with { type: "json" };',
-          'console.log(`${config.name}:${config.port}`);'
-        ].join("\n")
-      });
     }
   }
 
@@ -17427,7 +21695,19 @@ function resolveProviderResponse(content: string) {
     }
 
     if (toolName === "files" && /node-todo\/package\.json/.test(summary)) {
+      if (/You are in the middle of a concrete project inspection request\./.test(content)) {
+        return toolCall("files", {
+          path: "node-todo/app.js",
+          startLine: 1,
+          endLine: 20
+        });
+      }
+
       return "我先看了工作区列表，然后继续读了 node-todo/package.json；当前最像可继续分析的项目是 node-todo。";
+    }
+
+    if (toolName === "files" && /node-todo\/app\.js/.test(summary)) {
+      return "我先看了工作区列表，然后继续读了 node-todo/package.json 和 node-todo/app.js；当前最像可继续分析的项目是 node-todo，这个项目的核心入口实现目前在 app.js。";
     }
   }
 
@@ -17462,11 +21742,27 @@ function resolveProviderResponse(content: string) {
     }
 
     if (toolName === "files" && /node-todo\/app\.js/.test(summary)) {
+      if (/You are in the middle of a whole-project inspection request\./.test(content)) {
+        assert.match(content, /Likely inspection file: node-todo\/views\/index\.ejs/);
+        return toolCall("files", {
+          path: "node-todo/views/index.ejs",
+          startLine: 1,
+          endLine: 20
+        });
+      }
+
       return "我已经继续看了 node-todo 的核心实现 app.js；当前这个项目是一个小型 Express todo 应用。";
+    }
+
+    if (toolName === "files" && /node-todo\/views\/index\.ejs/.test(summary)) {
+      return "我已经继续看了 node-todo 的核心实现，包括 app.js 和 views/index.ejs；当前这个项目是一个小型 Express todo 应用。";
     }
   }
 
-  if (/^Original user request: The user replied "不能一次性都帮我看完了 整个项目" and wants you to inspect the most recently active whole project now\.(?:\n|$)/.test(content)) {
+  if (
+    /^Original user request: The user replied "(不能一次性都帮我看完了 整个项目|你能一次性都帮我看完整个项目吗|帮我看看整个项目)" and wants you to inspect the most recently active whole project now\.(?:\n|$)/.test(content)
+    || /^Original user request: The user replied "(不能一次性都帮我看完了 整个项目|你能一次性都帮我看完整个项目吗|帮我看看整个项目)" and wants you to execute the immediately previous inspect proposal now\.(?:\n|$)/.test(content)
+  ) {
     const toolName = extractLine(content, "Tool:") ?? extractLine(content, "Latest tool:");
     const summary = extractLine(content, "Summary:") ?? extractLine(content, "Latest summary:") ?? "";
 
@@ -17484,7 +21780,20 @@ function resolveProviderResponse(content: string) {
     }
 
     if (toolName === "files" && /node-todo\/app\.js/.test(summary)) {
+      if (/You are in the middle of a whole-project inspection request\./.test(content)) {
+        assert.match(content, /Likely inspection file: node-todo\/views\/index\.ejs/);
+        return toolCall("files", {
+          path: "node-todo/views/index.ejs",
+          startLine: 1,
+          endLine: 20
+        });
+      }
+
       return "我已经继续看了 node-todo 的核心实现 app.js；当前这个项目是一个小型 Express todo 应用。";
+    }
+
+    if (toolName === "files" && /node-todo\/views\/index\.ejs/.test(summary)) {
+      return "我已经继续看了 node-todo 的核心实现，包括 app.js 和 views/index.ejs；当前这个项目是一个小型 Express todo 应用。";
     }
   }
 
@@ -17598,12 +21907,38 @@ function resolveProviderResponse(content: string) {
     }
 
     if (toolName === "files" && /node-todo\/package\.json/.test(summary)) {
+      if (
+        /node-todo\/views\/index\.ejs:3-3 · updated/.test(content)
+        || /this file is itself one of the requested change targets; use this source read to make the requested edit here now/i.test(content)
+        || /Pending next step target: node-todo\/package\.json/.test(content)
+        || /Working file anchor: node-todo\/views\/index\.ejs/.test(content)
+      ) {
+        return toolCall("edit", {
+          path: "node-todo/package.json",
+          startLine: 5,
+          endLine: 7,
+          replacement: '  "scripts": {\n    "start": "node app.js",\n    "dev": "node app.js"\n  },'
+        });
+      }
+
       if (/You are in the middle of a project improvement task\./.test(content)) {
         assert.match(content, /Likely working file: node-todo\/app\.js/);
         return toolCall("files", {
           path: "node-todo/app.js",
           startLine: 1,
           endLine: 20
+        });
+      }
+
+      if (
+        /this file is itself one of the requested change targets; use this source read to make the requested edit here now/i.test(content)
+        || /Working file anchor: node-todo\/views\/index\.ejs/.test(content)
+      ) {
+        return toolCall("edit", {
+          path: "node-todo/package.json",
+          startLine: 5,
+          endLine: 7,
+          replacement: '  "scripts": {\n    "start": "node app.js",\n    "dev": "node app.js"\n  },'
         });
       }
 
@@ -17716,7 +22051,6 @@ function resolveProviderResponse(content: string) {
   if (content.startsWith("Original user request: 看看项目，然后直接优化 node-todo：把 node-todo/app.js 的端口改成 process.env.PORT，再给 node-todo/views/index.ejs 的 title input 加上 maxlength 100，再给 node-todo/package.json 加上 dev script，再把 node-todo/verify-setup.mjs 里的 ready 改成 ready-ok。")) {
     const toolName = extractLine(content, "Tool:") ?? extractLine(content, "Latest tool:");
     const summary = extractLine(content, "Summary:") ?? extractLine(content, "Latest summary:") ?? "";
-
     if (toolName === "shell") {
       if (/You are in the middle of a concrete project inspection request\./.test(content)) {
         assert.match(content, /Likely project entry: node-todo\/package\.json/);
@@ -17731,6 +22065,20 @@ function resolveProviderResponse(content: string) {
     }
 
     if (toolName === "files" && /node-todo\/package\.json/.test(summary)) {
+      if (
+        /node-todo\/views\/index\.ejs:3-3 · updated/.test(content)
+        || /this file is itself one of the requested change targets; use this source read to make the requested edit here now/i.test(content)
+        || /Pending next step target: node-todo\/package\.json/.test(content)
+        || /Working file anchor: node-todo\/views\/index\.ejs/.test(content)
+      ) {
+        return toolCall("edit", {
+          path: "node-todo/package.json",
+          startLine: 5,
+          endLine: 7,
+          replacement: '  "scripts": {\n    "start": "node app.js",\n    "dev": "node app.js"\n  },'
+        });
+      }
+
       if (/You are in the middle of a project improvement task\./.test(content)) {
         assert.match(content, /Likely working file: node-todo\/app\.js/);
         return toolCall("files", {
@@ -17777,19 +22125,6 @@ function resolveProviderResponse(content: string) {
       });
     }
 
-    if (toolName === "files" && /node-todo\/package\.json/.test(summary)) {
-      if (/node-todo\/views\/index\.ejs:3-3 · updated/.test(content)) {
-        return toolCall("edit", {
-          path: "node-todo/package.json",
-          startLine: 5,
-          endLine: 7,
-          replacement: '  "scripts": {\n    "start": "node app.js",\n    "dev": "node app.js"\n  },'
-        });
-      }
-
-      return "node-todo/package.json 还需要继续更新 scripts。";
-    }
-
     if (toolName === "edit" && /node-todo\/package\.json/.test(summary)) {
       return toolCall("files", {
         path: "node-todo/verify-setup.mjs",
@@ -17808,7 +22143,7 @@ function resolveProviderResponse(content: string) {
     }
 
     if (toolName === "edit" && /node-todo\/verify-setup\.mjs/.test(summary)) {
-      return "我已经完成这轮更宽的多文件项目改造，四个目标文件都已更新。";
+      return "我已经完成这轮更宽的多文件项目改造：node-todo/app.js 已改为 process.env.PORT，node-todo/views/index.ejs 已加上 maxlength 100，node-todo/package.json 已加上 dev script，node-todo/verify-setup.mjs 已改成输出 ready-ok。";
     }
   }
 
@@ -18082,7 +22417,7 @@ function resolveProviderResponse(content: string) {
     }
   }
 
-  if (content.startsWith('Original user request: The user replied "帮我优化下" and wants you to optimize the most recently inspected project or file now.')) {
+  if (/^Original user request: The user replied "(帮我优化下|帮我优化项目)" and wants you to optimize the most recently inspected project or file now\./.test(content)) {
     const toolName = extractLine(content, "Tool:") ?? extractLine(content, "Latest tool:");
     const summary = extractLine(content, "Summary:") ?? extractLine(content, "Latest summary:") ?? "";
 
@@ -18130,7 +22465,7 @@ function resolveProviderResponse(content: string) {
     }
   }
 
-  if (content.startsWith('Original user request: The user replied "你能帮我重新写个项目吗" and wants you to rewrite the most recently inspected project or file now.')) {
+  if (/^Original user request: The user replied "(?:你能帮我重新写个项目吗|帮我重写项目)" and wants you to rewrite the most recently inspected project or file now\./.test(content)) {
     const toolName = extractLine(content, "Tool:") ?? extractLine(content, "Latest tool:");
     const summary = extractLine(content, "Summary:") ?? extractLine(content, "Latest summary:") ?? "";
 
@@ -18326,7 +22661,7 @@ function resolveProviderResponse(content: string) {
     }
   }
 
-  if (content.startsWith('Original user request: The user replied "帮我看看" and wants you to inspect the most recently active project or file now.')) {
+  if (/^Original user request: The user replied "(帮我看看|帮我看看项目|看看项目)" and wants you to inspect the most recently active project or file now\./.test(content)) {
     const toolName = extractLine(content, "Tool:") ?? extractLine(content, "Latest tool:");
     const summary = extractLine(content, "Summary:") ?? extractLine(content, "Latest summary:") ?? "";
 
@@ -18374,7 +22709,12 @@ function resolveProviderResponse(content: string) {
     }
 
     if (toolName === "edit" && /premature-edit-report\.mjs/.test(summary)) {
-      if (/The latest tool result does not satisfy the task yet/.test(content)) {
+      if (
+        /The latest tool result does not satisfy the task yet/.test(content)
+        || /Your previous assistant message was only a progress update, not a completed result\./.test(content)
+        || /Do not stop until the original request is actually completed\./.test(content)
+        || /Preferred next action: .*rerun the established verification command/i.test(content)
+      ) {
         return toolCall("shell", {
           command: "node premature-edit-report.mjs"
         });
@@ -18700,7 +23040,10 @@ function resolveProviderResponse(content: string) {
 
       if (/SelfMe-3000/.test(content)) {
         assert.match(content, /Preferred next action:/);
-        assert.match(content, /smallest edit to the most likely source file/i);
+        assert.match(
+          content,
+          /smallest edit to the (?:most likely source file|anchored working file)\s+src\/lib\/render-health\.mjs/i
+        );
         assert.match(content, /Verification command: node src\/healthcheck\.mjs/);
         assert.match(content, /Expected output: SelfMe:3000/);
         assert.match(content, /Observed output: SelfMe-3000/);
@@ -19555,15 +23898,37 @@ function resolveProviderResponse(content: string) {
     }
 
     if (toolName === "files" && /src\/console-explain\.mjs/.test(summary)) {
-      return "src/console-explain.mjs clearly still points at the wrong helper import, so the next step should be in the helper chain instead of stopping here.";
+      return toolCall("files", {
+        path: "src/lib/format-runtime-explain.mjs",
+        startLine: 1,
+        endLine: 20
+      });
     }
 
     if (toolName === "files" && /src\/lib\/format-runtime-explain\.mjs/.test(summary)) {
-      return "src/lib/format-runtime-explain.mjs still formats the runtime too narrowly, so the output cannot be exact yet.";
+      return toolCall("edit", {
+        path: "src/lib/format-runtime-explain.mjs",
+        startLine: 2,
+        endLine: 2,
+        replacement: '  return `${runtime.product} ${runtime.stage} (${runtime.region})`;'
+      });
     }
 
     if (toolName === "edit" && /src\/lib\/format-runtime-explain\.mjs/.test(summary)) {
-      return "The helper format is fixed now, but the entry file still needs the import repaired before verification can succeed.";
+      if (
+        /You are already inside the execution phase of a concrete task\./.test(content)
+        || /The latest tool result does not satisfy the task yet, so your previous reply cannot end the task\./.test(content)
+        || /Pending next step target: src\/console-explain\.mjs/.test(content)
+      ) {
+        return toolCall("edit", {
+          path: "src/console-explain.mjs",
+          startLine: 2,
+          endLine: 2,
+          replacement: 'import { formatRuntimeExplain } from "./lib/format-runtime-explain.mjs";'
+        });
+      }
+
+      return "The helper format is fixed now and it already renders the runtime string correctly, but the entry file still needs the import repaired before verification can succeed. At this point the remaining issue is isolated to src/console-explain.mjs, so the task cannot finish until that entry file is updated and the script is rerun.";
     }
 
     if (toolName === "edit" && /src\/console-explain\.mjs/.test(summary)) {
@@ -19575,34 +23940,6 @@ function resolveProviderResponse(content: string) {
     if (toolName === "shell") {
       assert.match(content, /SelfMe dev \(cn\)/);
       return "Repaired src/lib/format-runtime-explain.mjs and src/console-explain.mjs, then confirmed the script prints exactly SelfMe dev (cn).";
-    }
-
-    if (/You are already inside the execution phase of a concrete task\./.test(content)) {
-      if (/src\/console-explain\.mjs clearly still points at the wrong helper import/.test(content)) {
-        return toolCall("files", {
-          path: "src/lib/format-runtime-explain.mjs",
-          startLine: 1,
-          endLine: 20
-        });
-      }
-
-      if (/src\/lib\/format-runtime-explain\.mjs still formats the runtime too narrowly/.test(content)) {
-        return toolCall("edit", {
-          path: "src/lib/format-runtime-explain.mjs",
-          startLine: 2,
-          endLine: 2,
-          replacement: '  return `${runtime.product} ${runtime.stage} (${runtime.region})`;'
-        });
-      }
-
-      if (/The helper format is fixed now, but the entry file still needs the import repaired/.test(content)) {
-        return toolCall("edit", {
-          path: "src/console-explain.mjs",
-          startLine: 2,
-          endLine: 2,
-          replacement: 'import { formatRuntimeExplain } from "./lib/format-runtime-explain.mjs";'
-        });
-      }
     }
   }
 
@@ -19619,6 +23956,19 @@ function resolveProviderResponse(content: string) {
     }
 
     if (toolName === "files" && /src\/service-stubborn\.mjs/.test(summary)) {
+      if (
+        /You are already inside the execution phase of a concrete task\./.test(content)
+        || /The latest tool result does not satisfy the task yet, so your previous reply cannot end the task\./.test(content)
+        || /Pending next step target: src\/service-stubborn\.mjs/.test(content)
+      ) {
+        return toolCall("edit", {
+          path: "src/service-stubborn.mjs",
+          startLine: 2,
+          endLine: 2,
+          replacement: 'import { renderServiceStubborn } from "./lib/render-service-stubborn.mjs";'
+        });
+      }
+
       return "src/service-stubborn.mjs still points at the wrong helper import, so the task is not ready for completion yet.";
     }
 
@@ -19630,6 +23980,19 @@ function resolveProviderResponse(content: string) {
 
     if (toolName === "shell") {
       if (/SelfMe api-v1/.test(content)) {
+        if (
+          /You are already inside the execution phase of a concrete task\./.test(content)
+          || /The latest tool result does not satisfy the task yet, so your previous reply cannot end the task\./.test(content)
+          || /Pending next step target: src\/lib\/render-service-stubborn\.mjs/.test(content)
+          || /anchored working file src\/lib\/render-service-stubborn\.mjs/i.test(content)
+        ) {
+          return toolCall("files", {
+            path: "src/lib/render-service-stubborn.mjs",
+            startLine: 1,
+            endLine: 20
+          });
+        }
+
         return "The program runs now, but the output is still not exact because it prints SelfMe api-v1 instead of SelfMe api@v1.";
       }
 
@@ -19652,24 +24015,6 @@ function resolveProviderResponse(content: string) {
       });
     }
 
-    if (/You are already inside the execution phase of a concrete task\./.test(content)) {
-      if (/src\/service-stubborn\.mjs still points at the wrong helper import/.test(content)) {
-        return toolCall("edit", {
-          path: "src/service-stubborn.mjs",
-          startLine: 2,
-          endLine: 2,
-          replacement: 'import { renderServiceStubborn } from "./lib/render-service-stubborn.mjs";'
-        });
-      }
-
-      if (/The program runs now, but the output is still not exact because it prints SelfMe api-v1/.test(content)) {
-        return toolCall("files", {
-          path: "src/lib/render-service-stubborn.mjs",
-          startLine: 1,
-          endLine: 20
-        });
-      }
-    }
   }
 
   if (content.startsWith("Original user request: Read config/service.json, then create src/lib/render-service.mjs and repair existing src/service.mjs")) {
@@ -19936,8 +24281,8 @@ function resolveProviderResponse(content: string) {
   }
 
   if (content.startsWith("Original user request: Read config/audit.json and inspect existing src/web/show-audit.mjs")) {
-    const toolName = extractLine(content, "Tool:");
-    const summary = extractLine(content, "Summary:") ?? "";
+    const toolName = extractLine(content, "Tool:") ?? extractLine(content, "Latest tool:");
+    const summary = extractLine(content, "Summary:") ?? extractLine(content, "Latest summary:") ?? "";
 
     if (toolName === "files" && /config\/audit\.json/.test(summary)) {
       assert.match(content, /"name": "SelfMe"/);
@@ -19958,7 +24303,14 @@ function resolveProviderResponse(content: string) {
     }
 
     if (toolName === "shell") {
-      if (/SelfMe:audit cn/.test(content)) {
+      if (/The latest tool result appears to satisfy the task, but your previous reply did not close it clearly\./.test(content)) {
+        return "Inspected the existing audit files, narrowed the issue to the helper only, and confirmed it prints exactly SelfMe:audit-cn.";
+      }
+
+      if (
+        /SelfMe:audit-?\s*cn/.test(content)
+        || /The latest tool result does not satisfy the task yet, so your previous reply cannot end the task\./.test(content)
+      ) {
         return toolCall("files", {
           path: "src/shared/render-audit.mjs",
           startLine: 1,

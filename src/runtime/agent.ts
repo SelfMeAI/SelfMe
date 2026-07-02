@@ -35,6 +35,24 @@ const ASSISTANT_PASS_MULTIPLIER = 4;
 const TOOL_CALL_OPEN = "<tool_call>";
 const TOOL_CALL_CLOSE = "</tool_call>";
 const TOOL_CALL_DENIED_PROMPT = "The requested tool action was denied by the user. Continue without that action. If you can still help, answer directly. If another tool is needed, return exactly one tool call block.";
+const SCRIPT_ENTRY_DIR_HINTS = new Set([
+  "src",
+  "app",
+  "apps",
+  "packages",
+  "docs",
+  "scripts",
+  "bin",
+  "cli",
+  "server",
+  "services",
+  "workers",
+  "examples",
+  "example",
+  "demo",
+  "demos",
+  "lib"
+]);
 
 interface ParsedAssistantToolCall {
   tool: string;
@@ -1876,11 +1894,19 @@ function buildToolContinuationPrompt(originalRequest: string, input: {
   rawOutput?: string;
   workingFileAnchor?: string;
 }, preferredLanguage: PreferredReplyLanguage) {
+  const remainingMultiTargetPath = extractRemainingMultiTargetPathFromResult(originalRequest, input);
   const lines = buildToolResultPromptLines({
     originalRequest,
     instructionLines: [
       "Continue from the latest tool result only.",
       "Do not infer anything that is not explicitly present in the result below.",
+      ...(remainingMultiTargetPath
+        ? [
+          "The original request contains multiple concrete file changes.",
+          "The latest successful edit only covers part of that requested work.",
+          "Continue directly into the next remaining requested file instead of stopping at a status update."
+        ]
+        : []),
       "If another tool is required, return exactly one tool call block.",
       "If the original request is not yet completed, keep working instead of stopping at a status update.",
       "Otherwise answer the user briefly and directly.",
@@ -1896,10 +1922,15 @@ function buildToolContinuationPrompt(originalRequest: string, input: {
     toolResult: input
   });
 
-  const actionHint = buildToolContinuationActionHint(originalRequest, input);
+  const actionHint = remainingMultiTargetPath
+    ? `continue with the remaining requested change in ${remainingMultiTargetPath} now instead of stopping after the first successful edit`
+    : buildToolContinuationActionHint(originalRequest, input);
   pushPreferredNextAction(lines, actionHint);
 
   const clueLines = buildToolContinuationClueLines(originalRequest, input);
+  if (remainingMultiTargetPath) {
+    clueLines.push(`Pending next step target: ${remainingMultiTargetPath}`);
+  }
   pushClueLines(lines, clueLines);
   pushRawOutputSection(lines, input.rawOutput, true);
 
@@ -2109,15 +2140,30 @@ function buildProjectInspectionContinuationPrompt(
   },
   preferredLanguage: PreferredReplyLanguage
 ) {
+  const targetPath = extractPathFromToolSummary(input.summary);
+  const continuingFromProjectEntry = Boolean(
+    input.toolName === "files"
+    && targetPath
+    && looksLikeProjectEntryPath(targetPath)
+    && !looksLikeEditableSourcePath(targetPath)
+  );
   const lines = buildAssistantToolPromptLines({
     originalRequest,
-    instructionLines: [
-      "You are in the middle of a concrete project inspection request.",
-      "Do not stop at a broad question after the workspace listing.",
-      "Continue the inspection now by reading the most likely project entry from the listing.",
-      "If another tool is needed, return exactly one tool call block.",
-      "Only answer directly after you have inspected at least one concrete project entry."
-    ],
+    instructionLines: continuingFromProjectEntry
+      ? [
+        "You are in the middle of a concrete project inspection request.",
+        "You already inspected a concrete project entry, so do not stop at a summary of the entry file.",
+        "Continue the inspection now by reading the most likely implementation file for this project.",
+        "If another tool is needed, return exactly one tool call block.",
+        "Only answer directly after you have inspected at least one concrete implementation file or truly hit a blocker."
+      ]
+      : [
+        "You are in the middle of a concrete project inspection request.",
+        "Do not stop at a broad question after the workspace listing.",
+        "Continue the inspection now by reading the most likely project entry from the listing.",
+        "If another tool is needed, return exactly one tool call block.",
+        "Only answer directly after you have inspected at least one concrete project entry."
+      ],
     preferredLanguage,
     assistantMessage,
     latestTool: input
@@ -2147,15 +2193,34 @@ function buildProjectWorkfileContinuationPrompt(
   },
   preferredLanguage: PreferredReplyLanguage
 ) {
+  const targetPath = extractPathFromToolSummary(input.summary);
+  const likelyImprovementPath = targetPath
+    ? deriveLikelyProjectImplementationPath(targetPath, input.rawOutput)
+    : undefined;
+  const continuingFromThinEntrySource = Boolean(
+    targetPath
+    && looksLikePrimaryProjectEntrySourcePath(targetPath)
+    && likelyImprovementPath
+    && likelyImprovementPath !== targetPath
+  );
   const lines = buildAssistantToolPromptLines({
     originalRequest,
-    instructionLines: [
-      "You are in the middle of a project improvement task.",
-      "You already inspected a concrete project entry, so do not stop at analysis or a broad next-step suggestion.",
-      "Continue now by reading the most likely implementation file for the improvement work.",
-      "If another tool is needed, return exactly one tool call block.",
-      "Only answer directly after you have inspected a concrete working file or truly completed the task."
-    ],
+    instructionLines: continuingFromThinEntrySource
+      ? [
+        "You are in the middle of a project improvement task.",
+        "The file you just inspected is only a thin entry layer, not yet the real implementation target.",
+        "Do not stop at analysis or a broad next-step suggestion.",
+        "Continue now by reading the most likely local implementation file for the requested work.",
+        "If another tool is needed, return exactly one tool call block.",
+        "Only answer directly after you have inspected the concrete implementation file or truly completed the task."
+      ]
+      : [
+        "You are in the middle of a project improvement task.",
+        "You already inspected a concrete project entry, so do not stop at analysis or a broad next-step suggestion.",
+        "Continue now by reading the most likely implementation file for the requested work.",
+        "If another tool is needed, return exactly one tool call block.",
+        "Only answer directly after you have inspected a concrete working file or truly completed the task."
+      ],
     preferredLanguage,
     assistantMessage,
     latestTool: input
@@ -2189,10 +2254,10 @@ function buildWholeProjectInspectionContinuationPrompt(
     originalRequest,
     instructionLines: [
       "You are in the middle of a whole-project inspection request.",
-      "Inspecting only the project entry is not enough here.",
-      "Continue now by reading the most likely core implementation file for this project.",
+      "Inspecting only the project entry or the first entry implementation file is not enough here.",
+      "Continue now by reading the next most likely core implementation file for this project.",
       "If another tool is needed, return exactly one tool call block.",
-      "Only answer directly after you have inspected at least one core implementation file or truly hit a blocker."
+      "Only answer directly after you have inspected more than one concrete core project file or truly hit a blocker."
     ],
     preferredLanguage,
     assistantMessage,
@@ -2200,7 +2265,9 @@ function buildWholeProjectInspectionContinuationPrompt(
   });
 
   const targetPath = extractPathFromToolSummary(input.summary);
-  const inspectionFile = targetPath ? deriveLikelyProjectWorkfileFromEntryPath(targetPath) : undefined;
+  const inspectionFile = targetPath
+    ? deriveLikelyWholeProjectInspectionPath(targetPath, input.rawOutput)
+    : undefined;
 
   if (inspectionFile) {
     lines.push(`Likely inspection file: ${inspectionFile}`);
@@ -2267,7 +2334,7 @@ function buildExecutionConvergencePrompt(
     instructionLines: [
       "You are already inside the execution phase of a concrete task.",
       progressOnly
-        ? "Your previous assistant message was only a progress update."
+        ? "Your previous assistant message was only a progress update, not a completed result."
         : "Your previous assistant message explained the situation but did not advance the task.",
       "Do not stop for explanation-only updates.",
       "Take the next concrete step that moves the task forward.",
@@ -2288,9 +2355,13 @@ function buildExecutionConvergencePrompt(
   const clueLines = input.toolName === "shell"
     ? [
       ...buildAssistantMessageClueLines(assistantMessage),
-      ...buildToolFailureClueLines(originalRequest, input)
+      ...buildToolFailureClueLines(originalRequest, input),
+      ...(input.workingFileAnchor ? [`Working file anchor: ${input.workingFileAnchor}`] : [])
     ]
-    : buildAssistantMessageClueLines(assistantMessage);
+    : [
+      ...buildAssistantMessageClueLines(assistantMessage),
+      ...(input.workingFileAnchor ? [`Working file anchor: ${input.workingFileAnchor}`] : [])
+    ];
   pushClueLines(lines, clueLines);
   pushRawOutputSection(lines, input.rawOutput);
 
@@ -2557,15 +2628,29 @@ function buildToolContinuationActionHint(originalRequest: string, input: {
 }) {
   if (input.toolName === "files") {
     const targetPath = extractPathFromToolSummary(input.summary);
+    const isRequestedMultiTargetFile = Boolean(
+      targetPath
+      && input.workingFileAnchor
+      && looksLikeMultiTargetMutationTask(originalRequest)
+      && isExplicitRequestedTargetPath(originalRequest, targetPath)
+    );
+    const projectImplementationWorkingFile = targetPath
+      && (looksLikeBroadProjectImprovementRequest(originalRequest) || looksLikeExecutableProjectRewriteRequest(originalRequest))
+      ? deriveLikelyProjectImplementationPath(targetPath, input.rawOutput)
+      : undefined;
     const rewriteWorkingFile = targetPath
-      && looksLikeProjectRewriteRequest(originalRequest)
+      && looksLikeExecutableProjectRewriteRequest(originalRequest)
       && looksLikeProjectEntryPath(targetPath)
       && !looksLikeEditableSourcePath(targetPath)
-      ? deriveLikelyProjectWorkfileFromEntryPath(targetPath)
+      ? deriveLikelyProjectWorkfileFromEntryPath(targetPath, input.rawOutput)
       : undefined;
 
     if (rewriteWorkingFile) {
       return `use this project entry to continue the rewrite by reading ${rewriteWorkingFile} next instead of editing the entry file itself`;
+    }
+
+    if (projectImplementationWorkingFile && projectImplementationWorkingFile !== targetPath) {
+      return `use this file only as the handoff point and continue by reading ${projectImplementationWorkingFile} next so you can work on the real implementation`;
     }
 
     if (!targetPath || !looksLikeExecutionTask(originalRequest)) {
@@ -2589,7 +2674,7 @@ function buildToolContinuationActionHint(originalRequest: string, input: {
 
       if (
         targetPath
-        && looksLikeProjectRewriteRequest(originalRequest)
+        && looksLikeExecutableProjectRewriteRequest(originalRequest)
         && looksLikeProjectEntryPath(targetPath)
         && !looksLikeEditableSourcePath(targetPath)
       ) {
@@ -2600,6 +2685,10 @@ function buildToolContinuationActionHint(originalRequest: string, input: {
     }
 
     if (looksLikeConfigurationSourcePath(targetPath)) {
+      if (isRequestedMultiTargetFile) {
+        return "this file is itself one of the requested change targets; use this source read to make the requested edit here now instead of jumping back to an earlier anchor";
+      }
+
       if (input.workingFileAnchor && input.workingFileAnchor !== targetPath) {
         return `use this source data to continue the task, but prefer returning to the anchored working file ${input.workingFileAnchor} instead of rereading broader context first`;
       }
@@ -2658,6 +2747,13 @@ function looksLikeConfigurationSourcePath(path: string) {
 
 function looksLikeEditableSourcePath(path: string) {
   return /\.(?:mjs|cjs|js|ts|tsx|ejs|html|css)$/i.test(path);
+}
+
+function looksLikeAuxiliaryVerificationSourcePath(path: string) {
+  const normalized = normalizePromptPath(path);
+
+  return /(?:^|\/)(?:verify|verification|check|test|smoke|setup)[-_a-z0-9]*\.(?:mjs|cjs|js|ts|tsx)$/i.test(normalized)
+    || /(?:^|\/)(?:tests?|__tests__|spec)\//i.test(normalized);
 }
 
 function buildToolFailureClueLines(originalRequest: string, input: {
@@ -2737,14 +2833,20 @@ function buildToolContinuationClueLines(originalRequest: string, input: {
 }) {
   if (input.toolName === "files") {
     const targetPath = extractPathFromToolSummary(input.summary);
-    const workingFile = targetPath ? deriveLikelyProjectWorkfileFromEntryPath(targetPath) : undefined;
+    const workingFile = targetPath
+      ? (
+        (looksLikeBroadProjectImprovementRequest(originalRequest) || looksLikeExecutableProjectRewriteRequest(originalRequest))
+          ? deriveLikelyProjectImplementationPath(targetPath, input.rawOutput)
+          : deriveLikelyProjectWorkfileFromEntryPath(targetPath, input.rawOutput)
+      )
+      : undefined;
     const clues: string[] = [];
 
     if (input.workingFileAnchor && input.workingFileAnchor !== targetPath) {
       clues.push(`Working file anchor: ${input.workingFileAnchor}`);
     }
 
-    if (workingFile && looksLikeProjectRewriteRequest(originalRequest)) {
+    if (workingFile && looksLikeExecutableProjectRewriteRequest(originalRequest)) {
       clues.push(`Likely working file: ${workingFile}`);
       return dedupePromptLines(clues);
     }
@@ -2753,7 +2855,7 @@ function buildToolContinuationClueLines(originalRequest: string, input: {
       !workingFile
       || (
         !looksLikeBroadProjectImprovementRequest(originalRequest)
-        && !looksLikeProjectRewriteRequest(originalRequest)
+        && !looksLikeExecutableProjectRewriteRequest(originalRequest)
       )
     ) {
       return dedupePromptLines(clues);
@@ -2801,18 +2903,417 @@ function buildToolContinuationClueLines(originalRequest: string, input: {
   return dedupePromptLines(clues);
 }
 
-function deriveLikelyProjectWorkfileFromEntryPath(path: string) {
+function deriveLikelyProjectWorkfileFromEntryPath(path: string, rawOutput?: string) {
   const normalized = normalizePromptPath(path);
   const packageMatch = normalized.match(/^(.*)\/package\.json$/i);
 
   if (packageMatch?.[1]) {
+    const inferredPackageEntry = extractLikelyWorkfileFromPackagePreview(normalized, rawOutput);
+
+    if (inferredPackageEntry) {
+      return inferredPackageEntry;
+    }
+
     return `${packageMatch[1]}/app.js`;
   }
 
   const readmeMatch = normalized.match(/^(.*)\/README\.md$/i);
 
   if (readmeMatch?.[1]) {
+    const inferredReadmeEntry = extractLikelyWorkfileFromReadmePreview(normalized, rawOutput);
+
+    if (inferredReadmeEntry) {
+      return inferredReadmeEntry;
+    }
+
     return `${readmeMatch[1]}/app.js`;
+  }
+
+  return undefined;
+}
+
+function deriveLikelyProjectImplementationPath(path: string, rawOutput?: string) {
+  const normalized = normalizePromptPath(path);
+
+  if (looksLikeProjectEntryPath(normalized) && !looksLikeEditableSourcePath(normalized)) {
+    return deriveLikelyProjectWorkfileFromEntryPath(normalized, rawOutput);
+  }
+
+  if (!looksLikePrimaryProjectEntrySourcePath(normalized)) {
+    return undefined;
+  }
+
+  return extractLikelyRelativeImplementationImportPath(normalized, rawOutput);
+}
+
+function extractLikelyWorkfileFromPackagePreview(entryPath: string, rawOutput?: string) {
+  if (!rawOutput) {
+    return undefined;
+  }
+
+  const packageDir = normalizePromptPath(entryPath).replace(/\/package\.json$/i, "");
+  const previewText = stripFilesPreviewPrefixes(rawOutput);
+  const candidates: string[] = [];
+
+  const mainMatch = previewText.match(/"main"\s*:\s*"([^"]+)"/i);
+
+  if (mainMatch?.[1]) {
+    candidates.push(mainMatch[1]);
+  }
+
+  for (const scriptName of ["start", "dev", "serve", "preview"]) {
+    const scriptMatch = previewText.match(new RegExp(`"${scriptName}"\\s*:\\s*"([^"]+)"`, "i"));
+
+    if (scriptMatch?.[1]) {
+      const commandPath = extractScriptCommandEntryPath(scriptMatch[1]);
+
+      if (commandPath) {
+        candidates.push(commandPath);
+      }
+    }
+  }
+
+  for (const candidate of candidates) {
+    for (const normalizedCandidate of resolveProjectEntryCandidates(packageDir, candidate)) {
+      if (looksLikeEditableSourcePath(normalizedCandidate)) {
+        return normalizedCandidate;
+      }
+    }
+  }
+
+  return undefined;
+}
+
+function extractLikelyWorkfileFromReadmePreview(entryPath: string, rawOutput?: string) {
+  if (!rawOutput) {
+    return undefined;
+  }
+
+  const projectDir = normalizePromptPath(entryPath).replace(/\/README\.md$/i, "");
+  const previewText = stripFilesPreviewPrefixes(rawOutput);
+  const candidates = [
+    ...matchAllGroups(previewText, /\b([A-Za-z0-9_./-]+\.(?:mjs|cjs|js|ts|tsx))\b/g),
+    ...extractReadmeCommandEntryPaths(previewText)
+  ];
+
+  for (const candidate of candidates) {
+    for (const normalizedCandidate of resolveProjectEntryCandidates(projectDir, candidate)) {
+      if (looksLikeEditableSourcePath(normalizedCandidate)) {
+        return normalizedCandidate;
+      }
+    }
+  }
+
+  const fallbackCandidates = [
+    "src/index.ts",
+    "src/index.js",
+    "src/main.ts",
+    "src/main.js",
+    "app.ts",
+    "app.js"
+  ];
+
+  for (const candidate of fallbackCandidates) {
+    for (const normalizedCandidate of resolveProjectEntryCandidates(projectDir, candidate)) {
+      if (looksLikeEditableSourcePath(normalizedCandidate)) {
+        return normalizedCandidate;
+      }
+    }
+  }
+
+  return undefined;
+}
+
+function stripFilesPreviewPrefixes(rawOutput: string) {
+  return rawOutput
+    .split(/\r?\n/)
+    .map((line) => line.replace(/^\s*\d+\s+\|\s?/, ""))
+    .join("\n");
+}
+
+function extractReadmeCommandEntryPaths(content: string) {
+  const candidates: string[] = [];
+  const commandMatches = [
+    ...content.matchAll(/`([^`]+)`/g),
+    ...content.matchAll(/^\s*(?:\$|>)\s+(.+)$/gm)
+  ];
+
+  for (const match of commandMatches) {
+    const command = match[1]?.trim();
+
+    if (!command) {
+      continue;
+    }
+
+    const entryPath = extractScriptCommandEntryPath(command);
+
+    if (entryPath) {
+      candidates.push(entryPath);
+    }
+  }
+
+  return candidates;
+}
+
+function extractScriptCommandEntryPath(command: string) {
+  const tokens = tokenizeShellLikeCommand(command);
+  const runtimeEntry = extractScriptPathFromRuntimeTokens(tokens);
+
+  if (runtimeEntry) {
+    return runtimeEntry;
+  }
+
+  for (const token of tokens) {
+    const normalizedToken = stripWrappingQuotes(token);
+
+    if (looksLikeScriptPathCandidate(normalizedToken)) {
+      return normalizedToken;
+    }
+  }
+
+  return undefined;
+}
+
+function tokenizeShellLikeCommand(command: string) {
+  const tokens: string[] = [];
+
+  for (const match of command.matchAll(/"[^"]*"|'[^']*'|`[^`]*`|[^\s]+/g)) {
+    const token = match[0]?.trim();
+
+    if (token) {
+      tokens.push(token);
+    }
+  }
+
+  return tokens;
+}
+
+function extractScriptPathFromRuntimeTokens(tokens: string[]) {
+  const runtimeIndex = tokens.findIndex((token) => /^(node|tsx|ts-node|bun|deno)$/i.test(stripWrappingQuotes(token)));
+
+  if (runtimeIndex < 0) {
+    return undefined;
+  }
+
+  const runtime = stripWrappingQuotes(tokens[runtimeIndex]).toLowerCase();
+
+  for (let index = runtimeIndex + 1; index < tokens.length; index += 1) {
+    const token = stripWrappingQuotes(tokens[index]);
+
+    if (!token || shouldSkipRuntimeCommandToken(runtime, token)) {
+      continue;
+    }
+
+    if (looksLikeScriptPathCandidate(token)) {
+      return token;
+    }
+  }
+
+  return undefined;
+}
+
+function shouldSkipRuntimeCommandToken(runtime: string, token: string) {
+  if (token.startsWith("-")) {
+    return true;
+  }
+
+  const normalized = token.toLowerCase();
+
+  if ((runtime === "bun" || runtime === "deno") && normalized === "run") {
+    return true;
+  }
+
+  if ((runtime === "tsx" || runtime === "bun") && normalized === "watch") {
+    return true;
+  }
+
+  return false;
+}
+
+function stripWrappingQuotes(value: string) {
+  return value.replace(/^["'`](.*)["'`]$/s, "$1");
+}
+
+function looksLikeScriptPathCandidate(candidate: string) {
+  const normalized = normalizePromptPath(stripWrappingQuotes(candidate));
+
+  if (!normalized) {
+    return false;
+  }
+
+  if (/\.(?:mjs|cjs|js|ts|tsx)$/i.test(normalized)) {
+    return true;
+  }
+
+  if (normalized.startsWith("./") || normalized.startsWith("../") || normalized.startsWith("/")) {
+    return !pathPosix.basename(normalized).startsWith(".");
+  }
+
+  if (!normalized.includes("/")) {
+    return false;
+  }
+
+  const firstSegment = normalized.replace(/^\.?\//, "").split("/")[0]?.toLowerCase() ?? "";
+  return SCRIPT_ENTRY_DIR_HINTS.has(firstSegment);
+}
+
+function resolveProjectEntryCandidates(packageDir: string, candidate: string) {
+  const normalizedCandidate = normalizePromptPath(candidate);
+
+  if (!normalizedCandidate) {
+    return [];
+  }
+
+  const resolvedCandidate = (
+    normalizedCandidate.startsWith("./")
+    || normalizedCandidate.startsWith("../")
+    || normalizedCandidate.includes("/")
+  )
+    ? pathPosix.normalize(pathPosix.join(packageDir, normalizedCandidate))
+    : pathPosix.normalize(pathPosix.join(packageDir, normalizedCandidate));
+
+  const sourceFallbacks = deriveSourceCandidatesFromBuiltArtifact(resolvedCandidate);
+  const extensionlessCandidates = deriveExtensionlessEntryCandidates(resolvedCandidate);
+  return dedupePromptLines([...sourceFallbacks, ...extensionlessCandidates, resolvedCandidate]);
+}
+
+function deriveSourceCandidatesFromBuiltArtifact(path: string) {
+  const normalized = normalizePromptPath(path);
+
+  if (!/\/dist\/.+\.(?:mjs|cjs|js)$/i.test(normalized)) {
+    return [];
+  }
+
+  const sourceBase = normalized
+    .replace(/\/dist\//i, "/src/")
+    .replace(/\.(?:mjs|cjs|js)$/i, "");
+
+  return [
+    `${sourceBase}.ts`,
+    `${sourceBase}.tsx`,
+    `${sourceBase}.js`,
+    `${sourceBase}.mjs`,
+    `${sourceBase}.cjs`
+  ];
+}
+
+function deriveExtensionlessEntryCandidates(path: string) {
+  const normalized = normalizePromptPath(path);
+
+  if (/\.[A-Za-z0-9]+$/.test(pathPosix.basename(normalized))) {
+    return [];
+  }
+
+  return [
+    `${normalized}.ts`,
+    `${normalized}.tsx`,
+    `${normalized}.js`,
+    `${normalized}.mjs`,
+    `${normalized}.cjs`,
+    `${normalized}/index.ts`,
+    `${normalized}/index.tsx`,
+    `${normalized}/index.js`,
+    `${normalized}/index.mjs`,
+    `${normalized}/index.cjs`
+  ];
+}
+
+function deriveLikelyWholeProjectInspectionPath(path: string, rawOutput?: string) {
+  const normalized = normalizePromptPath(path);
+
+  if (looksLikeProjectEntryPath(normalized) && !looksLikeEditableSourcePath(normalized)) {
+    return deriveLikelyProjectWorkfileFromEntryPath(normalized, rawOutput);
+  }
+
+  if (!looksLikePrimaryProjectEntrySourcePath(normalized)) {
+    return undefined;
+  }
+
+  const importedPath = extractLikelyRelativeImplementationImportPath(normalized, rawOutput);
+
+  if (importedPath) {
+    return importedPath;
+  }
+
+  return deriveLikelySiblingInspectionPath(normalized);
+}
+
+function looksLikePrimaryProjectEntrySourcePath(path: string) {
+  const normalized = normalizePromptPath(path);
+
+  return /(?:^|\/)(?:app|index|main|server)\.(?:mjs|cjs|js|ts|tsx)$/i.test(normalized)
+    || /(?:^|\/)src\/index\.(?:mjs|cjs|js|ts|tsx)$/i.test(normalized);
+}
+
+function extractLikelyRelativeImplementationImportPath(fromFile: string, rawOutput?: string) {
+  if (!rawOutput) {
+    return undefined;
+  }
+
+  const matches = [
+    ...rawOutput.matchAll(/\bfrom\s+["'](\.{1,2}\/[^"'?#]+)["']/g),
+    ...rawOutput.matchAll(/\brequire\(\s*["'](\.{1,2}\/[^"'?#]+)["']\s*\)/g)
+  ]
+    .map((match) => match[1]?.trim())
+    .filter((value): value is string => Boolean(value))
+    .filter((value) => !/\.(?:json|css|scss|sass|less|png|jpg|jpeg|gif|svg)$/i.test(value));
+
+  for (const relativePath of matches) {
+    const resolved = resolveRelativeInspectionImportPath(fromFile, relativePath);
+
+    if (resolved) {
+      return resolved;
+    }
+  }
+
+  return undefined;
+}
+
+function resolveRelativeInspectionImportPath(fromFile: string, target: string) {
+  const resolvedBase = resolveRelativeModulePath(fromFile, target);
+
+  if (!resolvedBase) {
+    return undefined;
+  }
+
+  if (/\.(?:mjs|cjs|js|ts|tsx|ejs|html|css)$/i.test(resolvedBase)) {
+    return resolvedBase;
+  }
+
+  const sourceExtension = pathPosix.extname(fromFile).toLowerCase();
+  const preferredScriptExtensions = sourceExtension === ".tsx"
+    ? [".tsx", ".ts", ".js", ".mjs", ".cjs"]
+    : sourceExtension === ".ts"
+      ? [".ts", ".tsx", ".js", ".mjs", ".cjs"]
+      : sourceExtension === ".mjs"
+        ? [".mjs", ".js", ".ts", ".tsx", ".cjs"]
+        : sourceExtension === ".cjs"
+          ? [".cjs", ".js", ".ts", ".tsx", ".mjs"]
+          : [".js", ".ts", ".tsx", ".mjs", ".cjs"];
+
+  const candidates = [
+    ...preferredScriptExtensions.map((extension) => `${resolvedBase}${extension}`),
+    `${resolvedBase}/index.js`,
+    `${resolvedBase}/index.ts`,
+    `${resolvedBase}/index.tsx`,
+    `${resolvedBase}/index.mjs`
+  ];
+
+  return candidates[0];
+}
+
+function deriveLikelySiblingInspectionPath(path: string) {
+  const normalized = normalizePromptPath(path);
+  const appEntryMatch = normalized.match(/^(.*)\/app\.(?:mjs|cjs|js|ts|tsx)$/i);
+
+  if (appEntryMatch?.[1]) {
+    return `${appEntryMatch[1]}/views/index.ejs`;
+  }
+
+  const srcIndexMatch = normalized.match(/^(.*)\/src\/index\.(?:mjs|cjs|js|ts|tsx)$/i);
+
+  if (srcIndexMatch?.[1]) {
+    return `${srcIndexMatch[1]}/src/app.ts`;
   }
 
   return undefined;
@@ -2876,6 +3377,25 @@ function extractObservedShellOutput(rawOutput?: string) {
 
   const joined = lines.join(" | ");
   return joined.length <= 160 ? joined : undefined;
+}
+
+function looksLikePendingVerificationShellOutput(output: string) {
+  const normalized = output.trim().toLowerCase();
+
+  if (!normalized) {
+    return false;
+  }
+
+  return /\b(app-only|view-only|not-ready|pending|incomplete|partial)\b/.test(normalized)
+    || /(未就绪|未完成|进行中|只完成了一部分|部分完成)/u.test(output);
+}
+
+function rawShellOutputContainsPendingVerificationState(rawOutput?: string) {
+  if (!rawOutput) {
+    return false;
+  }
+
+  return looksLikePendingVerificationShellOutput(rawOutput);
 }
 
 function looksLikeProjectListingOutput(summary: string, rawOutput?: string) {
@@ -3191,6 +3711,14 @@ function resolveRunnableUserRequest(
     return content;
   }
 
+  if (
+    followUp.kind === "inspect"
+    && followUp.wholeProjectInspection
+    && isStandaloneWholeProjectInspectionRequest(content)
+  ) {
+    return content;
+  }
+
   const interruptedResume = resolveInterruptedResumeFollowUp({
     content,
     historyEvents,
@@ -3356,6 +3884,7 @@ function isVagueOptimizationFollowUp(content: string) {
   }
 
   return /^(?:帮我)?(?:优化|改进|重构)(?:一下|下)?$/iu.test(normalized)
+    || /^(?:帮我)(?:优化|改进|重构)(?:(?:这个)?(?:项目|仓库|代码))(?:一下|下)?$/iu.test(normalized)
     || /^(?:optimize|improve|refactor)(?: it| this)?$/iu.test(normalized);
 }
 
@@ -3370,7 +3899,7 @@ function isVagueRewriteFollowUp(content: string) {
     return false;
   }
 
-  return /^(?:你能)?(?:帮我)?(?:重新写|重写)(?:这个|整个|项目|个项目|一个项目)?(?:一下|下|吗)?$/iu.test(normalized)
+  return /^(?:你能)?(?:帮我)?(?:重新写|重写)(?:(?:这个|整个)?(?:项目|仓库|代码)|这个|整个|个项目|一个项目)?(?:一下|下|吗)?$/iu.test(normalized)
     || /^(?:rewrite|rebuild)(?: it| this| the project)?$/iu.test(normalized);
 }
 
@@ -3386,6 +3915,7 @@ function isVagueInspectionFollowUp(content: string) {
   }
 
   return /^(?:帮我)?(?:看看|看下|检查下|瞅瞅)(?:这个|一下|下)?$/iu.test(normalized)
+    || /^(?:帮我)(?:看看|看下|检查下|瞅瞅)(?:(?:这个)?(?:项目|仓库|代码))$/iu.test(normalized)
     || isWholeProjectInspectionFollowUp(normalized)
     || /^(?:inspect|review|look at)(?: it| this)?$/iu.test(normalized);
 }
@@ -3404,6 +3934,17 @@ function isWholeProjectInspectionFollowUp(content: string) {
   return /^(?:你能)?(?:不能)?(?:一次性)?(?:都)?(?:帮我)?(?:(?:看完|看看|检查|检查下|看下|审一下)).*(?:整个|完整|全部).*(?:项目|仓库|代码)(?:吗)?$/iu.test(normalized)
     || /^(?:你能)?(?:帮我)?(?:把)?(?:整个|完整|全部).*(?:项目|仓库|代码).*(?:看完|看看|检查|检查下|看下|审一下)(?:吗)?$/iu.test(normalized)
     || /^(?:inspect|review|look at).*(?:whole|entire|full).*(?:project|repo|repository|codebase)$/iu.test(normalized);
+}
+
+function isStandaloneWholeProjectInspectionRequest(content: string) {
+  const normalized = content.trim();
+
+  if (!normalized || normalized.startsWith("/")) {
+    return false;
+  }
+
+  return /^(?:你能|可以|能不能)(?:一次性)?(?:都)?(?:帮我)?(?:(?:看完|看看|检查|检查下|看下|审一下)).*(?:整个|完整|全部).*(?:项目|仓库|代码)(?:吗)?$/iu.test(normalized)
+    || /^(?:can you|could you|please)\b.*(?:look at|inspect|review).*(?:whole|entire|full).*(?:project|repo|repository|codebase)\b/i.test(normalized);
 }
 
 function detectNaturalApprovalDecision(content: string) {
@@ -3522,6 +4063,7 @@ function extractRecentEditableWorkingFile(
 ) {
   const timeline = projectSessionTimeline(historyEvents);
   const previousActionableUserIndex = findPreviousActionableUserTimelineIndex(timeline);
+  let fallbackEditablePath: string | undefined;
 
   for (let index = timeline.length - 1; index >= 0; index -= 1) {
     const entry = timeline[index];
@@ -3541,11 +4083,15 @@ function extractRecentEditableWorkingFile(
     const path = extractPathFromToolSummary(entry.toolSummary);
 
     if (path && looksLikeEditableSourcePath(path)) {
-      return path;
+      fallbackEditablePath ??= path;
+
+      if (!looksLikeAuxiliaryVerificationSourcePath(path)) {
+        return path;
+      }
     }
   }
 
-  return undefined;
+  return fallbackEditablePath;
 }
 
 function extractRecentToolAnchor(
@@ -3832,11 +4378,34 @@ function buildApprovedInspectProposalPrompt(input: {
 function buildRecentFollowUpContext(
   historyEvents: Awaited<ReturnType<TranscriptStore["readEventsBySession"]>>
 ) {
+  const previousUserTask = extractPreviousActionableUserRequest(historyEvents);
+
   return {
-    previousUserTask: extractPreviousActionableUserRequest(historyEvents),
+    previousUserTask,
     previousAssistantProposal: extractPreviousAssistantProposal(historyEvents),
-    recentEditableWorkingFile: extractRecentEditableWorkingFile(historyEvents)
+    recentEditableWorkingFile: deriveRecentFollowUpWorkingFile(previousUserTask, historyEvents)
   };
+}
+
+function deriveRecentFollowUpWorkingFile(
+  previousUserTask: string | undefined,
+  historyEvents: Awaited<ReturnType<TranscriptStore["readEventsBySession"]>>
+) {
+  if (previousUserTask && (
+    looksLikeBroadProjectImprovementRequest(previousUserTask)
+    || looksLikeProjectRewriteRequest(previousUserTask)
+    || looksLikeProjectInspectionRequest(previousUserTask)
+    || looksLikeExactOutputRequest(previousUserTask)
+  )) {
+    const explicitEditableTargets = extractExplicitFileTargets(previousUserTask)
+      .filter((path) => looksLikeEditableSourcePath(path) && !looksLikeAuxiliaryVerificationSourcePath(path));
+
+    if (explicitEditableTargets.length > 0) {
+      return explicitEditableTargets[0];
+    }
+  }
+
+  return extractRecentEditableWorkingFile(historyEvents);
 }
 
 function resolveInterruptedResumeFollowUp(input: {
@@ -4290,6 +4859,21 @@ function resolveSuccessfulToolResultContinuation(input: {
     ? input.previousRepeatedToolResultCount + 1
     : 0;
 
+  if (
+    input.result.toolName === "shell"
+    && looksLikeVerificationRequest(input.originalRequest)
+    && isLatestToolResultTaskTerminal(input.originalRequest, input.result)
+  ) {
+    return {
+      repeatedToolResultCount,
+      nextPrompt: buildToolContinuationPrompt(
+        input.originalRequest,
+        withWorkingFileAnchor(input.result, input.workingFileAnchor),
+        input.preferredLanguage
+      )
+    };
+  }
+
   if (shouldForceTerminalCompletionInsteadOfExtraTool(input.originalRequest, input.result)) {
     return {
       repeatedToolResultCount,
@@ -4375,6 +4959,7 @@ function shouldForceFailureRecovery(originalRequest: string, assistantMessage: s
   }
 
   return !looksLikeCompletionReply(assistantMessage)
+    || looksLikeStageSummaryWithPendingWork(assistantMessage)
     || looksLikeCompletionToneWithPendingWork(assistantMessage);
 }
 
@@ -4388,14 +4973,47 @@ function shouldForceProjectInspectionContinuation(originalRequest: string, assis
     return false;
   }
 
-  if (latestToolResult.toolName !== "shell" || !looksLikeProjectListingOutput(latestToolResult.summary, latestToolResult.rawOutput)) {
+  if (latestToolResult.toolName === "shell") {
+    if (!looksLikeProjectListingOutput(latestToolResult.summary, latestToolResult.rawOutput)) {
+      return false;
+    }
+
+    return looksLikeBlockingQuestion(assistantMessage)
+      || looksLikeStageSummaryWithPendingWork(assistantMessage)
+      || looksLikeProgressOnlyAssistantReply(assistantMessage)
+      || looksLikeCompletionToneWithPendingWork(assistantMessage)
+      || looksLikeAssistantProposal(assistantMessage)
+      || looksLikeThinCompletionReply(originalRequest, assistantMessage, latestToolResult);
+  }
+
+  if (latestToolResult.toolName !== "files") {
+    return false;
+  }
+
+  if (looksLikeWholeProjectInspectionRequest(originalRequest)) {
+    return false;
+  }
+
+  if (
+    looksLikeBroadProjectImprovementRequest(originalRequest)
+    || looksLikeProjectRewriteRequest(originalRequest)
+  ) {
+    return false;
+  }
+
+  const targetPath = extractPathFromToolSummary(latestToolResult.summary);
+
+  if (!targetPath || !looksLikeProjectEntryPath(targetPath) || looksLikeEditableSourcePath(targetPath)) {
     return false;
   }
 
   return looksLikeBlockingQuestion(assistantMessage)
+    || looksLikeStageSummaryWithPendingWork(assistantMessage)
     || looksLikeProgressOnlyAssistantReply(assistantMessage)
     || looksLikeCompletionToneWithPendingWork(assistantMessage)
-    || looksLikeAssistantProposal(assistantMessage);
+    || looksLikeAssistantProposal(assistantMessage)
+    || looksLikeThinCompletionReply(originalRequest, assistantMessage, latestToolResult)
+    || looksLikeCompletionReply(assistantMessage);
 }
 
 function shouldForceWholeProjectInspectionContinuation(originalRequest: string, assistantMessage: string, latestToolResult: {
@@ -4413,15 +5031,25 @@ function shouldForceWholeProjectInspectionContinuation(originalRequest: string, 
   }
 
   const targetPath = extractPathFromToolSummary(latestToolResult.summary);
+  const shallowInspectionAnchor = Boolean(
+    targetPath
+    && (
+      (looksLikeProjectEntryPath(targetPath) && !looksLikeEditableSourcePath(targetPath))
+      || looksLikePrimaryProjectEntrySourcePath(targetPath)
+    )
+  );
 
-  if (!targetPath || !looksLikeProjectEntryPath(targetPath) || looksLikeEditableSourcePath(targetPath)) {
+  if (!shallowInspectionAnchor) {
     return false;
   }
 
   return looksLikeBlockingQuestion(assistantMessage)
+    || looksLikeStageSummaryWithPendingWork(assistantMessage)
     || looksLikeProgressOnlyAssistantReply(assistantMessage)
     || looksLikeCompletionToneWithPendingWork(assistantMessage)
-    || looksLikeAssistantProposal(assistantMessage);
+    || looksLikeAssistantProposal(assistantMessage)
+    || looksLikeThinCompletionReply(originalRequest, assistantMessage, latestToolResult)
+    || looksLikeCompletionReply(assistantMessage);
 }
 
 function shouldForceProjectWorkfileContinuation(originalRequest: string, assistantMessage: string, latestToolResult: {
@@ -4430,7 +5058,7 @@ function shouldForceProjectWorkfileContinuation(originalRequest: string, assista
   rawOutput?: string;
   errorMessage?: string;
 }) {
-  if (!looksLikeBroadProjectImprovementRequest(originalRequest)) {
+  if (!looksLikeBroadProjectImprovementRequest(originalRequest) && !looksLikeExecutableProjectRewriteRequest(originalRequest)) {
     return false;
   }
 
@@ -4440,11 +5068,25 @@ function shouldForceProjectWorkfileContinuation(originalRequest: string, assista
 
   const targetPath = extractPathFromToolSummary(latestToolResult.summary);
 
-  if (!targetPath || !looksLikeProjectEntryPath(targetPath) || looksLikeEditableSourcePath(targetPath)) {
+  if (!targetPath) {
+    return false;
+  }
+
+  const likelyImprovementPath = deriveLikelyProjectImplementationPath(targetPath, latestToolResult.rawOutput);
+  const shallowImprovementAnchor = (
+    looksLikeProjectEntryPath(targetPath) && !looksLikeEditableSourcePath(targetPath)
+  ) || Boolean(
+    looksLikePrimaryProjectEntrySourcePath(targetPath)
+    && likelyImprovementPath
+    && likelyImprovementPath !== targetPath
+  );
+
+  if (!shallowImprovementAnchor) {
     return false;
   }
 
   return looksLikeBlockingQuestion(assistantMessage)
+    || looksLikeStageSummaryWithPendingWork(assistantMessage)
     || looksLikeProgressOnlyAssistantReply(assistantMessage)
     || looksLikeCompletionToneWithPendingWork(assistantMessage)
     || looksLikeAssistantProposal(assistantMessage);
@@ -4460,6 +5102,17 @@ function shouldForceExecutionConvergence(originalRequest: string, assistantMessa
     return false;
   }
 
+  if (
+    (latestToolResult.toolName === "edit" || latestToolResult.toolName === "write")
+    && looksLikeCompletionReply(assistantMessage)
+    && !looksLikeStageSummaryWithPendingWork(assistantMessage)
+    && !looksLikeCompletionToneWithPendingWork(assistantMessage)
+    && !looksLikeAssistantProposal(assistantMessage)
+    && !looksLikeBlockingQuestion(assistantMessage)
+  ) {
+    return false;
+  }
+
   if (!looksLikeExecutionTask(originalRequest) || isDirectShellExecutionRequest(originalRequest)) {
     return false;
   }
@@ -4467,11 +5120,17 @@ function shouldForceExecutionConvergence(originalRequest: string, assistantMessa
   if (
     (latestToolResult.toolName === "edit" || latestToolResult.toolName === "write")
     && looksLikeMultiTargetMutationTask(originalRequest)
+    && !looksLikeVerificationRequest(originalRequest)
+    && !looksLikeExactOutputRequest(originalRequest)
   ) {
     return false;
   }
 
   if (looksLikeBlockingQuestion(assistantMessage)) {
+    if (isLatestToolResultTaskTerminal(originalRequest, latestToolResult)) {
+      return false;
+    }
+
     if (hasDirectExecutionCue(originalRequest)) {
       return true;
     }
@@ -4489,6 +5148,10 @@ function shouldForceExecutionConvergence(originalRequest: string, assistantMessa
 
     return latestToolResult.toolName === "files"
       && Boolean(extractPathFromToolSummary(latestToolResult.summary));
+  }
+
+  if (isLatestToolResultTaskTerminal(originalRequest, latestToolResult)) {
+    return false;
   }
 
   if (looksLikeStageSummaryWithPendingWork(assistantMessage)) {
@@ -4509,10 +5172,6 @@ function shouldForceExecutionConvergence(originalRequest: string, assistantMessa
 
   if (looksLikeAssistantProposal(assistantMessage)) {
     return true;
-  }
-
-  if (isLatestToolResultTaskTerminal(originalRequest, latestToolResult)) {
-    return false;
   }
 
   if (looksLikeProgressOnlyAssistantReply(assistantMessage)) {
@@ -4560,6 +5219,10 @@ function shouldForceCompletionTightening(originalRequest: string, assistantMessa
     return false;
   }
 
+  if (hasSatisfiedWholeProjectInspectionAnchor(originalRequest, latestToolResult)) {
+    return false;
+  }
+
   const taskTerminal = isLatestToolResultTaskTerminal(originalRequest, latestToolResult);
 
   if (!taskTerminal) {
@@ -4582,6 +5245,24 @@ function shouldForceCompletionTightening(originalRequest: string, assistantMessa
     || looksLikeDistractedCompletionReply(originalRequest, assistantMessage, latestToolResult)
     || looksLikeFailureRecapCompletionReply(assistantMessage)
     || looksLikeProcessHeavyCompletionReply(assistantMessage);
+}
+
+function hasSatisfiedWholeProjectInspectionAnchor(originalRequest: string, latestToolResult: {
+  toolName: string;
+  summary: string;
+  rawOutput?: string;
+  errorMessage?: string;
+}) {
+  if (!looksLikeWholeProjectInspectionRequest(originalRequest) || latestToolResult.toolName !== "files") {
+    return false;
+  }
+
+  const latestPath = extractPathFromToolSummary(latestToolResult.summary);
+  return Boolean(
+    latestPath
+    && looksLikeEditableSourcePath(latestPath)
+    && !looksLikePrimaryProjectEntrySourcePath(latestPath)
+  );
 }
 
 function shouldAutoFinalizeRepeatedTerminalAssistantReply(input: {
@@ -4647,6 +5328,7 @@ function buildDirectTerminalCompletionAnswer(
     ? requestedPaths.at(-1)
     : undefined;
   const createIntent = /\b(create|write)\b/i.test(originalRequest) || /(创建|新建|写入)/u.test(originalRequest);
+  const mutationAnchor = extractRequestedMutationAnchor(originalRequest);
 
   if (
     latestToolResult.toolName === "shell"
@@ -4684,6 +5366,12 @@ function buildDirectTerminalCompletionAnswer(
     latestPath
     && (latestToolResult.toolName === "edit" || latestToolResult.toolName === "write" || latestToolResult.toolName === "files")
   ) {
+    if (primaryRequestedPath && mutationAnchor) {
+      return preferredLanguage === "zh"
+        ? `已完成 \`${primaryRequestedPath}\`，现在已使用 \`${mutationAnchor}\`。`
+        : `Completed ${primaryRequestedPath}; it now uses \`${mutationAnchor}\`.`;
+    }
+
     return preferredLanguage === "zh"
       ? `已完成，已处理 \`${latestPath}\`。`
       : `Completed; updated \`${latestPath}\`.`;
@@ -4694,6 +5382,13 @@ function buildDirectTerminalCompletionAnswer(
     : "Completed.";
 }
 
+function extractRequestedMutationAnchor(originalRequest: string) {
+  const taskContent = extractEmbeddedTaskContent(originalRequest);
+
+  return taskContent.match(/\bprocess\.env\.[A-Za-z0-9_]+\b/)?.[0]
+    ?? taskContent.match(/\bmaxlength(?:\s*=|\s+)\d+\b/i)?.[0]?.replace(/\s*=\s*/g, "=");
+}
+
 function shouldForceTerminalCompletionInsteadOfExtraTool(originalRequest: string, latestToolResult: {
   toolName: string;
   summary: string;
@@ -4701,6 +5396,19 @@ function shouldForceTerminalCompletionInsteadOfExtraTool(originalRequest: string
   errorMessage?: string;
 }) {
   if (!looksLikeLongRunningTask(originalRequest) && !looksLikeExecutionTask(originalRequest)) {
+    return false;
+  }
+
+  if (
+    latestToolResult.toolName === "shell"
+    && looksLikeProjectListingOutput(latestToolResult.summary, latestToolResult.rawOutput)
+    && (
+      looksLikeProjectInspectionRequest(originalRequest)
+      || looksLikeWholeProjectInspectionRequest(originalRequest)
+      || looksLikeBroadProjectImprovementRequest(originalRequest)
+      || looksLikeProjectRewriteRequest(originalRequest)
+    )
+  ) {
     return false;
   }
 
@@ -4875,6 +5583,15 @@ function looksLikeExtendedCodingTask(content: string) {
     return false;
   }
 
+  if (
+    !hasMutationIntent(taskContent)
+    && looksLikeExactOutputRequest(taskContent)
+    && /\b(inspect|read)\b/i.test(taskContent)
+    && /\b(existing|current)\b/i.test(taskContent)
+  ) {
+    return true;
+  }
+
   if (!hasMutationIntent(taskContent)) {
     return false;
   }
@@ -4978,6 +5695,15 @@ function isLatestToolResultTaskTerminal(originalRequest: string, latestToolResul
       return Boolean(expectedOutput && observedOutput && observedOutput === expectedOutput);
     }
 
+    const observedOutput = extractObservedShellOutput(latestToolResult.rawOutput);
+
+    if (
+      rawShellOutputContainsPendingVerificationState(latestToolResult.rawOutput)
+      || (observedOutput && looksLikePendingVerificationShellOutput(observedOutput))
+    ) {
+      return false;
+    }
+
     return /\bverify|run\b/i.test(originalRequest) || /(验证|运行)/u.test(originalRequest);
   }
 
@@ -5025,16 +5751,26 @@ function isFilesVerificationTerminal(originalRequest: string, summary: string) {
 
 function looksLikeVerificationRequest(content: string) {
   const taskContent = extractEmbeddedTaskContent(content);
-  return /\b(verify|run|test|check|keep working|keep verifying)\b/i.test(taskContent)
-    || /(验证|运行|测试|检查|继续)/u.test(taskContent);
+  const normalizedTask = stripPathLikeTokensForIntentDetection(taskContent);
+  return /\b(verify|run|test|check|keep working|keep verifying)\b/i.test(normalizedTask)
+    || /(验证|运行|测试|检查|继续(?:验证|检查|运行|测试))/u.test(taskContent);
+}
+
+function stripPathLikeTokensForIntentDetection(content: string) {
+  return content.replace(
+    /\b[A-Za-z0-9_./-]+\.(?:tsx|json|mjs|cjs|ejs|html|css|js|ts|txt|md|csv)\b/g,
+    " "
+  );
 }
 
 function looksLikeDiscussionRequest(content: string) {
-  if (/\b(discuss|brainstorm|explain|why|architecture|tradeoff|plan|strategy|how would you|what would you do|tell me what you(?:'d| would) do)\b/i.test(content)) {
+  const normalized = stripPathLikeTokensForIntentDetection(content);
+
+  if (/\b(discuss|brainstorm|explain|why|architecture|tradeoff|plan|strategy|how would you|what would you do|tell me what you(?:'d| would) do)\b/i.test(normalized)) {
     return true;
   }
 
-  return /(讨论|聊聊|为什么|架构|取舍|方案|计划|策略|先讨论|告诉我.*怎么做|会怎么做|你会怎么做)/u.test(content);
+  return /(讨论|聊聊|为什么|架构|取舍|方案|计划|策略|先讨论|告诉我.*怎么做|会怎么做|你会怎么做)/u.test(normalized);
 }
 
 function looksLikeProjectInspectionRequest(content: string) {
@@ -5084,6 +5820,14 @@ function looksLikeProjectRewriteRequest(content: string) {
     || /(项目|仓库|代码)/u.test(taskContent);
 }
 
+function looksLikeExecutableProjectRewriteRequest(content: string) {
+  const taskContent = extractEmbeddedTaskContent(content);
+
+  return looksLikeProjectRewriteRequest(taskContent)
+    && !looksLikeDiscussionRequest(taskContent)
+    && !looksLikeNextStepProposalRequest(taskContent);
+}
+
 function looksLikeMultiTargetMutationTask(content: string) {
   const taskContent = extractEmbeddedTaskContent(content);
 
@@ -5091,13 +5835,68 @@ function looksLikeMultiTargetMutationTask(content: string) {
     return false;
   }
 
-  return extractExplicitFileTargets(taskContent).length >= 2;
+  return extractExplicitRequestedMutationTargets(taskContent).length >= 2;
 }
 
 function extractExplicitFileTargets(content: string) {
   const taskContent = extractEmbeddedTaskContent(content);
   const pathMatches = taskContent.match(/[A-Za-z0-9_./-]+\.(?:tsx|json|mjs|cjs|ejs|html|css|js|ts|txt|md|csv)/g) ?? [];
   return Array.from(new Set(pathMatches.map((path) => stripLineLocationSuffix(normalizePromptPath(path.trim())))));
+}
+
+function extractExplicitRequestedMutationTargets(content: string) {
+  const taskContent = extractEmbeddedTaskContent(content);
+  const pattern = /[A-Za-z0-9_./-]+\.(?:tsx|json|mjs|cjs|ejs|html|css|js|ts|txt|md|csv)/g;
+  const matches = [...taskContent.matchAll(pattern)];
+  const targets: string[] = [];
+
+  for (const match of matches) {
+    const rawPath = match[0]?.trim();
+    const index = match.index ?? -1;
+
+    if (!rawPath || index < 0) {
+      continue;
+    }
+
+    const path = stripLineLocationSuffix(normalizePromptPath(rawPath));
+    const before = taskContent.slice(Math.max(0, index - 40), index);
+    const after = taskContent.slice(index + rawPath.length, index + rawPath.length + 40);
+    const localContext = `${before} ${after}`;
+    const immediatePrefix = before.trimEnd().slice(-16);
+    const immediateSuffix = after.trimStart().slice(0, 20);
+    const hasMutationCue = /\b(fix|repair|edit|write|create|update|change|modify|rewrite|rebuild|optimize|improve|refactor|add|remove|rename|replace)\b/i.test(localContext)
+      || /(修复|编辑|写入|创建|更新|修改|改成|改为|改掉|重写|重做|优化|改进|重构|新增|删除|替换|补上|加上|移除|调整)/u.test(localContext);
+    const hasReadOnlyCue = /\b(read|inspect|review|check|look at|open|analyze)\b/i.test(localContext)
+      || /(读取|读一下|读下|看看|看下|检查|查看|审一下|打开|分析)/u.test(localContext);
+    const hasImmediateReadOnlyCue = /\b(read|inspect|review|check|look at|open|analyze)\s*$/i.test(immediatePrefix)
+      || /(读取|读一下|读下|看看|看下|检查|查看|审一下|打开|分析)\s*$/u.test(immediatePrefix);
+    const hasImmediateMutationCue = /\b(fix|repair|edit|write|create|update|change|modify|rewrite|rebuild|optimize|improve|refactor|add|remove|rename|replace)\s*$/i.test(immediatePrefix)
+      || /^\s*(?:to\s+)?\b(fix|repair|edit|write|create|update|change|modify|rewrite|rebuild|optimize|improve|refactor|add|remove|rename|replace)\b/i.test(immediateSuffix)
+      || /(修复|编辑|写入|创建|更新|修改|改成|改为|改掉|重写|重做|优化|改进|重构|新增|删除|替换|补上|加上|移除|调整)\s*$/u.test(immediatePrefix)
+      || /^\s*(?:为|成|成了|一下|下)?\s*(修复|编辑|写入|创建|更新|修改|改成|改为|改掉|重写|重做|优化|改进|重构|新增|删除|替换|补上|加上|移除|调整)/u.test(immediateSuffix);
+
+    if (hasImmediateReadOnlyCue && !hasImmediateMutationCue) {
+      continue;
+    }
+
+    if (!hasMutationCue && hasReadOnlyCue) {
+      continue;
+    }
+
+    if (!hasMutationCue && !looksLikeEditableSourcePath(path) && !looksLikeConfigurationSourcePath(path)) {
+      continue;
+    }
+
+    if (!targets.includes(path)) {
+      targets.push(path);
+    }
+  }
+
+  return targets;
+}
+
+function isExplicitRequestedTargetPath(content: string, targetPath: string) {
+  return extractExplicitRequestedMutationTargets(content).some((path) => pathsReferToSameTarget(path, targetPath));
 }
 
 function normalizeComparablePath(value: string) {
@@ -5152,7 +5951,7 @@ function looksLikePathScopedCompletionForMultiTargetRequest(
     return false;
   }
 
-  const targets = extractExplicitFileTargets(originalRequest);
+  const targets = extractExplicitRequestedMutationTargets(originalRequest);
 
   if (targets.length < 2) {
     return false;
@@ -5176,6 +5975,43 @@ function looksLikePathScopedCompletionForMultiTargetRequest(
   return matchedRequestedTargets.every((target) => pathsReferToSameTarget(target, latestPath));
 }
 
+function extractRemainingMultiTargetPathFromResult(
+  originalRequest: string,
+  latestToolResult: {
+    toolName: string;
+    summary: string;
+    rawOutput?: string;
+    errorMessage?: string;
+  }
+) {
+  if (
+    (latestToolResult.toolName !== "edit" && latestToolResult.toolName !== "write")
+    || !looksLikeMultiTargetMutationTask(originalRequest)
+  ) {
+    return undefined;
+  }
+
+  const latestPath = extractPathFromToolSummary(latestToolResult.summary);
+
+  if (!latestPath) {
+    return undefined;
+  }
+
+  const targets = extractExplicitRequestedMutationTargets(originalRequest);
+
+  if (targets.length < 2) {
+    return undefined;
+  }
+
+  const latestTargetIndex = targets.findIndex((target) => pathsReferToSameTarget(target, latestPath));
+
+  if (latestTargetIndex === -1) {
+    return undefined;
+  }
+
+  return targets.slice(latestTargetIndex + 1).find(Boolean);
+}
+
 function extractEmbeddedTaskContent(content: string) {
   const approvedProposalMatch = content.match(/\bApproved proposal:\s*([\s\S]+)$/i);
 
@@ -5184,7 +6020,10 @@ function extractEmbeddedTaskContent(content: string) {
     const approvedProposal = approvedProposalMatch[1].trim();
 
     if (/^The user replied ".+" and wants you to execute the immediately previous (?:rewrite |optimize |inspect )?proposal now\./.test(firstLine)) {
-      return `${firstLine}\n${approvedProposal}`;
+      const preservedIntentLine = /\bwhole-project inspection\b/i.test(content)
+        ? "whole-project inspection"
+        : "";
+      return [firstLine, preservedIntentLine, approvedProposal].filter(Boolean).join("\n");
     }
 
     return approvedProposal;
@@ -5203,6 +6042,12 @@ function extractEmbeddedTaskContent(content: string) {
     const previousContext = previousContextMatch[1].trim();
 
     if (/^The user replied ".+"/.test(firstLine)) {
+      const recentEditableWorkingFileMatch = content.match(/\bRecent editable working file:\s*([A-Za-z0-9_./-]+\.(?:tsx|json|mjs|cjs|ejs|html|css|js|ts|txt|md|csv))/i);
+
+      if (recentEditableWorkingFileMatch?.[1]?.trim()) {
+        return `${firstLine}\n${stripLineLocationSuffix(normalizePromptPath(recentEditableWorkingFileMatch[1].trim()))}`;
+      }
+
       const pathMatches = previousContext.match(/[A-Za-z0-9_./-]+\.(?:tsx|json|mjs|cjs|ejs|html|css|js|ts|txt|md|csv)/g) ?? [];
       const normalizedPaths = Array.from(new Set(pathMatches.map((path) =>
         stripLineLocationSuffix(normalizePromptPath(path.trim()))
@@ -5305,7 +6150,7 @@ function looksLikeStageSummaryWithPendingWork(content: string) {
   }
 
   const hasCompletedStep = /\b(created|updated|fixed|repaired|read|reviewed|inspected|found|verified|optimized|improved|refactored|rewrote|changed)\b/i.test(normalized)
-    || /(已创建|已更新|已修复|修好了|读取了|看了|检查了|找到了|已验证|发现了|已优化|已改进|已重构|已重写|已修改)/u.test(normalized);
+    || /(已创建|已更新|已修复|修好了|读取了|已读|读了|已经读了|已回到|回到了|已经回到|回来了|看了|检查了|找到了|已验证|发现了|已优化|已改进|已重构|已重写|已修改|改成了|处理了|做完了)/u.test(normalized);
   const hasNextStepCue = /\b(next|then|will|going to|after that|before verifying|and verify)\b/i.test(normalized)
     || /(接下来|下一步|然后|还会|还要|再去|再做|并验证|再验证)/u.test(normalized);
 
