@@ -3734,6 +3734,7 @@ async function main() {
   await verifyAlternateVagueRewriteResumesInterruptedProposalExecution();
   await verifyVagueOptimizationExecutesPreviousProposal();
   await verifyVagueOptimizationProposalContinuesAfterLongExplanation();
+  await verifyProposalDrivenRewriteContinuesAfterNearMissLongExplanation();
   await verifyEnglishPlanningStyleOptimizationProposalExecutesPreviousProposal();
   await verifyChineseOptimizationProposalExecutesPreviousProposal();
   await verifyDirectEditFollowUpExecutesPreviousProposal();
@@ -5571,6 +5572,248 @@ async function verifyVagueOptimizationProposalContinuesAfterLongExplanation() {
   assert.ok(
     followUpResult.toolSummaries.some((summary) => summary.startsWith("node-todo/views/index.ejs:1-1 · updated")),
     "expected vague optimization proposal long-explanation flow to finish the view edit"
+  );
+}
+
+async function verifyProposalDrivenRewriteContinuesAfterNearMissLongExplanation() {
+  const root = await mkdtemp(join(tmpdir(), "selfme-agent-proposal-rewrite-nearmiss-long-explanation-"));
+  const workspace = join(root, "workspace");
+  const transcriptPath = join(root, "transcript.jsonl");
+  const logsPath = join(root, "logs.jsonl");
+  await mkdir(join(workspace, "node-todo", "views"), { recursive: true });
+
+  await writeFile(
+    join(workspace, "node-todo", "app.js"),
+    'const express = require("express");\nconst app = express();\nconst PORT = 3000;\napp.listen(PORT, () => {\n  console.log(`Todo app is running at http://localhost:${PORT}`);\n});\n',
+    "utf8"
+  );
+  await writeFile(
+    join(workspace, "node-todo", "views", "index.ejs"),
+    '<!DOCTYPE html>\n<form action="/add" method="post">\n  <input name="title" />\n</form>\n',
+    "utf8"
+  );
+  await writeFile(
+    join(workspace, "node-todo", "verify-exact-long.mjs"),
+    [
+      'import { readFileSync } from "node:fs";',
+      'const app = readFileSync(new URL("./app.js", import.meta.url), "utf8");',
+      'const view = readFileSync(new URL("./views/index.ejs", import.meta.url), "utf8");',
+      'const appReady = /process\\.env\\.PORT/.test(app);',
+      'const viewReady = /maxlength="100"/.test(view);',
+      'if (appReady && viewReady) {',
+      '  console.log("ready!");',
+      '} else if (appReady) {',
+      '  console.log("app-only");',
+      '} else if (viewReady) {',
+      '  console.log("view-only");',
+      '} else {',
+      '  console.log("not-ready");',
+      '}'
+    ].join("\n") + "\n",
+    "utf8"
+  );
+
+  class ProposalRewriteNearMissLongExplanationProvider implements ProviderClient {
+    readonly name = "proposal-rewrite-nearmiss-long-explanation-provider";
+
+    async *streamResponse(input: ProviderStreamInput): AsyncIterable<ProviderStreamChunk> {
+      const proposalPrompt = "看看项目，但先别改，告诉我如果重写 node-todo，并运行 `node node-todo/verify-exact-long.mjs` 验证直到输出 exactly `ready`，你会怎么做。";
+      const executeProposalPrompt = 'The user replied "你能帮我重新写个项目吗" and wants you to execute the immediately previous rewrite proposal now.';
+
+      if (input.content === proposalPrompt) {
+        yield {
+          delta: "Next step I can rewrite node-todo by updating app.js and views/index.ejs, then run node node-todo/verify-exact-long.mjs until it prints exactly ready, repairing the verifier too if the latest exact-output gap shifts there."
+        };
+        return;
+      }
+
+      if (input.content.startsWith(executeProposalPrompt) && !input.content.startsWith(`Original user request: ${executeProposalPrompt}`)) {
+        assert.match(input.content, /Approved proposal:/);
+        yield {
+          delta: toolCall("files", {
+            path: "node-todo/app.js",
+            startLine: 1,
+            endLine: 20
+          })
+        };
+        return;
+      }
+
+      if (input.content.startsWith(`Original user request: ${executeProposalPrompt}`)) {
+        const toolName = extractLine(input.content, "Tool:") ?? extractLine(input.content, "Latest tool:");
+        const summary = extractLine(input.content, "Summary:") ?? extractLine(input.content, "Latest summary:") ?? "";
+        const latestRawOutput = extractLatestRawOutputBlock(input.content);
+
+        if (toolName === "files" && /node-todo\/app\.js/.test(summary)) {
+          yield {
+            delta: toolCall("edit", {
+              path: "node-todo/app.js",
+              startLine: 3,
+              endLine: 3,
+              replacement: "const PORT = Number(process.env.PORT || 3000);"
+            })
+          };
+          return;
+        }
+
+        if (toolName === "edit" && /node-todo\/app\.js/.test(summary)) {
+          yield {
+            delta: toolCall("shell", {
+              command: "node node-todo/verify-exact-long.mjs"
+            })
+          };
+          return;
+        }
+
+        if (toolName === "shell" && /app-only/.test(latestRawOutput)) {
+          if (/You are already inside the execution phase of a concrete task\./.test(input.content)) {
+            yield {
+              delta: toolCall("files", {
+                path: "node-todo/views/index.ejs",
+                startLine: 1,
+                endLine: 4
+              })
+            };
+            return;
+          }
+
+          yield {
+            delta: "node-todo/app.js 这一层已经完成了端口改写，而且验证结果现在来到 app-only，说明当前 rewrite 链已经从入口配置问题推进到了更窄的剩余缺口；但这还不能当成完成，因为 exactly ready 的目标还差最后一处用户可见输入限制没有补上，所以如果要把这条已批准的 proposal 真正做完，下一步仍然必须继续进入 node-todo/views/index.ejs，补上 maxlength 100，然后再回到同一条验证链。"
+          };
+          return;
+        }
+
+        if (toolName === "files" && /node-todo\/views\/index\.ejs/.test(summary)) {
+          yield {
+            delta: toolCall("edit", {
+              path: "node-todo/views/index.ejs",
+              startLine: 3,
+              endLine: 3,
+              replacement: '  <input name="title" maxlength="100" />'
+            })
+          };
+          return;
+        }
+
+        if (toolName === "edit" && /node-todo\/views\/index\.ejs/.test(summary)) {
+          yield {
+            delta: toolCall("shell", {
+              command: "node node-todo/verify-exact-long.mjs"
+            })
+          };
+          return;
+        }
+
+        if (toolName === "shell" && /ready!/.test(latestRawOutput)) {
+          if (/The latest tool result does not satisfy the task yet, so your previous reply cannot end the task\./.test(input.content)) {
+            yield {
+              delta: toolCall("files", {
+                path: "node-todo/verify-exact-long.mjs",
+                startLine: 1,
+                endLine: 20
+              })
+            };
+            return;
+          }
+
+          yield { delta: "I finished the rewrite of node-todo/app.js and node-todo/views/index.ejs." };
+          return;
+        }
+
+        if (toolName === "files" && /node-todo\/verify-exact-long\.mjs/.test(summary)) {
+          yield {
+            delta: toolCall("edit", {
+              path: "node-todo/verify-exact-long.mjs",
+              startLine: 7,
+              endLine: 7,
+              replacement: '  console.log("ready");'
+            })
+          };
+          return;
+        }
+
+        if (toolName === "edit" && /node-todo\/verify-exact-long\.mjs/.test(summary)) {
+          yield {
+            delta: toolCall("shell", {
+              command: "node node-todo/verify-exact-long.mjs"
+            })
+          };
+          return;
+        }
+
+        if (toolName === "shell") {
+          assert.match(latestRawOutput, /ready/);
+          yield { delta: "I completed the rewrite proposal and reran node node-todo/verify-exact-long.mjs until the final output was exactly ready." };
+          return;
+        }
+      }
+
+      yield { delta: "ok" };
+    }
+  }
+
+  const bus = new EventBus();
+  const transcriptStore = new TranscriptStore(transcriptPath);
+  const logStore = new LogStore(logsPath);
+  await transcriptStore.ensureInitialized();
+  await logStore.ensureInitialized();
+
+  const session = createDefaultSessionRecord(workspace, VERSION);
+  session.model = "regression-stub";
+
+  const runtime = new AgentRuntime({
+    bus,
+    provider: new ProposalRewriteNearMissLongExplanationProvider(),
+    tools: new InMemoryToolRegistry(),
+    session,
+    transcriptStore,
+    logStore
+  });
+  await runtime.start();
+
+  const proposalResult = await runAgentTask({
+    bus,
+    transcriptStore,
+    sessionId: session.sessionId,
+    prompt: "看看项目，但先别改，告诉我如果重写 node-todo，并运行 `node node-todo/verify-exact-long.mjs` 验证直到输出 exactly `ready`，你会怎么做。"
+  });
+  assert.match(proposalResult.assistantText, /app\.js/i);
+  assert.match(proposalResult.assistantText, /views\/index\.ejs/i);
+  assert.match(proposalResult.assistantText, /verify-exact-long\.mjs/i);
+
+  const result = await runAgentTask({
+    bus,
+    transcriptStore,
+    sessionId: session.sessionId,
+    prompt: "你能帮我重新写个项目吗"
+  });
+
+  const appContent = await readFile(join(workspace, "node-todo", "app.js"), "utf8");
+  const viewContent = await readFile(join(workspace, "node-todo", "views", "index.ejs"), "utf8");
+  const verifierContent = await readFile(join(workspace, "node-todo", "verify-exact-long.mjs"), "utf8");
+  assert.match(appContent, /process\.env\.PORT/);
+  assert.match(viewContent, /maxlength="100"/);
+  assert.match(verifierContent, /console\.log\("ready"\)/);
+  assert.match(result.assistantText, /ready/);
+  assert.ok(
+    result.toolSummaries.filter((summary) => summary.startsWith("node node-todo/verify-exact-long.mjs · completed")).length >= 3,
+    "expected proposal rewrite near-miss long-explanation flow to verify after app.js, after views/index.ejs, and after repairing verify-exact-long.mjs"
+  );
+  assert.ok(
+    result.toolSummaries.some((summary) => summary.startsWith("node-todo/views/index.ejs:1-4")),
+    "expected proposal rewrite near-miss long-explanation flow to continue into the pending view file after app-only"
+  );
+  assert.ok(
+    result.toolSummaries.some((summary) => summary.startsWith("node-todo/views/index.ejs:3-3 · updated")),
+    "expected proposal rewrite near-miss long-explanation flow to finish the pending view edit"
+  );
+  assert.ok(
+    result.toolSummaries.some((summary) => summary.startsWith("node-todo/verify-exact-long.mjs:1-14")),
+    "expected proposal rewrite near-miss long-explanation flow to inspect the verifier after the near-miss exact output"
+  );
+  assert.ok(
+    result.toolSummaries.some((summary) => summary.startsWith("node-todo/verify-exact-long.mjs:7-7 · updated")),
+    "expected proposal rewrite near-miss long-explanation flow to repair the verifier after the near-miss exact output"
   );
 }
 
