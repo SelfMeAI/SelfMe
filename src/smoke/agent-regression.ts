@@ -3937,6 +3937,8 @@ async function main() {
   await verifyNaturalLanguageApprovalShortcuts();
   await verifyPendingNextStepContextGuidesMultiTargetContinuation();
   await verifyAssistantStageSummaryPromotesExplicitNextTarget();
+  await verifyDeferredStageCheckpointDoesNotEmitAssistantCompletion();
+  await verifyBusyPhaseReturnsToAssistantDuringSameTaskContinuation();
   await verifyLongCompletionToneWithPendingWorkStillContinues();
   await verifyPathScopedCompletionDoesNotEndDualFileExecution();
   await verifyImplicitRemainingChainDoesNotEndAtHelperCompletion();
@@ -21477,6 +21479,256 @@ async function verifyAssistantStageSummaryPromotesExplicitNextTarget() {
     result.toolSummaries.some((summary) => summary.startsWith("node-todo/views/index.ejs:1-1 · updated")),
     "expected explicit pending-next-step target to drive the next view edit"
   );
+}
+
+async function verifyDeferredStageCheckpointDoesNotEmitAssistantCompletion() {
+  const root = await mkdtemp(join(tmpdir(), "selfme-agent-hidden-stage-completion-"));
+  const workspace = join(root, "workspace");
+  const transcriptPath = join(root, "transcript.jsonl");
+  const logsPath = join(root, "logs.jsonl");
+  await mkdir(join(workspace, "node-todo", "views"), { recursive: true });
+
+  await writeFile(
+    join(workspace, "node-todo", "app.js"),
+    'const PORT = 3000;\nconsole.log(PORT);\n',
+    "utf8"
+  );
+  await writeFile(
+    join(workspace, "node-todo", "views", "index.ejs"),
+    '<input name="title" />\n',
+    "utf8"
+  );
+
+  class HiddenStageCompletionProvider implements ProviderClient {
+    readonly name = "hidden-stage-completion-provider";
+
+    async *streamResponse(input: ProviderStreamInput): AsyncIterable<ProviderStreamChunk> {
+      const originalPrompt = "Optimize node-todo by updating node-todo/app.js to use process.env.PORT and updating node-todo/views/index.ejs so the title input has maxlength 100. Do the changes directly.";
+
+      if (input.content === originalPrompt) {
+        yield {
+          delta: toolCall("files", {
+            path: "node-todo/app.js",
+            startLine: 1,
+            endLine: 2
+          })
+        };
+        return;
+      }
+
+      if (input.content.startsWith(`Original user request: ${originalPrompt}`)) {
+        const toolName = extractLine(input.content, "Tool:") ?? extractLine(input.content, "Latest tool:");
+        const summary = extractLine(input.content, "Summary:") ?? extractLine(input.content, "Latest summary:") ?? "";
+
+        if (toolName === "files" && /node-todo\/app\.js/.test(summary)) {
+          yield {
+            delta: toolCall("edit", {
+              path: "node-todo/app.js",
+              startLine: 1,
+              endLine: 1,
+              replacement: "const PORT = Number(process.env.PORT || 3000);"
+            })
+          };
+          return;
+        }
+
+        if (toolName === "edit" && /node-todo\/app\.js/.test(summary)) {
+          if (/Pending next step target: node-todo\/views\/index\.ejs/.test(input.content)) {
+            yield {
+              delta: toolCall("edit", {
+                path: "node-todo/views/index.ejs",
+                startLine: 1,
+                endLine: 1,
+                replacement: '<input name="title" maxlength="100" />'
+              })
+            };
+            return;
+          }
+
+          yield {
+            delta: "I updated node-todo/app.js and will continue with node-todo/views/index.ejs next."
+          };
+          return;
+        }
+
+        if (toolName === "edit" && /node-todo\/views\/index\.ejs/.test(summary)) {
+          yield { delta: "Completed the requested updates in node-todo/app.js and node-todo/views/index.ejs." };
+          return;
+        }
+      }
+
+      yield { delta: "ok" };
+    }
+  }
+
+  const bus = new EventBus();
+  const transcriptStore = new TranscriptStore(transcriptPath);
+  const logStore = new LogStore(logsPath);
+  await transcriptStore.ensureInitialized();
+  await logStore.ensureInitialized();
+
+  const session = createDefaultSessionRecord(workspace, VERSION);
+  session.model = "regression-stub";
+
+  const runtime = new AgentRuntime({
+    bus,
+    provider: new HiddenStageCompletionProvider(),
+    tools: new InMemoryToolRegistry(),
+    session,
+    transcriptStore,
+    logStore
+  });
+  await runtime.start();
+
+  bus.on("approval.requested", (event) => {
+    bus.emit(createTerminalCommandInvokedEvent({
+      sessionId: event.sessionId,
+      content: `/approve ${event.payload.approvalId}`
+    }));
+  });
+
+  const result = await runAgentTask({
+    bus,
+    transcriptStore,
+    sessionId: session.sessionId,
+    prompt: "Optimize node-todo by updating node-todo/app.js to use process.env.PORT and updating node-todo/views/index.ejs so the title input has maxlength 100. Do the changes directly."
+  });
+
+  assert.deepEqual(result.assistantTurns, [
+    "Completed the requested updates in node-todo/app.js and node-todo/views/index.ejs."
+  ]);
+}
+
+async function verifyBusyPhaseReturnsToAssistantDuringSameTaskContinuation() {
+  const root = await mkdtemp(join(tmpdir(), "selfme-agent-busy-phase-return-"));
+  const workspace = join(root, "workspace");
+  const transcriptPath = join(root, "transcript.jsonl");
+  const logsPath = join(root, "logs.jsonl");
+  await mkdir(join(workspace, "node-todo", "views"), { recursive: true });
+
+  await writeFile(
+    join(workspace, "node-todo", "app.js"),
+    'const PORT = 3000;\nconsole.log(PORT);\n',
+    "utf8"
+  );
+  await writeFile(
+    join(workspace, "node-todo", "views", "index.ejs"),
+    '<input name="title" />\n',
+    "utf8"
+  );
+
+  class BusyPhaseReturnProvider implements ProviderClient {
+    readonly name = "busy-phase-return-provider";
+
+    async *streamResponse(input: ProviderStreamInput): AsyncIterable<ProviderStreamChunk> {
+      const originalPrompt = "Optimize node-todo by updating node-todo/app.js to use process.env.PORT and updating node-todo/views/index.ejs so the title input has maxlength 100. Do the changes directly.";
+
+      if (input.content === originalPrompt) {
+        yield {
+          delta: toolCall("files", {
+            path: "node-todo/app.js",
+            startLine: 1,
+            endLine: 2
+          })
+        };
+        return;
+      }
+
+      if (input.content.startsWith(`Original user request: ${originalPrompt}`)) {
+        const toolName = extractLine(input.content, "Tool:") ?? extractLine(input.content, "Latest tool:");
+        const summary = extractLine(input.content, "Summary:") ?? extractLine(input.content, "Latest summary:") ?? "";
+
+        if (toolName === "files" && /node-todo\/app\.js/.test(summary)) {
+          yield {
+            delta: toolCall("edit", {
+              path: "node-todo/app.js",
+              startLine: 1,
+              endLine: 1,
+              replacement: "const PORT = Number(process.env.PORT || 3000);"
+            })
+          };
+          return;
+        }
+
+        if (toolName === "edit" && /node-todo\/app\.js/.test(summary)) {
+          if (/Pending next step target: node-todo\/views\/index\.ejs/.test(input.content)) {
+            yield {
+              delta: toolCall("edit", {
+                path: "node-todo/views/index.ejs",
+                startLine: 1,
+                endLine: 1,
+                replacement: '<input name="title" maxlength="100" />'
+              })
+            };
+            return;
+          }
+
+          yield {
+            delta: "I updated node-todo/app.js and will continue with node-todo/views/index.ejs next."
+          };
+          return;
+        }
+
+        if (toolName === "edit" && /node-todo\/views\/index\.ejs/.test(summary)) {
+          yield { delta: "Completed the requested updates in node-todo/app.js and node-todo/views/index.ejs." };
+          return;
+        }
+      }
+
+      yield { delta: "ok" };
+    }
+  }
+
+  const bus = new EventBus();
+  const transcriptStore = new TranscriptStore(transcriptPath);
+  const logStore = new LogStore(logsPath);
+  await transcriptStore.ensureInitialized();
+  await logStore.ensureInitialized();
+
+  const session = createDefaultSessionRecord(workspace, VERSION);
+  session.model = "regression-stub";
+
+  const runtime = new AgentRuntime({
+    bus,
+    provider: new BusyPhaseReturnProvider(),
+    tools: new InMemoryToolRegistry(),
+    session,
+    transcriptStore,
+    logStore
+  });
+  await runtime.start();
+
+  bus.on("approval.requested", (event) => {
+    bus.emit(createTerminalCommandInvokedEvent({
+      sessionId: event.sessionId,
+      content: `/approve ${event.payload.approvalId}`
+    }));
+  });
+
+  const busyTransitions: Array<{ phase: string; taskId?: string }> = [];
+  bus.on("runtime.busy.changed", (event) => {
+    if (event.sessionId === session.sessionId && event.payload.active) {
+      busyTransitions.push({
+        phase: event.payload.phase,
+        taskId: event.payload.taskId
+      });
+    }
+  });
+
+  const result = await runAgentTask({
+    bus,
+    transcriptStore,
+    sessionId: session.sessionId,
+    prompt: "Optimize node-todo by updating node-todo/app.js to use process.env.PORT and updating node-todo/views/index.ejs so the title input has maxlength 100. Do the changes directly."
+  });
+
+  assert.match(result.assistantText, /Completed the requested updates/);
+  const activeTaskId = result.taskId;
+  const relevantPhases = busyTransitions
+    .filter((entry) => entry.taskId === activeTaskId)
+    .map((entry) => entry.phase);
+
+  assert.deepEqual(relevantPhases, ["assistant", "assistant", "tool", "assistant", "tool", "assistant"]);
 }
 
 async function verifyLongCompletionToneWithPendingWorkStillContinues() {

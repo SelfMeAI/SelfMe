@@ -48,7 +48,7 @@ export type RuntimeInterruptRequestedEvent = RuntimeEventBase<
 
 export type RuntimeBusyStateChangedEvent = RuntimeEventBase<
   "runtime.busy.changed",
-  { active: boolean; phase: "idle" | "assistant" | "tool" | "approval" }
+  { active: boolean; phase: "idle" | "assistant" | "tool" | "approval"; taskId?: string }
 >;
 
 export type AssistantStreamStartedEvent = RuntimeEventBase<

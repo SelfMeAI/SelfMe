@@ -65,6 +65,22 @@ export class LinearTerminalRenderer {
 
     this.input.bus.on("runtime.busy.changed", (event) => {
       if (event.payload.active) {
+        if (
+          event.payload.phase === "assistant"
+          && event.payload.taskId
+          && this.state.workingTaskId !== event.payload.taskId
+          && !this.state.liveAssistant
+        ) {
+          this.state.liveAssistant = {
+            kind: "assistant-working",
+            title: "",
+            taskId: event.payload.taskId,
+            body: this.renderWorkingLabel()
+          };
+          this.state.workingTaskId = event.payload.taskId;
+          this.startWorkingAnimation();
+          this.renderBottomArea();
+        }
         return;
       }
 
@@ -125,6 +141,13 @@ export class LinearTerminalRenderer {
     });
 
     this.input.bus.on("assistant.stream.started", (event) => {
+      if (this.state.liveAssistant?.kind === "assistant-working" && this.state.liveAssistant.taskId === event.taskId) {
+        this.state.workingTaskId = event.taskId;
+        this.startWorkingAnimation();
+        this.renderBottomArea();
+        return;
+      }
+
       this.state.liveAssistant = {
         kind: "assistant-working",
         title: "",

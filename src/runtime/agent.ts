@@ -1091,6 +1091,13 @@ export class AgentRuntime {
       await this.input.transcriptStore.appendEvent(nextEvent);
     }
 
+    if (isDeferredStage) {
+      return {
+        committed: true,
+        lastDeferredAssistantStageSignature: nextDeferredAssistantStageSignature
+      };
+    }
+
     await this.emitAssistantCompletion(input.sessionId, input.taskId);
 
     return {
@@ -1525,7 +1532,7 @@ export class AgentRuntime {
       controller,
       phase: "assistant"
     };
-    this.emitBusyState(sessionId, true, "assistant");
+    this.emitBusyState(sessionId, true, "assistant", taskId);
     return this.activeRun;
   }
 
@@ -1549,7 +1556,7 @@ export class AgentRuntime {
     }
 
     this.activeRun.phase = phase;
-    this.emitBusyState(this.activeRun.sessionId, true, phase);
+    this.emitBusyState(this.activeRun.sessionId, true, phase, taskId);
   }
 
   private setActivePendingApproval(taskId: string, approvalId?: string) {
@@ -1568,11 +1575,17 @@ export class AgentRuntime {
     return this.activeRun.controller.signal;
   }
 
-  private emitBusyState(sessionId: string, active: boolean, phase: "idle" | "assistant" | "tool" | "approval") {
+  private emitBusyState(
+    sessionId: string,
+    active: boolean,
+    phase: "idle" | "assistant" | "tool" | "approval",
+    taskId?: string
+  ) {
     this.input.bus.emit(createRuntimeBusyStateChangedEvent({
       sessionId,
       active,
-      phase
+      phase,
+      taskId
     }));
   }
 

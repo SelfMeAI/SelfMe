@@ -139,16 +139,19 @@ export function createRuntimeBusyStateChangedEvent(input: {
   sessionId: string;
   active: boolean;
   phase: "idle" | "assistant" | "tool" | "approval";
+  taskId?: string;
 }): RuntimeBusyStateChangedEvent {
   return {
     ...createBase({
       sessionId: input.sessionId,
+      taskId: input.taskId,
       source: "runtime",
       type: "runtime.busy.changed"
     }),
     payload: {
       active: input.active,
-      phase: input.phase
+      phase: input.phase,
+      taskId: input.taskId
     }
   };
 }
