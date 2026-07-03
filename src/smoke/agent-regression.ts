@@ -646,6 +646,11 @@ async function main() {
     approvedRewriteResult.toolSummaries.some((summary) => summary.startsWith("node-todo/package.json:5-7 · updated")),
     "expected approved rewrite flow to edit package.json scripts"
   );
+  assert.equal(
+    approvedRewriteResult.runtimeErrors.some((message) => message.includes("Agent stopped after 8 tool steps")),
+    false,
+    "expected approved rewrite flow to inherit the broader proposal budget instead of falling back to the standard step budget"
+  );
 
   await writeFile(
     join(workspace, "node-todo", "app.js"),
@@ -854,6 +859,85 @@ async function main() {
   assert.ok(
     projectWordedVerificationRewriteResult.toolSummaries.some((summary) => summary.startsWith("node-todo/verify-exact.mjs:7-7 · updated")),
     "expected project-worded rewrite follow-up to repair verify-exact.mjs as the latest failure point"
+  );
+
+  await writeFile(
+    join(workspace, "node-todo", "app.js"),
+    'const express = require("express");\nconst app = express();\nconst PORT = 3000;\napp.listen(PORT, () => {\n  console.log(`Todo app is running at http://localhost:${PORT}`);\n});\n',
+    "utf8"
+  );
+  await writeFile(
+    join(workspace, "node-todo", "views", "index.ejs"),
+    '<!DOCTYPE html>\n<form action="/add" method="post">\n  <input name="title" />\n</form>\n',
+    "utf8"
+  );
+  await writeFile(
+    join(workspace, "node-todo", "package.json"),
+    '{\n  "name": "node-todo",\n  "version": "1.0.0",\n  "description": "Simple todo app",\n  "main": "app.js",\n  "scripts": {\n    "start": "node app.js"\n  },\n  "dependencies": {\n    "ejs": "^3.1.10",\n    "express": "^4.19.2"\n  }\n}\n',
+    "utf8"
+  );
+  await writeFile(
+    join(workspace, "node-todo", "verify-approved-budget.mjs"),
+    [
+      'import { readFileSync } from "node:fs";',
+      'const app = readFileSync(new URL("./app.js", import.meta.url), "utf8");',
+      'const view = readFileSync(new URL("./views/index.ejs", import.meta.url), "utf8");',
+      'const pkg = readFileSync(new URL("./package.json", import.meta.url), "utf8");',
+      'const appReady = /process\\.env\\.PORT/.test(app);',
+      'const viewReady = /maxlength="100"/.test(view);',
+      'const devReady = /"dev": "node app\\.js"/.test(pkg);',
+      'if (appReady && viewReady && devReady) {',
+      '  console.log("ready");',
+      '} else if (appReady && viewReady) {',
+      '  console.log("missing-dev");',
+      '} else if (appReady) {',
+      '  console.log("app-only");',
+      '} else {',
+      '  console.log("not-ready");',
+      '}'
+    ].join("\n") + "\n",
+    "utf8"
+  );
+
+  console.log("task: keep approved rewrite proposals on the broader project budget");
+  const approvedWideRewriteProposalResult = await runAgentTask({
+    bus,
+    transcriptStore,
+    sessionId: session.sessionId,
+    prompt: "看看项目，但先别改，告诉我如果重写 node-todo：把 app.js 改成 process.env.PORT，给 views/index.ejs 加 maxlength 100，给 package.json 加 dev script，再运行 `node node-todo/verify-approved-budget.mjs` 验证直到输出 ready，你会怎么做。"
+  });
+
+  assert.match(approvedWideRewriteProposalResult.assistantText, /app\.js/i);
+  assert.match(approvedWideRewriteProposalResult.assistantText, /views\/index\.ejs/i);
+  assert.match(approvedWideRewriteProposalResult.assistantText, /package\.json/i);
+  assert.match(approvedWideRewriteProposalResult.assistantText, /verify-approved-budget\.mjs/i);
+
+  const approvedWideRewriteExecutionResult = await runAgentTask({
+    bus,
+    transcriptStore,
+    sessionId: session.sessionId,
+    prompt: "可以"
+  });
+
+  const approvedWideRewriteAppContent = await readFile(join(workspace, "node-todo", "app.js"), "utf8");
+  const approvedWideRewriteViewContent = await readFile(join(workspace, "node-todo", "views", "index.ejs"), "utf8");
+  const approvedWideRewritePackageContent = await readFile(join(workspace, "node-todo", "package.json"), "utf8");
+  assert.match(approvedWideRewriteAppContent, /process\.env\.PORT/);
+  assert.match(approvedWideRewriteViewContent, /maxlength="100"/);
+  assert.match(approvedWideRewritePackageContent, /"dev": "node app\.js"/);
+  assert.match(approvedWideRewriteExecutionResult.assistantText, /ready/);
+  assert.ok(
+    approvedWideRewriteExecutionResult.toolSummaries.some((summary) => summary.startsWith("node-todo/package.json:5-7 · updated")),
+    "expected approved wide rewrite proposal flow to still reach package.json"
+  );
+  assert.ok(
+    approvedWideRewriteExecutionResult.toolSummaries.some((summary) => summary.startsWith("node node-todo/verify-approved-budget.mjs · completed")),
+    "expected approved wide rewrite proposal flow to execute its verification command"
+  );
+  assert.equal(
+    approvedWideRewriteExecutionResult.runtimeErrors.some((message) => message.includes("Agent stopped after 8 tool steps")),
+    false,
+    "expected approved wide rewrite proposal flow to inherit the approved proposal budget instead of stopping at the standard step limit"
   );
 
   console.log("task: allow extended coding task to continue beyond six tool steps");
@@ -22946,6 +23030,12 @@ function resolveProviderResponse(content: string) {
     });
   }
 
+  if (content === "看看项目，但先别改，告诉我如果重写 node-todo：把 app.js 改成 process.env.PORT，给 views/index.ejs 加 maxlength 100，给 package.json 加 dev script，再运行 `node node-todo/verify-approved-budget.mjs` 验证直到输出 ready，你会怎么做。") {
+    return toolCall("shell", {
+      command: "pwd && ls -la && find . -maxdepth 2 -type f | sed 's#^./##' | sort | head -200"
+    });
+  }
+
   if (content.startsWith("看看项目，然后直接优化 node-todo：把 node-todo/app.js 的端口改成 process.env.PORT，再给 node-todo/views/index.ejs 的 title input 加上 maxlength 100。")) {
     return toolCall("shell", {
       command: "pwd && ls -la && find . -maxdepth 2 -type f | sed 's#^./##' | sort | head -200"
@@ -25019,6 +25109,28 @@ function resolveProviderResponse(content: string) {
     }
   }
 
+  if (/^Original user request: 看看项目，但先别改，告诉我如果重写 node-todo：把 app\.js 改成 process\.env\.PORT，给 views\/index\.ejs 加 maxlength 100，给 package\.json 加 dev script，再运行 `node node-todo\/verify-approved-budget\.mjs` 验证直到输出 ready，你会怎么做。(?:\n|$)/.test(content)) {
+    const toolName = extractLine(content, "Tool:") ?? extractLine(content, "Latest tool:");
+    const summary = extractLine(content, "Summary:") ?? extractLine(content, "Latest summary:") ?? "";
+
+    if (toolName === "shell") {
+      if (/You are in the middle of a concrete project inspection request\./.test(content)) {
+        assert.match(content, /Likely project entry: node-todo\/package\.json/);
+        return toolCall("files", {
+          path: "node-todo/package.json",
+          startLine: 1,
+          endLine: 20
+        });
+      }
+
+      return "我先看了工作区列表。当前最像值得重写并验证的项目是 node-todo。";
+    }
+
+    if (toolName === "files" && /node-todo\/package\.json/.test(summary)) {
+      return "Next step I can rewrite node-todo by updating app.js, views/index.ejs, and package.json, then run node node-todo/verify-approved-budget.mjs until it prints ready.";
+    }
+  }
+
   if (/^Original user request: 看看项目然后帮我优化下(?:\n|$)/.test(content)) {
     const toolName = extractLine(content, "Tool:") ?? extractLine(content, "Latest tool:");
     const summary = extractLine(content, "Summary:") ?? extractLine(content, "Latest summary:") ?? "";
@@ -25851,6 +25963,68 @@ function resolveProviderResponse(content: string) {
     if (toolName === "shell") {
       assert.match(latestRawOutput, /ready/);
       return "I completed the rewrite proposal and reran node node-todo/verify-exact.mjs until the final output was exactly ready.";
+    }
+  }
+
+  if (
+    /^Original user request: The user replied ".+" and wants you to execute the immediately previous rewrite proposal now\.(?:\n|$)/.test(content)
+    && /verify-approved-budget\.mjs/.test(content)
+  ) {
+    const toolName = extractLine(content, "Tool:") ?? extractLine(content, "Latest tool:");
+    const summary = extractLine(content, "Summary:") ?? extractLine(content, "Latest summary:") ?? "";
+    const latestRawOutput = extractLatestRawOutputBlock(content);
+
+    if (toolName === "files" && /node-todo\/app\.js/.test(summary)) {
+      return toolCall("edit", {
+        path: "node-todo/app.js",
+        startLine: 3,
+        endLine: 3,
+        replacement: "const PORT = Number(process.env.PORT || 3000);"
+      });
+    }
+
+    if (toolName === "edit" && /node-todo\/app\.js/.test(summary)) {
+      return toolCall("files", {
+        path: "node-todo/views/index.ejs",
+        startLine: 1,
+        endLine: 4
+      });
+    }
+
+    if (toolName === "files" && /node-todo\/views\/index\.ejs/.test(summary)) {
+      return toolCall("edit", {
+        path: "node-todo/views/index.ejs",
+        startLine: 3,
+        endLine: 3,
+        replacement: '  <input name="title" maxlength="100" />'
+      });
+    }
+
+    if (toolName === "edit" && /node-todo\/views\/index\.ejs/.test(summary)) {
+      return toolCall("files", {
+        path: "node-todo/package.json",
+        startLine: 1,
+        endLine: 13
+      });
+    }
+
+    if (toolName === "files" && /node-todo\/package\.json/.test(summary)) {
+      return toolCall("edit", {
+        path: "node-todo/package.json",
+        startLine: 5,
+        endLine: 7,
+        replacement: '  "scripts": {\n    "start": "node app.js",\n    "dev": "node app.js"\n  },'
+      });
+    }
+
+    if (toolName === "edit" && /node-todo\/package\.json/.test(summary)) {
+      return toolCall("shell", {
+        command: "node node-todo/verify-approved-budget.mjs"
+      });
+    }
+
+    if (toolName === "shell" && /ready/.test(latestRawOutput)) {
+      return "I completed the rewrite proposal and reran node node-todo/verify-approved-budget.mjs until the final output was ready.";
     }
   }
 
