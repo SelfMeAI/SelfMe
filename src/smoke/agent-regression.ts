@@ -14,6 +14,7 @@ import { formatToolSummaryLine } from "../terminal/tool-message.js";
 import {
   createApprovalRequestedEvent,
   createApprovalResolvedEvent,
+  createAssistantCheckpointRecordedEvent,
   createAssistantCompletedEvent,
   createAssistantDeltaEvent,
   createRuntimeInterruptRequestedEvent,
@@ -1114,7 +1115,6 @@ async function main() {
   assert.match(runnerStageContent, /\.\/lib\/render-stage-label\.mjs/);
   assert.match(stageSummaryContinuationResult.assistantText, /SelfMe \[stage\]/);
   assert.deepEqual(stageSummaryContinuationResult.assistantTurns, [
-    "Created src/lib/render-stage-label.mjs. Next I will run runner-stage, fix any import issue, and verify the final output.",
     "Created src/lib/render-stage-label.mjs, repaired src/runner-stage.mjs, and confirmed it prints exactly SelfMe [stage]."
   ]);
   assert.ok(
@@ -1157,7 +1157,6 @@ async function main() {
   assert.match(runnerStageEchoContent, /\.\/lib\/render-stage-echo\.mjs/);
   assert.match(duplicateStageSummaryResult.assistantText, /SelfMe \[echo\]/);
   assert.deepEqual(duplicateStageSummaryResult.assistantTurns, [
-    "Created src/lib/render-stage-echo.mjs. Next I will run runner-stage-echo, fix any import issue, and verify the final output.",
     "Created src/lib/render-stage-echo.mjs, repaired src/runner-stage-echo.mjs, and confirmed it prints exactly SelfMe [echo]."
   ]);
   assert.ok(
@@ -1200,8 +1199,6 @@ async function main() {
   assert.match(runnerStageProgressContent, /\.\/lib\/render-stage-progress\.mjs/);
   assert.match(multiStageSummaryResult.assistantText, /SelfMe \[local\]/);
   assert.deepEqual(multiStageSummaryResult.assistantTurns, [
-    "Created src/lib/render-stage-progress.mjs. Next I will run runner-stage-progress, fix any import issue, and verify the current output.",
-    "Repaired src/runner-stage-progress.mjs import. Next I will rerun it and tighten the helper output if it is still not exact.",
     "Repaired src/lib/render-stage-progress.mjs and confirmed src/runner-stage-progress.mjs now prints exactly SelfMe [local]."
   ]);
   assert.ok(
@@ -3953,6 +3950,7 @@ async function main() {
   verifyContextCompactionPreservesPendingApproval();
   verifyContextCompactionClearsResolvedPendingApproval();
   verifyContextCompactionPreservesPendingNextStep();
+  verifyContextCompactionPreservesHiddenPendingNextStepCheckpoint();
   verifyContextCompactionDropsOlderPendingNextStepAfterNewRequest();
   verifyContextCompactionPreservesAssistantStageBoundaries();
   verifyContextCompactionKeepsWholeTurns();
@@ -22788,6 +22786,36 @@ function verifyContextCompactionPreservesPendingNextStep() {
     sessionId,
     taskId: "pending-next-turn",
     model: "regression-stub"
+  }));
+
+  const messages = buildContextMessages(events);
+  const recentTaskStateMessage = messages.find((message) => message.role === "system" && message.content.includes("Recent task state:"))?.content ?? "";
+
+  assert.match(recentTaskStateMessage, /Current request: Rewrite node-todo and keep working until it is ready\./);
+  assert.match(recentTaskStateMessage, /Working files: node-todo\/app\.js/);
+  assert.match(recentTaskStateMessage, /Pending next step: I updated node-todo\/app\.js and will continue with node-todo\/views\/index\.ejs next\./);
+}
+
+function verifyContextCompactionPreservesHiddenPendingNextStepCheckpoint() {
+  const sessionId = "compaction-hidden-pending-next-step-session";
+  const events: RuntimeEvent[] = [];
+
+  events.push(createUserMessageSubmittedEvent({
+    sessionId,
+    content: "Rewrite node-todo and keep working until it is ready."
+  }));
+  events.push(createToolExecutionCompletedEvent({
+    sessionId,
+    taskId: "hidden-pending-next-tool-1",
+    toolName: "edit",
+    summary: "node-todo/app.js:1-3 · updated (3 -> 3 lines)"
+  }));
+  events.push(createAssistantCheckpointRecordedEvent({
+    sessionId,
+    taskId: "hidden-pending-next-turn",
+    kind: "pending_next_step",
+    content: "I updated node-todo/app.js and will continue with node-todo/views/index.ejs next.",
+    targetPath: "node-todo/views/index.ejs"
   }));
 
   const messages = buildContextMessages(events);

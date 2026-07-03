@@ -15,6 +15,7 @@ import { buildContextMessages, createInlinePreview, projectSessionTimeline } fro
 import {
   createApprovalRequestedEvent,
   createApprovalResolvedEvent,
+  createAssistantCheckpointRecordedEvent,
   createAssistantCompletedEvent,
   createAssistantDeltaEvent,
   createAssistantStartedEvent,
@@ -1054,6 +1055,7 @@ export class AgentRuntime {
 
     if (isDeferredStage) {
       const signature = createAssistantStageSignature(input.messageText);
+      const pendingCheckpoint = extractPendingAssistantCheckpoint(input.messageText);
 
       if (signature && signature === input.lastDeferredAssistantStageSignature) {
         return {
@@ -1062,10 +1064,24 @@ export class AgentRuntime {
         };
       }
 
+      if (pendingCheckpoint) {
+        const checkpointEvent = createAssistantCheckpointRecordedEvent({
+          sessionId: input.sessionId,
+          taskId: input.taskId,
+          kind: "pending_next_step",
+          content: input.messageText,
+          targetPath: pendingCheckpoint.targetPath
+        });
+        this.input.bus.emit(checkpointEvent);
+        await this.input.transcriptStore.appendEvent(checkpointEvent);
+      }
+
       nextDeferredAssistantStageSignature = signature;
     }
 
-    if (!input.messageWasEmitted && input.messageText.trim().length > 0) {
+    const shouldEmitDeferredDelta = !isDeferredStage;
+
+    if (!input.messageWasEmitted && shouldEmitDeferredDelta && input.messageText.trim().length > 0) {
       const nextEvent = createAssistantDeltaEvent({
         sessionId: input.sessionId,
         taskId: input.taskId,
@@ -3887,6 +3903,19 @@ function shouldPreserveDeferredAssistantStage(content: string) {
   return looksLikeStageSummaryWithPendingWork(content)
     && !looksLikeBroadProposalReply(content)
     && Boolean(extractLikelyNextTargetPathFromAssistantMessage(content));
+}
+
+function extractPendingAssistantCheckpoint(content: string) {
+  const targetPath = extractLikelyNextTargetPathFromAssistantMessage(content);
+
+  if (!targetPath || !looksLikeStageSummaryWithPendingWork(content)) {
+    return undefined;
+  }
+
+  return {
+    kind: "pending_next_step" as const,
+    targetPath
+  };
 }
 
 function buildDirectToolFailureAnswer(input: {

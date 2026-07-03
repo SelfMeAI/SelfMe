@@ -68,6 +68,12 @@ export function projectSessionTimeline(events: Awaited<ReturnType<TranscriptStor
       continue;
     }
 
+    if (item.type === "assistant.checkpoint.recorded") {
+      assistantEntryOpen = false;
+      assistantTaskId = undefined;
+      continue;
+    }
+
     if (item.type === "tool.execution.completed") {
       assistantEntryOpen = false;
       assistantTaskId = undefined;
@@ -467,7 +473,8 @@ function buildRecentTaskState(
     requestedPaths,
     false
   )).slice(0, 4);
-  const pendingAssistantStep = extractPendingAssistantStep(currentTaskEntries, requestedPaths);
+  const pendingAssistantStep = extractPendingAssistantCheckpoint(rawEvents, requestedPaths)
+    ?? extractPendingAssistantStep(currentTaskEntries, requestedPaths);
   const lastRepairSummary = buildRecentRepairSummary(currentTaskEntries, requestedPaths, requestedVerificationCommand)
     .map((line) => line.replace(/^- /, ""))
     .filter(Boolean);
@@ -592,6 +599,34 @@ function extractPendingAssistantStep(entries: SessionTimelineEntry[], requestedP
     }
 
     return createInlinePreview(normalized, 160);
+  }
+
+  return undefined;
+}
+
+function extractPendingAssistantCheckpoint(
+  events: Awaited<ReturnType<TranscriptStore["readEventsBySession"]>>,
+  requestedPaths: string[] = []
+) {
+  const latestUserEventIndex = findLatestUserEventIndex(events);
+  const relevantEvents = latestUserEventIndex >= 0 ? events.slice(latestUserEventIndex + 1) : events;
+
+  for (let index = relevantEvents.length - 1; index >= 0; index -= 1) {
+    const event = relevantEvents[index];
+
+    if (event?.type !== "assistant.checkpoint.recorded" || event.payload.kind !== "pending_next_step") {
+      continue;
+    }
+
+    if (
+      requestedPaths.length > 0
+      && event.payload.targetPath
+      && !requestedPaths.includes(event.payload.targetPath)
+    ) {
+      continue;
+    }
+
+    return createInlinePreview(normalizePreviewText(event.payload.content), 160);
   }
 
   return undefined;

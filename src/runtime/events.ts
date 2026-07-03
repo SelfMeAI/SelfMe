@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 
 import type {
   AssistantCompletedEvent,
+  AssistantCheckpointRecordedEvent,
   AssistantDeltaReceivedEvent,
   AssistantStreamStartedEvent,
   MessageViewportChangedEvent,
@@ -199,6 +200,28 @@ export function createAssistantCompletedEvent(input: {
     }),
     payload: {
       model: input.model
+    }
+  };
+}
+
+export function createAssistantCheckpointRecordedEvent(input: {
+  sessionId: string;
+  taskId: string;
+  kind: "pending_next_step";
+  content: string;
+  targetPath?: string;
+}): AssistantCheckpointRecordedEvent {
+  return {
+    ...createBase({
+      sessionId: input.sessionId,
+      taskId: input.taskId,
+      source: "runtime",
+      type: "assistant.checkpoint.recorded"
+    }),
+    payload: {
+      kind: input.kind,
+      content: input.content,
+      targetPath: input.targetPath
     }
   };
 }

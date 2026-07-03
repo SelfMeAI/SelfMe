@@ -66,6 +66,15 @@ export type AssistantCompletedEvent = RuntimeEventBase<
   { model: string }
 >;
 
+export type AssistantCheckpointRecordedEvent = RuntimeEventBase<
+  "assistant.checkpoint.recorded",
+  {
+    kind: "pending_next_step";
+    content: string;
+    targetPath?: string;
+  }
+>;
+
 export type ToolExecutionRequestedEvent = RuntimeEventBase<
   "tool.execution.requested",
   { toolName: string; input: unknown }
@@ -118,6 +127,7 @@ export type RuntimeEvent =
   | AssistantStreamStartedEvent
   | AssistantDeltaReceivedEvent
   | AssistantCompletedEvent
+  | AssistantCheckpointRecordedEvent
   | ToolExecutionRequestedEvent
   | ToolExecutionStartedEvent
   | ToolStdoutAppendedEvent
