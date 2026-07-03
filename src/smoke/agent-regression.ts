@@ -3770,6 +3770,7 @@ async function main() {
   await verifyVagueFollowUpResumeAfterThinEntryImplementationStageSummary("帮我看看");
   await verifyProjectRewriteFollowsThinEntryImplementationImport();
   await verifyProjectRewriteContinuesAfterThinEntryStageSummary();
+  await verifyProjectRewriteContinuesAfterThinEntryLongExplanation();
   await verifyResumeAfterThinEntryRewriteImplementationStageSummary();
   await verifyVagueFollowUpResumeAfterThinEntryRewriteImplementationStageSummary("你能帮我重新写个项目吗");
   await verifyVagueFollowUpResumeAfterThinEntryRewriteImplementationStageSummary("帮我重写项目");
@@ -10936,6 +10937,179 @@ async function verifyProjectRewriteContinuesAfterThinEntryStageSummary() {
   assert.ok(
     result.toolSummaries.some((summary) => summary.startsWith("demo-rewrite-thin-stage/src/server.js:2-2 · updated")),
     "expected thin-entry rewrite stage-summary flow to edit the imported implementation file"
+  );
+}
+
+async function verifyProjectRewriteContinuesAfterThinEntryLongExplanation() {
+  const root = await mkdtemp(join(tmpdir(), "selfme-agent-project-rewrite-thin-entry-long-explanation-"));
+  const workspace = join(root, "workspace");
+  const transcriptPath = join(root, "transcript.jsonl");
+  const logsPath = join(root, "logs.jsonl");
+  await mkdir(join(workspace, "demo-rewrite-thin-explain", "src"), { recursive: true });
+
+  await writeFile(
+    join(workspace, "demo-rewrite-thin-explain", "package.json"),
+    '{\n  "name": "demo-rewrite-thin-explain",\n  "version": "1.0.0",\n  "main": "app.js"\n}\n',
+    "utf8"
+  );
+  await writeFile(
+    join(workspace, "demo-rewrite-thin-explain", "app.js"),
+    'const { createServer } = require("./src/server");\nmodule.exports = createServer();\n',
+    "utf8"
+  );
+  await writeFile(
+    join(workspace, "demo-rewrite-thin-explain", "src", "server.js"),
+    'function createServer() {\n  return { port: 3000 };\n}\n\nmodule.exports = { createServer };\n',
+    "utf8"
+  );
+
+  class ProjectRewriteThinEntryLongExplanationProvider implements ProviderClient {
+    readonly name = "project-rewrite-thin-entry-long-explanation-provider";
+
+    async *streamResponse(input: ProviderStreamInput): AsyncIterable<ProviderStreamChunk> {
+      const originalPrompt = "看看项目，然后帮我重新写一下 demo-rewrite-thin-explain，让端口来自 process.env.PORT。如果你读到 app.js 后先长解释，也要继续实际改到真正实现文件。";
+
+      if (input.content === originalPrompt) {
+        yield {
+          delta: toolCall("shell", {
+            command: "pwd && ls -la && find . -maxdepth 3 -type f | sed 's#^./##' | sort | head -200"
+          })
+        };
+        return;
+      }
+
+      if (input.content.startsWith(`Original user request: ${originalPrompt}`)) {
+        const toolName = extractLine(input.content, "Tool:") ?? extractLine(input.content, "Latest tool:");
+        const summary = extractLine(input.content, "Summary:") ?? extractLine(input.content, "Latest summary:") ?? "";
+
+        if (toolName === "shell") {
+          if (/You are in the middle of a concrete project inspection request\./.test(input.content)) {
+            assert.match(input.content, /Likely project entry: demo-rewrite-thin-explain\/package\.json/);
+            yield {
+              delta: toolCall("files", {
+                path: "demo-rewrite-thin-explain/package.json",
+                startLine: 1,
+                endLine: 20
+              })
+            };
+            return;
+          }
+
+          yield { delta: "我先看了工作区列表，demo-rewrite-thin-explain 看起来是最像要继续改造的项目。" };
+          return;
+        }
+
+        if (toolName === "files" && /demo-rewrite-thin-explain\/package\.json/.test(summary)) {
+          if (/You are in the middle of a project improvement task\./.test(input.content)) {
+            assert.match(input.content, /Likely working file: demo-rewrite-thin-explain\/app\.js/);
+            yield {
+              delta: toolCall("files", {
+                path: "demo-rewrite-thin-explain/app.js",
+                startLine: 1,
+                endLine: 20
+              })
+            };
+            return;
+          }
+
+          yield { delta: "入口已经定位到 app.js，我先继续跟进实现。" };
+          return;
+        }
+
+        if (toolName === "files" && /demo-rewrite-thin-explain\/app\.js/.test(summary)) {
+          if (/You are in the middle of a project improvement task\./.test(input.content)) {
+            assert.match(input.content, /Likely working file: demo-rewrite-thin-explain\/src\/server\.js/);
+            yield {
+              delta: "demo-rewrite-thin-explain/app.js 这一层本身只是一个很薄的入口，它把 createServer 从本地实现文件引进来之后立刻导出结果，所以如果目标是把端口配置真正改成来自 process.env.PORT，那么只停在这里做结构说明其实还不够，因为这里并没有承载端口值本身，真正的配置落点仍然在下游实现文件里，只有继续跟到 src/server.js 才能把这条 rewrite 链真正执行完。"
+            };
+            return;
+          }
+
+          yield { delta: "app.js 只是薄入口，我先继续跟到本地实现文件。" };
+          return;
+        }
+
+        if (
+          toolName === "files"
+          && /demo-rewrite-thin-explain\/app\.js/.test(summary)
+          && /Likely working file: demo-rewrite-thin-explain\/src\/server\.js/.test(input.content)
+        ) {
+          yield {
+            delta: toolCall("files", {
+              path: "demo-rewrite-thin-explain/src/server.js",
+              startLine: 1,
+              endLine: 20
+            })
+          };
+          return;
+        }
+
+        if (toolName === "files" && /demo-rewrite-thin-explain\/src\/server\.js/.test(summary)) {
+          yield {
+            delta: toolCall("edit", {
+              path: "demo-rewrite-thin-explain/src/server.js",
+              startLine: 2,
+              endLine: 2,
+              replacement: '  return { port: Number(process.env.PORT ?? 3000) };\n'
+            })
+          };
+          return;
+        }
+
+        if (toolName === "edit" && /demo-rewrite-thin-explain\/src\/server\.js/.test(summary)) {
+          yield { delta: "我已经把 demo-rewrite-thin-explain/src/server.js 改成优先读取 process.env.PORT。" };
+          return;
+        }
+      }
+
+      yield { delta: "ok" };
+    }
+  }
+
+  const bus = new EventBus();
+  const transcriptStore = new TranscriptStore(transcriptPath);
+  const logStore = new LogStore(logsPath);
+  await transcriptStore.ensureInitialized();
+  await logStore.ensureInitialized();
+
+  const session = createDefaultSessionRecord(workspace, VERSION);
+  session.model = "regression-stub";
+
+  const runtime = new AgentRuntime({
+    bus,
+    provider: new ProjectRewriteThinEntryLongExplanationProvider(),
+    tools: new InMemoryToolRegistry(),
+    session,
+    transcriptStore,
+    logStore
+  });
+  await runtime.start();
+
+  const result = await runAgentTask({
+    bus,
+    transcriptStore,
+    sessionId: session.sessionId,
+    prompt: "看看项目，然后帮我重新写一下 demo-rewrite-thin-explain，让端口来自 process.env.PORT。如果你读到 app.js 后先长解释，也要继续实际改到真正实现文件。"
+  });
+
+  const sourceContent = await readFile(join(workspace, "demo-rewrite-thin-explain", "src", "server.js"), "utf8");
+  assert.match(sourceContent, /process\.env\.PORT/);
+  assert.match(result.assistantText, /process\.env\.PORT|src\/server\.js/i);
+  assert.ok(
+    result.toolSummaries.some((summary) => summary.startsWith("demo-rewrite-thin-explain/package.json:1-4")),
+    "expected thin-entry rewrite long-explanation flow to inspect package.json first"
+  );
+  assert.ok(
+    result.toolSummaries.some((summary) => summary.startsWith("demo-rewrite-thin-explain/app.js:1-2")),
+    "expected thin-entry rewrite long-explanation flow to inspect app.js before the long explanation"
+  );
+  assert.ok(
+    result.toolSummaries.some((summary) => summary.startsWith("demo-rewrite-thin-explain/src/server.js:1-5")),
+    "expected thin-entry rewrite long-explanation flow to continue into the imported implementation after the long explanation"
+  );
+  assert.ok(
+    result.toolSummaries.some((summary) => summary.startsWith("demo-rewrite-thin-explain/src/server.js:2-2 · updated")),
+    "expected thin-entry rewrite long-explanation flow to edit the imported implementation file"
   );
 }
 
