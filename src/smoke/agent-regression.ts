@@ -3965,6 +3965,8 @@ async function main() {
   await verifyAffirmativeAfterDeniedLaterApprovalStaysBlocked();
   await verifyVagueOptimizeAfterDeniedLaterApprovalStaysBlocked();
   await verifyVagueRewriteAfterDeniedLaterApprovalStaysBlocked();
+  await verifyOldDeniedApprovalDoesNotLeakIntoNewProjectFollowUp();
+  await verifyOldDeniedApprovalDoesNotLeakIntoNewProjectRewriteFollowUp();
 
   assert.ok(approvals.length >= 2, "expected at least two approvals to be auto-approved");
 
@@ -5228,6 +5230,222 @@ async function verifyVagueOptimizeAfterDeniedLaterApprovalStaysBlocked() {
 
 async function verifyVagueRewriteAfterDeniedLaterApprovalStaysBlocked() {
   await verifyDeniedLaterApprovalBlockedFollowUp("帮我重写项目");
+}
+
+async function verifyOldDeniedApprovalDoesNotLeakIntoNewProjectFollowUp() {
+  await verifyOldDeniedApprovalDoesNotLeakIntoNewProjectMutationFollowUp("帮我优化下");
+}
+
+async function verifyOldDeniedApprovalDoesNotLeakIntoNewProjectRewriteFollowUp() {
+  await verifyOldDeniedApprovalDoesNotLeakIntoNewProjectMutationFollowUp("帮我重写项目");
+}
+
+async function verifyOldDeniedApprovalDoesNotLeakIntoNewProjectMutationFollowUp(
+  followUpPrompt: "帮我优化下" | "帮我重写项目"
+) {
+  const root = await mkdtemp(join(tmpdir(), "selfme-agent-no-stale-denied-follow-up-"));
+  const workspace = join(root, "workspace");
+  const transcriptPath = join(root, "transcript.jsonl");
+  const logsPath = join(root, "logs.jsonl");
+  await mkdir(workspace, { recursive: true });
+  await mkdir(join(workspace, "node-todo"), { recursive: true });
+
+  await writeFile(
+    join(workspace, "node-todo", "package.json"),
+    '{\n  "name": "node-todo",\n  "version": "1.0.0"\n}\n',
+    "utf8"
+  );
+  await writeFile(
+    join(workspace, "node-todo", "app.js"),
+    'const PORT = 3000;\nconsole.log(PORT);\n',
+    "utf8"
+  );
+
+  class NoStaleDeniedFollowUpProvider implements ProviderClient {
+    readonly name = "no-stale-denied-follow-up-provider";
+
+    async *streamResponse(input: ProviderStreamInput): AsyncIterable<ProviderStreamChunk> {
+      const deniedPrompt = "Create blocked-old.txt with the content hidden.";
+      const inspectPrompt = "看看项目";
+
+      if (input.content === deniedPrompt) {
+        yield {
+          delta: toolCall("write", {
+            path: "blocked-old.txt",
+            content: "hidden\n"
+          })
+        };
+        return;
+      }
+
+      if (input.content.startsWith(`Original user request: ${deniedPrompt}`)) {
+        assert.match(input.content, /denied by the user/i);
+        yield { delta: "I couldn't create blocked-old.txt because the write action was denied." };
+        return;
+      }
+
+      if (input.content === inspectPrompt) {
+        yield {
+          delta: toolCall("shell", {
+            command: "pwd && ls -la && find . -maxdepth 2 -type f | sed 's#^./##' | sort | head -200"
+          })
+        };
+        return;
+      }
+
+      if (input.content.startsWith(`Original user request: ${inspectPrompt}`)) {
+        const toolName = extractLine(input.content, "Tool:") ?? extractLine(input.content, "Latest tool:");
+        const summary = extractLine(input.content, "Summary:") ?? extractLine(input.content, "Latest summary:") ?? "";
+
+        if (toolName === "shell") {
+          yield {
+            delta: toolCall("files", {
+              path: "node-todo/package.json",
+              startLine: 1,
+              endLine: 20
+            })
+          };
+          return;
+        }
+
+        if (toolName === "files" && /node-todo\/package\.json/.test(summary)) {
+          yield {
+            delta: toolCall("files", {
+              path: "node-todo/app.js",
+              startLine: 1,
+              endLine: 20
+            })
+          };
+          return;
+        }
+
+        if (toolName === "files" && /node-todo\/app\.js/.test(summary)) {
+          yield { delta: "I inspected node-todo/package.json and node-todo/app.js." };
+          return;
+        }
+      }
+
+      const isOptimizeFollowUp = /^The user replied "帮我优化下" and wants you to optimize the most recently inspected project or file now\./.test(input.content);
+      const isRewriteFollowUp = /^The user replied "帮我重写项目" and wants you to rewrite the most recently inspected project or file now\./.test(input.content);
+
+      if (isOptimizeFollowUp || isRewriteFollowUp) {
+        assert.match(input.content, /Previous context request: 看看项目/);
+        assert.doesNotMatch(input.content, /Latest denied approval:/);
+        yield {
+          delta: toolCall("files", {
+            path: "node-todo/package.json",
+            startLine: 1,
+            endLine: 20
+          })
+        };
+        return;
+      }
+
+      if (
+        /^Original user request: The user replied "帮我优化下" and wants you to optimize the most recently inspected project or file now\./.test(input.content)
+        || /^Original user request: The user replied "帮我重写项目" and wants you to rewrite the most recently inspected project or file now\./.test(input.content)
+      ) {
+        const toolName = extractLine(input.content, "Tool:") ?? extractLine(input.content, "Latest tool:");
+        const summary = extractLine(input.content, "Summary:") ?? extractLine(input.content, "Latest summary:") ?? "";
+
+        if (toolName === "files" && /node-todo\/package\.json/.test(summary)) {
+          yield {
+            delta: toolCall("files", {
+              path: "node-todo/app.js",
+              startLine: 1,
+              endLine: 20
+            })
+          };
+          return;
+        }
+
+        if (toolName === "files" && /node-todo\/app\.js/.test(summary)) {
+          yield {
+            delta: toolCall("edit", {
+              path: "node-todo/app.js",
+              startLine: 1,
+              endLine: 1,
+              replacement: "const PORT = Number(process.env.PORT || 3000);"
+            })
+          };
+          return;
+        }
+
+        if (toolName === "edit" && /node-todo\/app\.js/.test(summary)) {
+          yield { delta: "I optimized node-todo/app.js and switched the port to process.env.PORT." };
+          return;
+        }
+      }
+
+      yield { delta: "ok" };
+    }
+  }
+
+  const bus = new EventBus();
+  const transcriptStore = new TranscriptStore(transcriptPath);
+  const logStore = new LogStore(logsPath);
+  await transcriptStore.ensureInitialized();
+  await logStore.ensureInitialized();
+
+  const session = createDefaultSessionRecord(workspace, VERSION);
+  session.model = "regression-stub";
+
+  const runtime = new AgentRuntime({
+    bus,
+    provider: new NoStaleDeniedFollowUpProvider(),
+    tools: new InMemoryToolRegistry(),
+    session,
+    transcriptStore,
+    logStore
+  });
+  await runtime.start();
+
+  let approvalCount = 0;
+  bus.on("approval.requested", (event) => {
+    approvalCount += 1;
+    bus.emit(createTerminalCommandInvokedEvent({
+      sessionId: event.sessionId,
+      content: approvalCount === 1
+        ? `/deny ${event.payload.approvalId}`
+        : `/approve ${event.payload.approvalId}`
+    }));
+  });
+
+  const deniedResult = await runAgentTask({
+    bus,
+    transcriptStore,
+    sessionId: session.sessionId,
+    prompt: "Create blocked-old.txt with the content hidden."
+  });
+  assert.match(deniedResult.assistantText, /(denied|not approved)/i);
+
+  const inspectionResult = await runAgentTask({
+    bus,
+    transcriptStore,
+    sessionId: session.sessionId,
+    prompt: "看看项目"
+  });
+  assert.match(inspectionResult.assistantText, /node-todo/i);
+
+  const followUpResult = await runAgentTask({
+    bus,
+    transcriptStore,
+    sessionId: session.sessionId,
+    prompt: followUpPrompt
+  });
+
+  const appContent = await readFile(join(workspace, "node-todo", "app.js"), "utf8");
+  assert.match(appContent, /process\.env\.PORT/);
+  assert.equal(
+    followUpResult.toolSummaries.some((summary) => summary.startsWith("blocked-old.txt")),
+    false,
+    "broad project follow-up should not return to the older denied write target"
+  );
+  assert.ok(
+    followUpResult.toolSummaries.some((summary) => summary.startsWith("node-todo/app.js:1-1 · updated")),
+    "broad project follow-up should continue with the newly inspected project task"
+  );
+  assert.equal(approvalCount, 2, "expected one denied write approval and one later approved edit for the new task");
 }
 
 async function verifyDeniedLaterApprovalBlockedFollowUp(followUpPrompt: "还能继续吗" | "可以" | "帮我优化下" | "帮我重写项目") {
