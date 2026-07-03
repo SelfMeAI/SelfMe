@@ -3964,6 +3964,7 @@ async function main() {
   await verifyResumeAfterDeniedLaterApprovalStaysBlocked();
   await verifyAffirmativeAfterDeniedLaterApprovalStaysBlocked();
   await verifyVagueOptimizeAfterDeniedLaterApprovalStaysBlocked();
+  await verifyVagueRewriteAfterDeniedLaterApprovalStaysBlocked();
 
   assert.ok(approvals.length >= 2, "expected at least two approvals to be auto-approved");
 
@@ -5225,7 +5226,11 @@ async function verifyVagueOptimizeAfterDeniedLaterApprovalStaysBlocked() {
   await verifyDeniedLaterApprovalBlockedFollowUp("帮我优化下");
 }
 
-async function verifyDeniedLaterApprovalBlockedFollowUp(followUpPrompt: "还能继续吗" | "可以" | "帮我优化下") {
+async function verifyVagueRewriteAfterDeniedLaterApprovalStaysBlocked() {
+  await verifyDeniedLaterApprovalBlockedFollowUp("帮我重写项目");
+}
+
+async function verifyDeniedLaterApprovalBlockedFollowUp(followUpPrompt: "还能继续吗" | "可以" | "帮我优化下" | "帮我重写项目") {
   const root = await mkdtemp(join(tmpdir(), "selfme-agent-denied-resume-blocked-"));
   const workspace = join(root, "workspace");
   const transcriptPath = join(root, "transcript.jsonl");
