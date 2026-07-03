@@ -4179,6 +4179,16 @@ function resolveRunnableUserRequest(
     return interruptedResume;
   }
 
+  const deniedApprovalResume = resolveDeniedApprovalResumeFollowUp({
+    content,
+    historyEvents,
+    followUp
+  });
+
+  if (deniedApprovalResume) {
+    return deniedApprovalResume;
+  }
+
   if (followUp.kind === "resume") {
     return content;
   }
@@ -4761,6 +4771,60 @@ function extractRecentInterruptedApprovalAnchor(
   return undefined;
 }
 
+function extractRecentDeniedApprovalAnchor(
+  historyEvents: Awaited<ReturnType<TranscriptStore["readEventsBySession"]>>
+) {
+  const latestUserIndex = findLatestUserMessageIndex(historyEvents);
+  const previousActionableUserEventIndex = findPreviousActionableUserEventIndex(historyEvents);
+  const relevantEvents = latestUserIndex >= 0
+    ? historyEvents.slice(
+      Math.max(0, previousActionableUserEventIndex >= 0 ? previousActionableUserEventIndex : 0),
+      latestUserIndex
+    )
+    : historyEvents;
+
+  for (let index = relevantEvents.length - 1; index >= 0; index -= 1) {
+    const event = relevantEvents[index];
+
+    if (event?.type !== "approval.resolved" || event.payload.approved) {
+      continue;
+    }
+
+    let requestIndex = -1;
+
+    for (let candidateIndex = index - 1; candidateIndex >= 0; candidateIndex -= 1) {
+      const candidate = relevantEvents[candidateIndex];
+
+      if (
+        candidate?.type === "approval.requested"
+        && candidate.payload.approvalId === event.payload.approvalId
+      ) {
+        requestIndex = candidateIndex;
+        break;
+      }
+    }
+
+    if (requestIndex < 0) {
+      continue;
+    }
+
+    const request = relevantEvents[requestIndex];
+
+    if (request?.type !== "approval.requested") {
+      continue;
+    }
+
+    const target = renderApprovalTarget(request.payload.toolName, request.payload.input) || request.payload.reason;
+
+    return {
+      toolName: request.payload.toolName,
+      target
+    };
+  }
+
+  return undefined;
+}
+
 function findLatestUserMessageIndex(
   historyEvents: Awaited<ReturnType<TranscriptStore["readEventsBySession"]>>
 ) {
@@ -5028,6 +5092,40 @@ function resolveInterruptedResumeFollowUp(input: {
     default:
       return undefined;
   }
+}
+
+function resolveDeniedApprovalResumeFollowUp(input: {
+  content: string;
+  historyEvents: Awaited<ReturnType<TranscriptStore["readEventsBySession"]>>;
+  followUp: RunnableFollowUp;
+}) {
+  if (input.followUp.kind !== "resume" && input.followUp.kind !== "approve") {
+    return undefined;
+  }
+
+  if (hasRecentInterruptedAssistantTask(input.historyEvents)) {
+    return undefined;
+  }
+
+  const previousUserTask = extractPreviousActionableUserRequest(input.historyEvents);
+
+  if (!previousUserTask) {
+    return undefined;
+  }
+
+  const recentDeniedApproval = extractRecentDeniedApprovalAnchor(input.historyEvents);
+
+  if (!recentDeniedApproval) {
+    return undefined;
+  }
+
+  return [
+    `The user replied "${input.content.trim()}" after the most recent task reached a denied approval.`,
+    "Do not retry the same denied action unless the user explicitly asks again or approves a new attempt.",
+    "Explain briefly what remains blocked and what explicit approval or request would be needed to continue.",
+    `Latest denied approval: ${recentDeniedApproval.toolName} · ${recentDeniedApproval.target}`,
+    `Original task: ${previousUserTask}`
+  ].join("\n");
 }
 
 function buildInterruptedTaskResumeForFollowUp(input: {
