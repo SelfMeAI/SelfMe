@@ -3960,6 +3960,7 @@ async function main() {
   await verifyResumeAfterToolStepLimitFailure();
   await verifyResumeAfterToolStepLimitBeforeEdit();
   await verifyResumeAfterAssistantPassLimitFailure();
+  await verifyDeniedLaterApprovalDoesNotRetrySameAction();
 
   assert.ok(approvals.length >= 2, "expected at least two approvals to be auto-approved");
 
@@ -5105,6 +5106,108 @@ async function verifyResumeAfterAssistantPassLimitFailure() {
     resumedResult.toolSummaries.some((summary) => summary.startsWith("node assistant-pass-limit-report.mjs · completed")),
     "assistant-pass-limit resume should finish the pending verification after the repair"
   );
+}
+
+async function verifyDeniedLaterApprovalDoesNotRetrySameAction() {
+  const root = await mkdtemp(join(tmpdir(), "selfme-agent-denied-later-approval-"));
+  const workspace = join(root, "workspace");
+  const transcriptPath = join(root, "transcript.jsonl");
+  const logsPath = join(root, "logs.jsonl");
+  await mkdir(workspace, { recursive: true });
+
+  class DeniedLaterApprovalProvider implements ProviderClient {
+    readonly name = "denied-later-approval-provider";
+
+    async *streamResponse(input: ProviderStreamInput): AsyncIterable<ProviderStreamChunk> {
+      const originalPrompt = "Create approved-chain.txt with the content ok. Then run rm approved-chain.txt. Keep going until both steps are handled.";
+
+      if (input.content === originalPrompt) {
+        yield {
+          delta: toolCall("write", {
+            path: "approved-chain.txt",
+            content: "ok\n"
+          })
+        };
+        return;
+      }
+
+      if (input.content.startsWith(`Original user request: ${originalPrompt}`)) {
+        const toolName = extractLine(input.content, "Tool:") ?? extractLine(input.content, "Latest tool:");
+        const summary = extractLine(input.content, "Summary:") ?? extractLine(input.content, "Latest summary:") ?? "";
+
+        if (toolName === "write" && /approved-chain\.txt · created/.test(summary)) {
+          yield {
+            delta: toolCall("shell", {
+              command: "rm approved-chain.txt"
+            })
+          };
+          return;
+        }
+
+        assert.match(input.content, /Do not immediately retry the same denied action unless the user explicitly asks again or approves a new attempt\./);
+        assert.match(input.content, /denied by the user/i);
+        yield {
+          delta: "I created approved-chain.txt, but I couldn't run rm approved-chain.txt because the shell action was not approved."
+        };
+        return;
+      }
+
+      yield { delta: "ok" };
+    }
+  }
+
+  const bus = new EventBus();
+  const transcriptStore = new TranscriptStore(transcriptPath);
+  const logStore = new LogStore(logsPath);
+  await transcriptStore.ensureInitialized();
+  await logStore.ensureInitialized();
+
+  const session = createDefaultSessionRecord(workspace, VERSION);
+  session.model = "regression-stub";
+
+  const runtime = new AgentRuntime({
+    bus,
+    provider: new DeniedLaterApprovalProvider(),
+    tools: new InMemoryToolRegistry(),
+    session,
+    transcriptStore,
+    logStore
+  });
+  await runtime.start();
+
+  let approvalCount = 0;
+  bus.on("approval.requested", (event) => {
+    approvalCount += 1;
+    bus.emit(createTerminalCommandInvokedEvent({
+      sessionId: event.sessionId,
+      content: approvalCount === 1
+        ? `/approve ${event.payload.approvalId}`
+        : `/deny ${event.payload.approvalId}`
+    }));
+  });
+
+  const result = await runAgentTask({
+    bus,
+    transcriptStore,
+    sessionId: session.sessionId,
+    prompt: "Create approved-chain.txt with the content ok. Then run rm approved-chain.txt. Keep going until both steps are handled."
+  });
+
+  const approvedChainContent = await readFile(join(workspace, "approved-chain.txt"), "utf8");
+  assert.equal(approvedChainContent, "ok\n");
+  assert.equal(
+    result.toolSummaries.some((summary) => summary.startsWith("approved-chain.txt · created")),
+    true,
+    "expected the first approved write in the chain to complete"
+  );
+  assert.equal(
+    result.toolSummaries.some((summary) => summary.startsWith("rm approved-chain.txt · completed")),
+    false,
+    "expected the denied shell action not to execute"
+  );
+  assert.match(result.assistantText, /(denied|not approved|couldn'?t run)/i);
+  assert.doesNotMatch(result.assistantText, /^(可以|可以继续|好的|sure|okay)\b/i);
+  assert.equal(approvalCount, 2, "expected one approved write and one denied shell approval");
 }
 
 async function verifyBareCompletionReplyStillTriggersVerification() {

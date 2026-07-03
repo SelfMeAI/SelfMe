@@ -2873,7 +2873,10 @@ function buildInvalidToolInputRepairPrompt(
 function buildDeniedContinuationPrompt(originalRequest: string, preferredLanguage: PreferredReplyLanguage) {
   return buildRequestPromptLines({
     originalRequest,
-    instructionLines: [TOOL_CALL_DENIED_PROMPT],
+    instructionLines: [
+      TOOL_CALL_DENIED_PROMPT,
+      "Do not immediately retry the same denied action unless the user explicitly asks again or approves a new attempt."
+    ],
     preferredLanguage
   }).join("\n");
 }
