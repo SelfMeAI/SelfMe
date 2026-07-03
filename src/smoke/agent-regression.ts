@@ -121,6 +121,7 @@ async function main() {
   await writeFile(join(workspace, "invalid-tool-resume-report.mjs"), 'import config from "./app.conf.json" with { type: "json" };\nconsole.log(`${config.name}:${config.port}`);\n', "utf8");
   await writeFile(join(workspace, "no-tool-invalid-resume-report.mjs"), 'console.log("pending");\n', "utf8");
   await writeFile(join(workspace, "no-tool-unknown-resume-report.mjs"), 'console.log("pending");\n', "utf8");
+  await writeFile(join(workspace, "no-tool-malformed-resume-report.mjs"), 'console.log("pending");\n', "utf8");
   await writeFile(join(workspace, "option-start-report.mjs"), 'console.log("pending");\n', "utf8");
   await writeFile(join(workspace, "question-start-report.mjs"), 'console.log("pending");\n', "utf8");
   await writeFile(
@@ -3586,6 +3587,43 @@ async function main() {
     "expected first-tool unknown-tool resume to finish verification after the repair"
   );
 
+  console.log("task: resume after malformed tool call before the first real tool runs");
+  const noToolMalformedResumeFailedResult = await runAgentTask({
+    bus,
+    transcriptStore,
+    sessionId: session.sessionId,
+    prompt: "Fix no-tool-malformed-resume-report.mjs so running `node no-tool-malformed-resume-report.mjs` prints exactly `ready`. Verify it before finishing, even if your first edit tool call is malformed.",
+    expectedState: "failed"
+  });
+
+  assert.ok(
+    noToolMalformedResumeFailedResult.runtimeErrors.length > 0,
+    "expected repeated malformed first-tool call to fail before resume"
+  );
+
+  const noToolMalformedResumeResult = await runAgentTask({
+    bus,
+    transcriptStore,
+    sessionId: session.sessionId,
+    prompt: "还能继续吗"
+  });
+
+  const noToolMalformedResumeContent = await readFile(join(workspace, "no-tool-malformed-resume-report.mjs"), "utf8");
+  assert.match(noToolMalformedResumeContent, /ready/);
+  assert.match(noToolMalformedResumeResult.assistantText, /ready|no-tool-malformed-resume-report\.mjs/i);
+  assert.ok(
+    noToolMalformedResumeResult.toolSummaries.some((summary) => summary.startsWith("no-tool-malformed-resume-report.mjs:1-1")),
+    "expected first-tool malformed-call resume to inspect the original target file"
+  );
+  assert.ok(
+    noToolMalformedResumeResult.toolSummaries.some((summary) => summary.startsWith("no-tool-malformed-resume-report.mjs:1-1 · updated")),
+    "expected first-tool malformed-call resume to repair the original target file"
+  );
+  assert.ok(
+    noToolMalformedResumeResult.toolSummaries.some((summary) => summary.startsWith("node no-tool-malformed-resume-report.mjs · completed")),
+    "expected first-tool malformed-call resume to finish verification after the repair"
+  );
+
   console.log("task: accept shell cmd alias payload");
   const shellCmdAliasResult = await runAgentTask({
     bus,
@@ -3920,6 +3958,7 @@ async function main() {
   );
 
   await verifyResumeAfterToolStepLimitFailure();
+  await verifyResumeAfterToolStepLimitBeforeEdit();
   await verifyResumeAfterAssistantPassLimitFailure();
 
   assert.ok(approvals.length >= 2, "expected at least two approvals to be auto-approved");
@@ -4703,6 +4742,188 @@ async function verifyResumeAfterToolStepLimitFailure() {
     resumedResult.toolSummaries.filter((summary) => summary.startsWith("alpha-9.txt:1-1")).length,
     1,
     "step-limit resume should execute only the pending ninth read"
+  );
+}
+
+async function verifyResumeAfterToolStepLimitBeforeEdit() {
+  const root = await mkdtemp(join(tmpdir(), "selfme-agent-resume-step-limit-edit-"));
+  const workspace = join(root, "workspace");
+  const transcriptPath = join(root, "transcript.jsonl");
+  const logsPath = join(root, "logs.jsonl");
+  const originalPrompt = "Read beta-1.txt, beta-2.txt, beta-3.txt, beta-4.txt, beta-5.txt, beta-6.txt, beta-7.txt, and step-limit-edit-report.mjs, then fix step-limit-edit-report.mjs so running `node step-limit-edit-report.mjs` prints exactly `ready`. Verify it before finishing.";
+  await mkdir(workspace, { recursive: true });
+
+  for (let index = 1; index <= 7; index += 1) {
+    await writeFile(join(workspace, `beta-${index}.txt`), `beta-${index}\n`, "utf8");
+  }
+
+  await writeFile(join(workspace, "step-limit-edit-report.mjs"), 'console.log("pending");\n', "utf8");
+
+  class StepLimitEditResumeProvider implements ProviderClient {
+    readonly name = "step-limit-edit-resume-provider";
+
+    async *streamResponse(input: ProviderStreamInput): AsyncIterable<ProviderStreamChunk> {
+      if (input.content === originalPrompt) {
+        yield {
+          delta: toolCall("files", {
+            path: "beta-1.txt",
+            startLine: 1,
+            endLine: 1
+          })
+        };
+        return;
+      }
+
+      if (input.content.startsWith(`Original user request: ${originalPrompt}`)) {
+        const toolName = extractLine(input.content, "Tool:") ?? extractLine(input.content, "Latest tool:");
+        const summary = extractLine(input.content, "Summary:") ?? extractLine(input.content, "Latest summary:") ?? "";
+        const betaMatch = summary.match(/^beta-(\d)\.txt:1-1$/);
+
+        if (toolName === "files" && betaMatch) {
+          const nextIndex = Number(betaMatch[1]) + 1;
+
+          if (nextIndex <= 7) {
+            yield {
+              delta: toolCall("files", {
+                path: `beta-${nextIndex}.txt`,
+                startLine: 1,
+                endLine: 1
+              })
+            };
+            return;
+          }
+
+          yield {
+            delta: toolCall("files", {
+              path: "step-limit-edit-report.mjs",
+              startLine: 1,
+              endLine: 20
+            })
+          };
+          return;
+        }
+
+        if (toolName === "files" && /step-limit-edit-report\.mjs/.test(summary)) {
+          yield {
+            delta: toolCall("edit", {
+              path: "step-limit-edit-report.mjs",
+              startLine: 1,
+              endLine: 1,
+              replacement: 'console.log("ready");'
+            })
+          };
+          return;
+        }
+      }
+
+      if (
+        !input.content.startsWith("Original user request:")
+        && input.content.includes('The user replied "还能继续吗" and wants to continue the most recent unfinished task.')
+      ) {
+        assert.match(input.content, /Original task: Read beta-1\.txt, beta-2\.txt, beta-3\.txt, beta-4\.txt, beta-5\.txt, beta-6\.txt, beta-7\.txt, and step-limit-edit-report\.mjs/);
+        assert.match(input.content, /Pending next step target: step-limit-edit-report\.mjs/);
+        assert.match(input.content, /Latest tool in context: files/);
+        assert.match(input.content, /Latest tool summary in context: step-limit-edit-report\.mjs:1-1/);
+        yield {
+          delta: toolCall("edit", {
+            path: "step-limit-edit-report.mjs",
+            startLine: 1,
+            endLine: 1,
+            replacement: 'console.log("ready");'
+          })
+        };
+        return;
+      }
+
+      if (
+        input.content.startsWith('Original user request: The user replied "还能继续吗" and wants to continue the most recent unfinished task.')
+      ) {
+        const toolName = extractLine(input.content, "Tool:") ?? extractLine(input.content, "Latest tool:");
+        const summary = extractLine(input.content, "Summary:") ?? extractLine(input.content, "Latest summary:") ?? "";
+
+        if (toolName === "edit" && /step-limit-edit-report\.mjs/.test(summary)) {
+          yield {
+            delta: toolCall("shell", {
+              command: "node step-limit-edit-report.mjs"
+            })
+          };
+          return;
+        }
+
+        if (toolName === "shell" && /completed/.test(summary)) {
+          yield { delta: "Completed the pending step-limit edit and verified step-limit-edit-report.mjs prints ready." };
+          return;
+        }
+      }
+
+      yield { delta: "ok" };
+    }
+  }
+
+  const bus = new EventBus();
+  const transcriptStore = new TranscriptStore(transcriptPath);
+  const logStore = new LogStore(logsPath);
+  await transcriptStore.ensureInitialized();
+  await logStore.ensureInitialized();
+
+  const session = createDefaultSessionRecord(workspace, VERSION);
+  session.model = "regression-stub";
+
+  const runtime = new AgentRuntime({
+    bus,
+    provider: new StepLimitEditResumeProvider(),
+    tools: new InMemoryToolRegistry(),
+    session,
+    transcriptStore,
+    logStore
+  });
+  await runtime.start();
+
+  const failedResult = await runAgentTask({
+    bus,
+    transcriptStore,
+    sessionId: session.sessionId,
+    prompt: originalPrompt,
+    expectedState: "failed"
+  });
+
+  assert.ok(
+    failedResult.runtimeErrors.some((message) => message.includes("Agent stopped after 8 tool steps")),
+    "expected a deterministic step-limit failure before the pending edit"
+  );
+  assert.equal(
+    failedResult.toolSummaries.some((summary) => summary.startsWith("step-limit-edit-report.mjs:1-1 · updated")),
+    false,
+    "step-limit failure should stop before the pending edit executes"
+  );
+
+  const resumedResult = await runAgentTask({
+    bus,
+    transcriptStore,
+    sessionId: session.sessionId,
+    prompt: "还能继续吗"
+  });
+
+  const resumedContent = await readFile(join(workspace, "step-limit-edit-report.mjs"), "utf8");
+  assert.equal(resumedContent, 'console.log("ready");\n');
+  assert.match(resumedResult.assistantText, /step-limit-edit-report\.mjs|ready/i);
+  assert.equal(
+    resumedResult.toolSummaries.some((summary) => summary.startsWith("beta-1.txt:1-1")),
+    false,
+    "step-limit edit resume should not restart from the earliest reads"
+  );
+  assert.equal(
+    resumedResult.toolSummaries.some((summary) => summary.startsWith("step-limit-edit-report.mjs:1-1")),
+    false,
+    "step-limit edit resume should not reread the already inspected target file"
+  );
+  assert.ok(
+    resumedResult.toolSummaries.some((summary) => summary.startsWith("step-limit-edit-report.mjs:1-1 · updated")),
+    "step-limit edit resume should continue directly with the pending edit"
+  );
+  assert.ok(
+    resumedResult.toolSummaries.some((summary) => summary.startsWith("node step-limit-edit-report.mjs · completed")),
+    "step-limit edit resume should verify after the resumed edit"
   );
 }
 
@@ -25583,6 +25804,13 @@ function resolveProviderResponse(content: string) {
     });
   }
 
+  if (content.startsWith("Fix no-tool-malformed-resume-report.mjs so running `node no-tool-malformed-resume-report.mjs` prints exactly `ready`. Verify it before finishing, even if your first edit tool call is malformed.")) {
+    return [
+      "<tool_call>",
+      '{"tool":"edit","input":{"path":"no-tool-malformed-resume-report.mjs","startLine":1,"endLine":1,"replacement":"console.log(\\"ready\\");"}'
+    ].join("\n");
+  }
+
   if (content.startsWith("Tell me the current working directory again using a shell cmd alias payload.")) {
     return [
       "<tool_call>",
@@ -30010,6 +30238,37 @@ function resolveProviderResponse(content: string) {
     }
   }
 
+  if (content.startsWith("Original user request: Fix no-tool-malformed-resume-report.mjs so running `node no-tool-malformed-resume-report.mjs` prints exactly `ready`. Verify it before finishing, even if your first edit tool call is malformed.")) {
+    const toolName = extractLine(content, "Tool:") ?? extractLine(content, "Latest tool:");
+    const summary = extractLine(content, "Summary:") ?? extractLine(content, "Latest summary:") ?? "";
+
+    if (/malformed tool call/i.test(content) || /tool call payload was malformed/i.test(content)) {
+      return [
+        "<tool_call>",
+        '{"tool":"edit","input":{"path":"no-tool-malformed-resume-report.mjs","startLine":1,"endLine":1,"replacement":"console.log(\\"ready\\");"}'
+      ].join("\n");
+    }
+
+    if (toolName === "files" && /no-tool-malformed-resume-report\.mjs/.test(summary)) {
+      return toolCall("edit", {
+        path: "no-tool-malformed-resume-report.mjs",
+        startLine: 1,
+        endLine: 1,
+        replacement: 'console.log("ready");'
+      });
+    }
+
+    if (toolName === "edit" && /no-tool-malformed-resume-report\.mjs/.test(summary)) {
+      return toolCall("shell", {
+        command: "node no-tool-malformed-resume-report.mjs"
+      });
+    }
+
+    if (toolName === "shell" && /completed/.test(summary)) {
+      return "Repaired no-tool-malformed-resume-report.mjs and verified the final output is ready.";
+    }
+  }
+
   if (content.startsWith('The user replied "还能继续吗" and wants to continue the most recent unfinished task.')
     && /Original task: Read app\.config\.json and fix invalid-tool-resume-report\.mjs/.test(content)
   ) {
@@ -30120,6 +30379,43 @@ function resolveProviderResponse(content: string) {
 
     if (toolName === "shell" && /completed/.test(summary)) {
       return "Repaired no-tool-unknown-resume-report.mjs and verified the final output is ready.";
+    }
+  }
+
+  if (content.startsWith('The user replied "还能继续吗" and wants to continue the most recent unfinished task.')
+    && /Original task: Fix no-tool-malformed-resume-report\.mjs so running `node no-tool-malformed-resume-report\.mjs` prints exactly `ready`\./.test(content)
+  ) {
+    assert.match(content, /Recent editable working file: no-tool-malformed-resume-report\.mjs/);
+    return toolCall("files", {
+      path: "no-tool-malformed-resume-report.mjs",
+      startLine: 1,
+      endLine: 20
+    });
+  }
+
+  if (content.startsWith('Original user request: The user replied "还能继续吗" and wants to continue the most recent unfinished task.')
+    && /Original task: Fix no-tool-malformed-resume-report\.mjs so running `node no-tool-malformed-resume-report\.mjs` prints exactly `ready`\./.test(content)
+  ) {
+    const toolName = extractLine(content, "Tool:") ?? extractLine(content, "Latest tool:");
+    const summary = extractLine(content, "Summary:") ?? extractLine(content, "Latest summary:") ?? "";
+
+    if (toolName === "files" && /no-tool-malformed-resume-report\.mjs/.test(summary)) {
+      return toolCall("edit", {
+        path: "no-tool-malformed-resume-report.mjs",
+        startLine: 1,
+        endLine: 1,
+        replacement: 'console.log("ready");'
+      });
+    }
+
+    if (toolName === "edit" && /no-tool-malformed-resume-report\.mjs/.test(summary)) {
+      return toolCall("shell", {
+        command: "node no-tool-malformed-resume-report.mjs"
+      });
+    }
+
+    if (toolName === "shell" && /completed/.test(summary)) {
+      return "Repaired no-tool-malformed-resume-report.mjs and verified the final output is ready.";
     }
   }
 
