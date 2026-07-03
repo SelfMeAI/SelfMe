@@ -3808,6 +3808,7 @@ async function main() {
   await verifyRepeatedIdenticalToolResultsAbortAsStalled();
   await verifyBareCompletionReplyStillTriggersVerification();
   await verifyRepeatedIdenticalAssistantRepliesAbortAsStalled();
+  await verifyResumeAfterRepeatedAssistantStall();
   await verifyHelpCommandAvailableWhileBusy();
   await verifyResumeFollowUpAfterStop();
   await verifyBareContinueResumesInterruptedTask();
@@ -4652,6 +4653,183 @@ async function verifyRepeatedIdenticalAssistantRepliesAbortAsStalled() {
     result.runtimeErrors.some((message) => message.includes("Agent stopped after 96 assistant passes")),
     false,
     "expected repeated assistant stall to fail before the broad assistant-pass ceiling"
+  );
+}
+
+async function verifyResumeAfterRepeatedAssistantStall() {
+  const root = await mkdtemp(join(tmpdir(), "selfme-agent-resume-repeated-assistant-stall-"));
+  const workspace = join(root, "workspace");
+  const transcriptPath = join(root, "transcript.jsonl");
+  const logsPath = join(root, "logs.jsonl");
+  const originalPrompt = "Read app.config.json and fix assistant-stall-resume-report.mjs so running `node assistant-stall-resume-report.mjs` prints exactly `SelfMe:3000` on one line. Keep working until the output is exact.";
+  await mkdir(workspace, { recursive: true });
+  await writeFile(join(workspace, "app.config.json"), '{\n  "name": "SelfMe",\n  "port": 3000\n}\n', "utf8");
+  await writeFile(
+    join(workspace, "assistant-stall-resume-report.mjs"),
+    'import config from "./app.conf.json" with { type: "json" };\nconsole.log(`${config.name}:${config.port}`);\n',
+    "utf8"
+  );
+
+  class AssistantStallResumeProvider implements ProviderClient {
+    readonly name = "assistant-stall-resume-provider";
+    private stallReplyCount = 0;
+
+    async *streamResponse(input: ProviderStreamInput): AsyncIterable<ProviderStreamChunk> {
+      if (input.content === originalPrompt) {
+        yield {
+          delta: toolCall("files", {
+            path: "app.config.json",
+            startLine: 1,
+            endLine: 20
+          })
+        };
+        return;
+      }
+
+      if (input.content.startsWith(`Original user request: ${originalPrompt}`)) {
+        const toolName = extractLine(input.content, "Tool:") ?? extractLine(input.content, "Latest tool:");
+        const summary = extractLine(input.content, "Summary:") ?? extractLine(input.content, "Latest summary:") ?? "";
+
+        if (toolName === "files" && /app\.config\.json/.test(summary)) {
+          yield {
+            delta: toolCall("shell", {
+              command: "node assistant-stall-resume-report.mjs"
+            })
+          };
+          return;
+        }
+
+        if (toolName === "shell" && /failed \(1\)/.test(summary)) {
+          this.stallReplyCount += 1;
+          yield {
+            delta: this.stallReplyCount % 2 === 1
+              ? "The failure is understood and the remaining repair is clear in assistant-stall-resume-report.mjs."
+              : "Okay, the remaining repair is still clear in `assistant-stall-resume-report.mjs`, and the failure is already understood."
+          };
+          return;
+        }
+      }
+
+      if (
+        !input.content.startsWith("Original user request:")
+        && input.content.includes('The user replied "还能继续吗" and wants to continue the most recent unfinished task.')
+      ) {
+        assert.match(input.content, /Original task: Read app\.config\.json and fix assistant-stall-resume-report\.mjs/);
+        assert.match(input.content, /Pending next step target: assistant-stall-resume-report\.mjs/);
+        assert.match(input.content, /Latest tool in context: shell/);
+        assert.match(input.content, /Latest tool summary in context: node assistant-stall-resume-report\.mjs · failed \(1\)/);
+        yield {
+          delta: toolCall("files", {
+            path: "assistant-stall-resume-report.mjs",
+            startLine: 1,
+            endLine: 20
+          })
+        };
+        return;
+      }
+
+      if (
+        input.content.startsWith('Original user request: The user replied "还能继续吗" and wants to continue the most recent unfinished task.')
+      ) {
+        const toolName = extractLine(input.content, "Tool:") ?? extractLine(input.content, "Latest tool:");
+        const summary = extractLine(input.content, "Summary:") ?? extractLine(input.content, "Latest summary:") ?? "";
+
+        if (toolName === "files" && /assistant-stall-resume-report\.mjs/.test(summary)) {
+          yield {
+            delta: toolCall("edit", {
+              path: "assistant-stall-resume-report.mjs",
+              startLine: 1,
+              endLine: 1,
+              replacement: 'import config from "./app.config.json" with { type: "json" };'
+            })
+          };
+          return;
+        }
+
+        if (toolName === "edit" && /assistant-stall-resume-report\.mjs/.test(summary)) {
+          yield {
+            delta: toolCall("shell", {
+              command: "node assistant-stall-resume-report.mjs"
+            })
+          };
+          return;
+        }
+
+        if (toolName === "shell" && /completed/.test(summary)) {
+          yield { delta: "Repaired assistant-stall-resume-report.mjs and verified the final output is SelfMe:3000." };
+          return;
+        }
+      }
+
+      yield { delta: "ok" };
+    }
+  }
+
+  const bus = new EventBus();
+  const transcriptStore = new TranscriptStore(transcriptPath);
+  const logStore = new LogStore(logsPath);
+  await transcriptStore.ensureInitialized();
+  await logStore.ensureInitialized();
+
+  const session = createDefaultSessionRecord(workspace, VERSION);
+  session.model = "regression-stub";
+
+  const runtime = new AgentRuntime({
+    bus,
+    provider: new AssistantStallResumeProvider(),
+    tools: new InMemoryToolRegistry(),
+    session,
+    transcriptStore,
+    logStore
+  });
+  await runtime.start();
+
+  bus.on("approval.requested", (event) => {
+    bus.emit(createTerminalCommandInvokedEvent({
+      sessionId: event.sessionId,
+      content: `/approve ${event.payload.approvalId}`
+    }));
+  });
+
+  const failedResult = await runAgentTask({
+    bus,
+    transcriptStore,
+    sessionId: session.sessionId,
+    prompt: originalPrompt,
+    expectedState: "failed"
+  });
+
+  assert.ok(
+    failedResult.runtimeErrors.some((message) => /Agent stalled after repeated identical assistant replies/.test(message)),
+    "expected repeated assistant stall before resume"
+  );
+
+  const resumedResult = await runAgentTask({
+    bus,
+    transcriptStore,
+    sessionId: session.sessionId,
+    prompt: "还能继续吗"
+  });
+
+  const resumedContent = await readFile(join(workspace, "assistant-stall-resume-report.mjs"), "utf8");
+  assert.match(resumedContent, /app\.config\.json/);
+  assert.match(resumedResult.assistantText, /SelfMe:3000|assistant-stall-resume-report\.mjs/i);
+  assert.equal(
+    resumedResult.toolSummaries.some((summary) => summary.startsWith("app.config.json:1-4")),
+    false,
+    "repeated-assistant-stall resume should not reread the earlier config source"
+  );
+  assert.ok(
+    resumedResult.toolSummaries.some((summary) => summary.startsWith("assistant-stall-resume-report.mjs:1-2")),
+    "repeated-assistant-stall resume should continue directly into the pending file read"
+  );
+  assert.ok(
+    resumedResult.toolSummaries.some((summary) => summary.startsWith("assistant-stall-resume-report.mjs:1-1 · updated")),
+    "repeated-assistant-stall resume should repair the pending file after reading it"
+  );
+  assert.ok(
+    resumedResult.toolSummaries.some((summary) => summary.startsWith("node assistant-stall-resume-report.mjs · completed")),
+    "repeated-assistant-stall resume should finish the pending verification after the repair"
   );
 }
 

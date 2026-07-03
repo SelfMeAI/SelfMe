@@ -736,6 +736,13 @@ export class AgentRuntime {
               latestToolResult: lastToolResult
             })
           ) {
+            await this.recordAssistantContinuationPendingCheckpoint({
+              sessionId,
+              taskId: responseTaskId,
+              originalRequest,
+              nextPrompt: messageStep.nextPrompt,
+              previousToolResult: lastToolResult
+            });
             throw new Error(buildRepeatedAssistantStallError(assistantPass.messageText));
           }
 
@@ -837,7 +844,7 @@ export class AgentRuntime {
         nextPrompt = toolStep.nextPrompt;
       }
 
-      await this.recordAssistantPassLimitPendingCheckpoint({
+      await this.recordAssistantContinuationPendingCheckpoint({
         sessionId,
         taskId: responseTaskId,
         originalRequest,
@@ -936,7 +943,7 @@ export class AgentRuntime {
     await this.input.transcriptStore.appendEvent(checkpointEvent);
   }
 
-  private async recordAssistantPassLimitPendingCheckpoint(input: {
+  private async recordAssistantContinuationPendingCheckpoint(input: {
     sessionId: string;
     taskId: string;
     originalRequest: string;
