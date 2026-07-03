@@ -3800,6 +3800,8 @@ async function main() {
     "expected ninth tool request to stop before execution"
   );
 
+  await verifyResumeAfterToolStepLimitFailure();
+
   assert.ok(approvals.length >= 2, "expected at least two approvals to be auto-approved");
 
   await verifyRepeatedIdenticalToolResultsAbortAsStalled();
@@ -4096,6 +4098,155 @@ async function verifyRepeatedIdenticalToolResultsAbortAsStalled() {
   assert.ok(
     result.runtimeErrors.some((message) => /stuck-report\.mjs/.test(message)),
     "expected the repeated-tool stall runtime error to identify the stuck file"
+  );
+}
+
+async function verifyResumeAfterToolStepLimitFailure() {
+  const root = await mkdtemp(join(tmpdir(), "selfme-agent-resume-step-limit-"));
+  const workspace = join(root, "workspace");
+  const transcriptPath = join(root, "transcript.jsonl");
+  const logsPath = join(root, "logs.jsonl");
+  const originalPrompt = "Read alpha-1.txt, alpha-2.txt, alpha-3.txt, alpha-4.txt, alpha-5.txt, alpha-6.txt, alpha-7.txt, alpha-8.txt, and alpha-9.txt, then finish.";
+  await mkdir(workspace, { recursive: true });
+
+  for (let index = 1; index <= 9; index += 1) {
+    await writeFile(join(workspace, `alpha-${index}.txt`), `alpha-${index}\n`, "utf8");
+  }
+
+  class StepLimitResumeProvider implements ProviderClient {
+    readonly name = "step-limit-resume-provider";
+
+    async *streamResponse(input: ProviderStreamInput): AsyncIterable<ProviderStreamChunk> {
+      if (input.content === originalPrompt) {
+        yield {
+          delta: toolCall("files", {
+            path: "alpha-1.txt",
+            startLine: 1,
+            endLine: 20
+          })
+        };
+        return;
+      }
+
+      if (input.content.startsWith(`Original user request: ${originalPrompt}`)) {
+        const toolName = extractLine(input.content, "Tool:") ?? extractLine(input.content, "Latest tool:");
+        const summary = extractLine(input.content, "Summary:") ?? extractLine(input.content, "Latest summary:") ?? "";
+
+        for (let index = 1; index <= 8; index += 1) {
+          if (toolName === "files" && new RegExp(`alpha-${index}\\.txt`).test(summary)) {
+            yield {
+              delta: toolCall("files", {
+                path: `alpha-${index + 1}.txt`,
+                startLine: 1,
+                endLine: 20
+              })
+            };
+            return;
+          }
+        }
+
+        if (toolName === "files" && /alpha-9\.txt/.test(summary)) {
+          yield { delta: "Completed the interrupted read chain and reached alpha-9.txt." };
+          return;
+        }
+      }
+
+      if (
+        !input.content.startsWith("Original user request:")
+        && input.content.includes('The user replied "还能继续吗" and wants to continue the most recent unfinished task.')
+      ) {
+        assert.match(input.content, /Original task: Read alpha-1\.txt, alpha-2\.txt, alpha-3\.txt, alpha-4\.txt, alpha-5\.txt, alpha-6\.txt, alpha-7\.txt, alpha-8\.txt, and alpha-9\.txt, then finish\./);
+        assert.match(input.content, /Pending next step target: alpha-9\.txt/);
+        assert.match(input.content, /Latest tool in context: files/);
+        assert.match(input.content, /Latest tool summary in context: alpha-8\.txt:1-1/);
+        yield {
+          delta: toolCall("files", {
+            path: "alpha-9.txt",
+            startLine: 1,
+            endLine: 20
+          })
+        };
+        return;
+      }
+
+      if (
+        input.content.startsWith('Original user request: The user replied "还能继续吗" and wants to continue the most recent unfinished task.')
+      ) {
+        const toolName = extractLine(input.content, "Tool:") ?? extractLine(input.content, "Latest tool:");
+        const summary = extractLine(input.content, "Summary:") ?? extractLine(input.content, "Latest summary:") ?? "";
+
+        assert.match(input.content, /Pending next step target: alpha-9\.txt/);
+
+        if (toolName === "files" && /alpha-9\.txt/.test(summary)) {
+          yield { delta: "Completed the step-limit resume handoff by reading alpha-9.txt." };
+          return;
+        }
+      }
+
+      yield { delta: "ok" };
+    }
+  }
+
+  const bus = new EventBus();
+  const transcriptStore = new TranscriptStore(transcriptPath);
+  const logStore = new LogStore(logsPath);
+  await transcriptStore.ensureInitialized();
+  await logStore.ensureInitialized();
+
+  const session = createDefaultSessionRecord(workspace, VERSION);
+  session.model = "regression-stub";
+
+  const runtime = new AgentRuntime({
+    bus,
+    provider: new StepLimitResumeProvider(),
+    tools: new InMemoryToolRegistry(),
+    session,
+    transcriptStore,
+    logStore
+  });
+  await runtime.start();
+
+  const failedResult = await runAgentTask({
+    bus,
+    transcriptStore,
+    sessionId: session.sessionId,
+    prompt: originalPrompt,
+    expectedState: "failed"
+  });
+
+  assert.equal(failedResult.assistantText, "");
+  assert.ok(
+    failedResult.runtimeErrors.some((message) => message.includes("Agent stopped after 8 tool steps")),
+    "expected a deterministic step-limit failure before resume"
+  );
+  assert.equal(
+    failedResult.toolSummaries.some((summary) => summary.startsWith("alpha-9.txt:1-1")),
+    false,
+    "step-limit failure should stop before the ninth file read executes"
+  );
+
+  const resumedResult = await runAgentTask({
+    bus,
+    transcriptStore,
+    sessionId: session.sessionId,
+    prompt: "还能继续吗"
+  });
+
+  assert.match(resumedResult.assistantText, /step-limit resume handoff|alpha-9\.txt/i);
+  assert.equal(
+    resumedResult.toolSummaries.some((summary) => summary.startsWith("alpha-1.txt:1-1")),
+    false,
+    "step-limit resume should not reread the earliest files"
+  );
+  assert.equal(
+    resumedResult.toolSummaries.some((summary) => summary.startsWith("alpha-8.txt:1-1")),
+    false,
+    "step-limit resume should not reread the latest completed file"
+  );
+  assert.equal(
+    resumedResult.toolSummaries.filter((summary) => summary.startsWith("alpha-9.txt:1-1")).length,
+    1,
+    "step-limit resume should execute only the pending ninth read"
   );
 }
 

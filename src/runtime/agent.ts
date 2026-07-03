@@ -784,6 +784,14 @@ export class AgentRuntime {
         }
 
         if (toolStepCount === maxToolSteps) {
+          await this.recordStepLimitPendingCheckpoint({
+            sessionId,
+            taskId: responseTaskId,
+            originalRequest,
+            toolName: requestedTool.name,
+            toolInput: validatedToolInput,
+            previousToolResult: lastToolResult
+          });
           throw new Error(`Agent stopped after ${maxToolSteps} tool steps`);
         }
 
@@ -889,6 +897,36 @@ export class AgentRuntime {
     await this.input.transcriptStore.appendEvent(runtimeError);
 
     await this.completeRuntimeTask(sessionId, taskId, "failed");
+  }
+
+  private async recordStepLimitPendingCheckpoint(input: {
+    sessionId: string;
+    taskId: string;
+    originalRequest: string;
+    toolName: string;
+    toolInput: unknown;
+    previousToolResult?: RuntimeToolResult;
+  }) {
+    const targetPath = extractPendingTargetPathFromToolRequest(input.toolName, input.toolInput);
+
+    if (!targetPath) {
+      return;
+    }
+
+    const checkpointContent = buildStepLimitPendingCheckpointContent({
+      originalRequest: input.originalRequest,
+      targetPath,
+      previousToolResult: input.previousToolResult
+    });
+    const checkpointEvent = createAssistantCheckpointRecordedEvent({
+      sessionId: input.sessionId,
+      taskId: input.taskId,
+      kind: "pending_next_step",
+      content: checkpointContent,
+      targetPath
+    });
+    this.input.bus.emit(checkpointEvent);
+    await this.input.transcriptStore.appendEvent(checkpointEvent);
   }
 
   private async emitAssistantFinalAnswer(sessionId: string, taskId: string, delta: string) {
@@ -4332,6 +4370,27 @@ function extractPreviousActionableUserRequest(
   return undefined;
 }
 
+function extractLatestActionableUserRequest(
+  historyEvents: Awaited<ReturnType<TranscriptStore["readEventsBySession"]>>
+) {
+  const timeline = projectSessionTimeline(historyEvents);
+
+  for (let index = timeline.length - 1; index >= 0; index -= 1) {
+    const entry = timeline[index];
+
+    if (
+      entry?.kind === "user"
+      && !isAffirmativeFollowUp(entry.text)
+      && !isResumeFollowUp(entry.text)
+      && looksLikeActionableTaskRequest(entry.text)
+    ) {
+      return entry.text;
+    }
+  }
+
+  return undefined;
+}
+
 function extractPreviousAssistantProposal(
   historyEvents: Awaited<ReturnType<TranscriptStore["readEventsBySession"]>>
 ) {
@@ -4463,9 +4522,16 @@ function extractRecentToolAnchor(
 function extractRecentPendingNextTarget(
   historyEvents: Awaited<ReturnType<TranscriptStore["readEventsBySession"]>>
 ) {
+  const checkpointTarget = extractRecentPendingNextTargetCheckpoint(historyEvents);
+
+  if (checkpointTarget) {
+    return checkpointTarget;
+  }
+
   const timeline = projectSessionTimeline(historyEvents);
   const previousActionableUserIndex = findPreviousActionableUserTimelineIndex(timeline);
-  const originalRequest = extractPreviousActionableUserRequest(historyEvents);
+  const originalRequest = extractPreviousActionableUserRequest(historyEvents)
+    ?? extractLatestActionableUserRequest(historyEvents);
   let skippedLatestUser = false;
 
   for (let index = timeline.length - 1; index >= 0; index -= 1) {
@@ -4512,6 +4578,31 @@ function extractRecentPendingNextTarget(
     originalRequest,
     latestTool
   });
+}
+
+function extractRecentPendingNextTargetCheckpoint(
+  historyEvents: Awaited<ReturnType<TranscriptStore["readEventsBySession"]>>
+) {
+  const taskAnchorUserEventIndex = findPreviousActionableUserEventIndex(historyEvents) >= 0
+    ? findPreviousActionableUserEventIndex(historyEvents)
+    : findLatestActionableUserEventIndex(historyEvents);
+  const relevantEvents = taskAnchorUserEventIndex >= 0
+    ? historyEvents.slice(taskAnchorUserEventIndex + 1)
+    : historyEvents;
+
+  for (let index = relevantEvents.length - 1; index >= 0; index -= 1) {
+    const event = relevantEvents[index];
+
+    if (event?.type !== "assistant.checkpoint.recorded" || event.payload.kind !== "pending_next_step") {
+      continue;
+    }
+
+    if (event.payload.targetPath) {
+      return event.payload.targetPath;
+    }
+  }
+
+  return undefined;
 }
 
 function findNearestToolTimelineEntryBeforeIndex(
@@ -4610,6 +4701,30 @@ function findPreviousActionableUserEventIndex(
   const latestUserIndex = findLatestUserMessageIndex(historyEvents);
 
   for (let index = latestUserIndex - 1; index >= 0; index -= 1) {
+    const event = historyEvents[index];
+
+    if (event?.type !== "user.message.submitted") {
+      continue;
+    }
+
+    const content = event.payload.content;
+
+    if (
+      !isAffirmativeFollowUp(content)
+      && !isResumeFollowUp(content)
+      && looksLikeActionableTaskRequest(content)
+    ) {
+      return index;
+    }
+  }
+
+  return -1;
+}
+
+function findLatestActionableUserEventIndex(
+  historyEvents: Awaited<ReturnType<TranscriptStore["readEventsBySession"]>>
+) {
+  for (let index = historyEvents.length - 1; index >= 0; index -= 1) {
     const event = historyEvents[index];
 
     if (event?.type !== "user.message.submitted") {
@@ -6667,6 +6782,40 @@ function derivePendingNextTargetFromLatestToolContext(input: {
   }
 
   return inferredTarget;
+}
+
+function extractPendingTargetPathFromToolRequest(toolName: string, toolInput: unknown) {
+  if ((toolName !== "files" && toolName !== "edit" && toolName !== "write") || !toolInput || typeof toolInput !== "object") {
+    return undefined;
+  }
+
+  const candidatePath = "path" in toolInput && typeof toolInput.path === "string"
+    ? normalizePromptPath(toolInput.path)
+    : undefined;
+
+  return candidatePath || undefined;
+}
+
+function buildStepLimitPendingCheckpointContent(input: {
+  originalRequest: string;
+  targetPath: string;
+  previousToolResult?: {
+    toolName: string;
+    summary: string;
+  };
+}) {
+  const intro = looksLikeWholeProjectInspectionRequest(input.originalRequest)
+    ? `I still need to continue the whole-project inspection by reading ${input.targetPath}.`
+    : looksLikeBroadProjectImprovementRequest(input.originalRequest) || looksLikeExecutableProjectRewriteRequest(input.originalRequest)
+      ? `I still need to continue this project task at ${input.targetPath}.`
+      : `I still need to continue the task at ${input.targetPath}.`;
+  const bridge = input.previousToolResult
+    ? `The latest completed tool result was ${input.previousToolResult.summary}.`
+    : "";
+
+  return [intro, bridge, `The pending next step target is ${input.targetPath}.`]
+    .filter(Boolean)
+    .join(" ");
 }
 
 function looksLikePathScopedCompletionForMultiTargetRequest(
