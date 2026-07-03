@@ -471,18 +471,20 @@ function buildRecentTaskState(
   const taskAnchorRequest = latestUserRequest
     ? resolveTaskAnchorRequest(latestUserRequest, allEntries)
     : undefined;
+  const taskAnchorEntryIndex = resolveTaskAnchorUserEntryIndex(latestUserRequest, allEntries);
+  const taskStateEntries = taskAnchorEntryIndex >= 0 ? allEntries.slice(taskAnchorEntryIndex) : currentTaskEntries;
   const expectedOutput = taskAnchorRequest ? extractExpectedOutputFromRequest(taskAnchorRequest) : undefined;
   const requestedVerificationCommand = taskAnchorRequest ? extractVerificationCommandFromRequest(taskAnchorRequest) : undefined;
   const requestedPaths = taskAnchorRequest ? extractTaskRelevantPaths(taskAnchorRequest, requestedVerificationCommand) : [];
-  const pendingApproval = extractPendingApprovalState(rawEvents);
+  const pendingApproval = extractPendingApprovalState(rawEvents, latestUserRequest);
   const workingFiles = dedupeNotes(filterTaskRelevantWorkingFiles(
-    extractRecentWorkingFiles(currentTaskEntries),
+    extractRecentWorkingFiles(taskStateEntries),
     requestedPaths,
     false
   )).slice(0, 4);
-  const pendingAssistantStep = extractPendingAssistantCheckpoint(rawEvents, requestedPaths)
-    ?? extractPendingAssistantStep(currentTaskEntries, requestedPaths);
-  const lastRepairSummary = buildRecentRepairSummary(currentTaskEntries, requestedPaths, requestedVerificationCommand)
+  const pendingAssistantStep = extractPendingAssistantCheckpoint(rawEvents, requestedPaths, latestUserRequest)
+    ?? extractPendingAssistantStep(taskStateEntries, requestedPaths);
+  const lastRepairSummary = buildRecentRepairSummary(taskStateEntries, requestedPaths, requestedVerificationCommand)
     .map((line) => line.replace(/^- /, ""))
     .filter(Boolean);
   const prioritizedRepairState = lastRepairSummary.filter((line) =>
@@ -517,10 +519,11 @@ function findLatestUserEntryIndex(entries: SessionTimelineEntry[]) {
 }
 
 function extractPendingApprovalState(
-  events: Awaited<ReturnType<TranscriptStore["readEventsBySession"]>>
+  events: Awaited<ReturnType<TranscriptStore["readEventsBySession"]>>,
+  latestUserRequest?: string
 ) {
-  const latestUserEventIndex = findLatestUserEventIndex(events);
-  const relevantEvents = latestUserEventIndex >= 0 ? events.slice(latestUserEventIndex + 1) : events;
+  const taskAnchorUserEventIndex = resolveTaskAnchorUserEventIndex(events, latestUserRequest);
+  const relevantEvents = taskAnchorUserEventIndex >= 0 ? events.slice(taskAnchorUserEventIndex + 1) : events;
   const resolvedApprovalIds = new Set<string>();
 
   for (let index = relevantEvents.length - 1; index >= 0; index -= 1) {
@@ -617,10 +620,11 @@ function extractPendingAssistantStep(entries: SessionTimelineEntry[], requestedP
 
 function extractPendingAssistantCheckpoint(
   events: Awaited<ReturnType<TranscriptStore["readEventsBySession"]>>,
-  requestedPaths: string[] = []
+  requestedPaths: string[] = [],
+  latestUserRequest?: string
 ) {
-  const latestUserEventIndex = findLatestUserEventIndex(events);
-  const relevantEvents = latestUserEventIndex >= 0 ? events.slice(latestUserEventIndex + 1) : events;
+  const taskAnchorUserEventIndex = resolveTaskAnchorUserEventIndex(events, latestUserRequest);
+  const relevantEvents = taskAnchorUserEventIndex >= 0 ? events.slice(taskAnchorUserEventIndex + 1) : events;
 
   for (let index = relevantEvents.length - 1; index >= 0; index -= 1) {
     const event = relevantEvents[index];
@@ -699,6 +703,64 @@ function findPreviousActionableUserRequest(entries: SessionTimelineEntry[]) {
   }
 
   return undefined;
+}
+
+function resolveTaskAnchorUserEntryIndex(
+  latestUserRequest: string | undefined,
+  entries: SessionTimelineEntry[]
+) {
+  const latestUserIndex = findLatestUserEntryIndex(entries);
+
+  if (latestUserIndex < 0) {
+    return -1;
+  }
+
+  if (!latestUserRequest || !isContextRunnableFollowUp(latestUserRequest)) {
+    return latestUserIndex;
+  }
+
+  for (let index = latestUserIndex - 1; index >= 0; index -= 1) {
+    const entry = entries[index];
+
+    if (entry?.kind !== "user") {
+      continue;
+    }
+
+    if (!isContextRunnableFollowUp(entry.text) && looksLikeContextActionableTaskRequest(entry.text)) {
+      return index;
+    }
+  }
+
+  return latestUserIndex;
+}
+
+function resolveTaskAnchorUserEventIndex(
+  events: Awaited<ReturnType<TranscriptStore["readEventsBySession"]>>,
+  latestUserRequest?: string
+) {
+  const latestUserEventIndex = findLatestUserEventIndex(events);
+
+  if (latestUserEventIndex < 0) {
+    return -1;
+  }
+
+  if (!latestUserRequest || !isContextRunnableFollowUp(latestUserRequest)) {
+    return latestUserEventIndex;
+  }
+
+  for (let index = latestUserEventIndex - 1; index >= 0; index -= 1) {
+    const event = events[index];
+
+    if (event?.type !== "user.message.submitted") {
+      continue;
+    }
+
+    if (!isContextRunnableFollowUp(event.payload.content) && looksLikeContextActionableTaskRequest(event.payload.content)) {
+      return index;
+    }
+  }
+
+  return latestUserEventIndex;
 }
 
 function extractVerificationCommandFromRequest(request: string) {

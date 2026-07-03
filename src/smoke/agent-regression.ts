@@ -23240,6 +23240,7 @@ function verifyContextCompactionCarriesUnderlyingTaskThroughResumeFollowUp() {
   assert.match(recentTaskStateMessage, /Target verification: node report\.mjs/);
   assert.match(recentTaskStateMessage, /Working files: report\.mjs, app\.config\.json|Working files: app\.config\.json, report\.mjs/);
   assert.match(recentTaskStateMessage, /Last failure: node report\.mjs · failed \(1\)/);
+  assert.match(recentTaskStateMessage, /Failure reason: ReferenceError: config is not defined/);
 }
 
 function verifyContextCompactionPreservesAssistantStageBoundaries() {
