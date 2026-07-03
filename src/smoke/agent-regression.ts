@@ -4097,6 +4097,7 @@ async function main() {
   await verifyResumeFollowUpDoesNotLeakStaleToolAnchor();
   await verifyResumeFollowUpDoesNotLeakStaleInterruptedApproval();
   await verifyApproveFollowUpDoesNotLeakOldProposalIntoInterruptedTask();
+  await verifyApproveFollowUpDoesNotLeakOldProposalIntoNewInspectProposal();
   await verifyApproveFollowUpDoesNotLeakOldInterruptedApprovalIntoNewInspectProposal();
   await verifyApproveFollowUpDoesNotLeakOldDeniedApprovalIntoNewInspectProposal();
   await verifyResumeFollowUpAfterApprovalWaitInProjectChain();
@@ -22455,6 +22456,138 @@ async function verifyApproveFollowUpDoesNotLeakOldProposalIntoInterruptedTask() 
   assert.ok(
     resumedResult.toolSummaries.some((summary) => summary.startsWith("node fresh-approve-resume.mjs · completed")),
     "approve follow-up should finish the current-task verification after resuming"
+  );
+}
+
+async function verifyApproveFollowUpDoesNotLeakOldProposalIntoNewInspectProposal() {
+  const root = await mkdtemp(join(tmpdir(), "selfme-agent-no-stale-proposal-approve-"));
+  const workspace = join(root, "workspace");
+  const transcriptPath = join(root, "transcript.jsonl");
+  const logsPath = join(root, "logs.jsonl");
+  await mkdir(workspace, { recursive: true });
+  await mkdir(join(workspace, "node-todo"), { recursive: true });
+
+  await writeFile(
+    join(workspace, "node-todo", "package.json"),
+    '{\n  "name": "node-todo",\n  "version": "1.0.0"\n}\n',
+    "utf8"
+  );
+  await writeFile(
+    join(workspace, "node-todo", "app.js"),
+    'const PORT = 3000;\nconsole.log(PORT);\n',
+    "utf8"
+  );
+
+  class NoStaleProposalApproveInspectProvider implements ProviderClient {
+    readonly name = "no-stale-proposal-approve-inspect-provider";
+
+    async *streamResponse(input: ProviderStreamInput): AsyncIterable<ProviderStreamChunk> {
+      const olderPrompt = "帮我优化下 node-todo";
+      const inspectPrompt = "帮我看看项目";
+      const executeInspectProposalPrompt = 'The user replied "可以" and wants you to execute the immediately previous inspect proposal now.';
+
+      if (input.content === olderPrompt) {
+        yield {
+          delta: "我先看了一下 node-todo；如果你愿意，我下一步可以继续改 node-todo/app.js 和视图模板。"
+        };
+        return;
+      }
+
+      if (input.content === inspectPrompt) {
+        yield {
+          delta: "我先看了工作区列表，当前最像完整项目的是 node-todo。如果你愿意，我下一步可以继续读取 node-todo/package.json 和 node-todo/app.js。"
+        };
+        return;
+      }
+
+      if (input.content.startsWith(executeInspectProposalPrompt)) {
+        assert.match(input.content, /Approved proposal: .*node-todo\/package\.json.*node-todo\/app\.js/u);
+        assert.doesNotMatch(input.content, /视图模板/);
+        assert.doesNotMatch(input.content, /execute the immediately previous optimize proposal/i);
+        yield {
+          delta: toolCall("files", {
+            path: "node-todo/package.json",
+            startLine: 1,
+            endLine: 20
+          })
+        };
+        return;
+      }
+
+      if (input.content.startsWith(`Original user request: ${executeInspectProposalPrompt}`)) {
+        const toolName = extractLine(input.content, "Tool:") ?? extractLine(input.content, "Latest tool:");
+        const summary = extractLine(input.content, "Summary:") ?? extractLine(input.content, "Latest summary:") ?? "";
+
+        if (toolName === "files" && /node-todo\/package\.json/.test(summary)) {
+          yield {
+            delta: toolCall("files", {
+              path: "node-todo/app.js",
+              startLine: 1,
+              endLine: 20
+            })
+          };
+          return;
+        }
+
+        if (toolName === "files" && /node-todo\/app\.js/.test(summary)) {
+          yield { delta: "I inspected node-todo/package.json and node-todo/app.js." };
+          return;
+        }
+      }
+
+      yield { delta: "ok" };
+    }
+  }
+
+  const bus = new EventBus();
+  const transcriptStore = new TranscriptStore(transcriptPath);
+  const logStore = new LogStore(logsPath);
+  await transcriptStore.ensureInitialized();
+  await logStore.ensureInitialized();
+
+  const session = createDefaultSessionRecord(workspace, VERSION);
+  session.model = "regression-stub";
+
+  const runtime = new AgentRuntime({
+    bus,
+    provider: new NoStaleProposalApproveInspectProvider(),
+    tools: new InMemoryToolRegistry(),
+    session,
+    transcriptStore,
+    logStore
+  });
+  await runtime.start();
+
+  const oldProposalResult = await runAgentTask({
+    bus,
+    transcriptStore,
+    sessionId: session.sessionId,
+    prompt: "帮我优化下 node-todo"
+  });
+  assert.match(oldProposalResult.assistantText, /node-todo\/app\.js/);
+
+  const inspectProposalResult = await runAgentTask({
+    bus,
+    transcriptStore,
+    sessionId: session.sessionId,
+    prompt: "帮我看看项目"
+  });
+  assert.match(inspectProposalResult.assistantText, /node-todo\/package\.json/);
+
+  const approveResult = await runAgentTask({
+    bus,
+    transcriptStore,
+    sessionId: session.sessionId,
+    prompt: "可以"
+  });
+
+  assert.ok(
+    approveResult.toolSummaries.some((summary) => summary.startsWith("node-todo/package.json:1-3")),
+    "approve follow-up should execute the latest inspect proposal from the project entry"
+  );
+  assert.ok(
+    approveResult.toolSummaries.some((summary) => summary.startsWith("node-todo/app.js:1-2")),
+    "approve follow-up should continue the latest inspect proposal into the implementation file"
   );
 }
 
