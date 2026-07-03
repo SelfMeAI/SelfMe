@@ -3887,6 +3887,7 @@ async function main() {
   assert.ok(approvals.length >= 2, "expected at least two approvals to be auto-approved");
 
   await verifyRepeatedIdenticalToolResultsAbortAsStalled();
+  await verifyResumeAfterRepeatedFilesStall();
   await verifyResumeAfterRepeatedToolStall();
   await verifyBareCompletionReplyStillTriggersVerification();
   await verifyRepeatedIdenticalAssistantRepliesAbortAsStalled();
@@ -4182,6 +4183,159 @@ async function verifyRepeatedIdenticalToolResultsAbortAsStalled() {
   assert.ok(
     result.runtimeErrors.some((message) => /stuck-report\.mjs/.test(message)),
     "expected the repeated-tool stall runtime error to identify the stuck file"
+  );
+}
+
+async function verifyResumeAfterRepeatedFilesStall() {
+  const root = await mkdtemp(join(tmpdir(), "selfme-agent-resume-repeated-files-stall-"));
+  const workspace = join(root, "workspace");
+  const transcriptPath = join(root, "transcript.jsonl");
+  const logsPath = join(root, "logs.jsonl");
+  const originalPrompt = "Fix stuck-report.mjs so running `node stuck-report.mjs` prints exactly `ready`. Verify it before finishing.";
+  await mkdir(workspace, { recursive: true });
+  await writeFile(join(workspace, "stuck-report.mjs"), 'console.log("stuck");\n', "utf8");
+
+  class RepeatedFilesStallResumeProvider implements ProviderClient {
+    readonly name = "repeated-files-stall-resume-provider";
+
+    async *streamResponse(input: ProviderStreamInput): AsyncIterable<ProviderStreamChunk> {
+      if (input.content === originalPrompt) {
+        yield {
+          delta: toolCall("files", {
+            path: "stuck-report.mjs",
+            startLine: 1,
+            endLine: 20
+          })
+        };
+        return;
+      }
+
+      if (input.content.startsWith(`Original user request: ${originalPrompt}`)) {
+        yield {
+          delta: toolCall("files", {
+            path: "stuck-report.mjs",
+            startLine: 1,
+            endLine: 20
+          })
+        };
+        return;
+      }
+
+      if (
+        !input.content.startsWith("Original user request:")
+        && input.content.includes('The user replied "还能继续吗" and wants to continue the most recent unfinished task.')
+      ) {
+        assert.match(input.content, /Original task: Fix stuck-report\.mjs so running `node stuck-report\.mjs` prints exactly `ready`\./);
+        assert.match(input.content, /Pending next step target: stuck-report\.mjs/);
+        assert.match(input.content, /Latest tool in context: files/);
+        assert.match(input.content, /Latest tool summary in context: stuck-report\.mjs:1-1/);
+        yield {
+          delta: toolCall("files", {
+            path: "stuck-report.mjs",
+            startLine: 1,
+            endLine: 20
+          })
+        };
+        return;
+      }
+
+      if (
+        input.content.startsWith('Original user request: The user replied "还能继续吗" and wants to continue the most recent unfinished task.')
+      ) {
+        const toolName = extractLine(input.content, "Tool:") ?? extractLine(input.content, "Latest tool:");
+        const summary = extractLine(input.content, "Summary:") ?? extractLine(input.content, "Latest summary:") ?? "";
+
+        if (toolName === "files" && /stuck-report\.mjs/.test(summary)) {
+          yield {
+            delta: toolCall("edit", {
+              path: "stuck-report.mjs",
+              startLine: 1,
+              endLine: 1,
+              replacement: 'console.log("ready");'
+            })
+          };
+          return;
+        }
+
+        if (toolName === "edit" && /stuck-report\.mjs/.test(summary)) {
+          yield {
+            delta: toolCall("shell", {
+              command: "node stuck-report.mjs"
+            })
+          };
+          return;
+        }
+
+        if (toolName === "shell" && /completed/.test(summary)) {
+          yield { delta: "Repaired stuck-report.mjs and verified the final output is ready." };
+          return;
+        }
+      }
+
+      yield { delta: "ok" };
+    }
+  }
+
+  const bus = new EventBus();
+  const transcriptStore = new TranscriptStore(transcriptPath);
+  const logStore = new LogStore(logsPath);
+  await transcriptStore.ensureInitialized();
+  await logStore.ensureInitialized();
+
+  const session = createDefaultSessionRecord(workspace, VERSION);
+  session.model = "regression-stub";
+
+  const runtime = new AgentRuntime({
+    bus,
+    provider: new RepeatedFilesStallResumeProvider(),
+    tools: new InMemoryToolRegistry(),
+    session,
+    transcriptStore,
+    logStore
+  });
+  await runtime.start();
+
+  bus.on("approval.requested", (event) => {
+    bus.emit(createTerminalCommandInvokedEvent({
+      sessionId: event.sessionId,
+      content: `/approve ${event.payload.approvalId}`
+    }));
+  });
+
+  const failedResult = await runAgentTask({
+    bus,
+    transcriptStore,
+    sessionId: session.sessionId,
+    prompt: originalPrompt,
+    expectedState: "failed"
+  });
+
+  assert.ok(
+    failedResult.runtimeErrors.some((message) => /Agent stalled after repeated identical files results/.test(message)),
+    "expected repeated files stall before resume"
+  );
+
+  const resumedResult = await runAgentTask({
+    bus,
+    transcriptStore,
+    sessionId: session.sessionId,
+    prompt: "还能继续吗"
+  });
+
+  const resumedContent = await readFile(join(workspace, "stuck-report.mjs"), "utf8");
+  assert.equal(resumedContent, 'console.log("ready");\n');
+  assert.match(resumedResult.assistantText, /ready|stuck-report\.mjs/i);
+  assert.ok(
+    resumedResult.toolSummaries.some((summary) => summary.startsWith("stuck-report.mjs:1-1")),
+    "expected repeated-files-stall resume to continue directly into the target file read"
+  );
+  assert.ok(
+    resumedResult.toolSummaries.some((summary) => summary.startsWith("stuck-report.mjs:1-1 · updated")),
+    "expected repeated-files-stall resume to repair the target file"
+  );
+  assert.ok(
+    resumedResult.toolSummaries.some((summary) => summary.startsWith("node stuck-report.mjs · completed")),
+    "expected repeated-files-stall resume to finish verification after the repair"
   );
 }
 
