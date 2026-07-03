@@ -3958,7 +3958,7 @@ async function main() {
   );
 
   await verifyResumeAfterToolStepLimitFailure();
-  await verifyResumeAfterToolStepLimitBeforeEdit();
+  await verifyAutomaticContinuationAfterToolStepLimitBeforeEdit();
   await verifyResumeAfterAssistantPassLimitFailure();
   await verifyDeniedLaterApprovalDoesNotRetrySameAction();
   await verifyResumeAfterDeniedLaterApprovalStaysBlocked();
@@ -4755,7 +4755,7 @@ async function verifyResumeAfterToolStepLimitFailure() {
   );
 }
 
-async function verifyResumeAfterToolStepLimitBeforeEdit() {
+async function verifyAutomaticContinuationAfterToolStepLimitBeforeEdit() {
   const root = await mkdtemp(join(tmpdir(), "selfme-agent-resume-step-limit-edit-"));
   const workspace = join(root, "workspace");
   const transcriptPath = join(root, "transcript.jsonl");
@@ -4769,8 +4769,8 @@ async function verifyResumeAfterToolStepLimitBeforeEdit() {
 
   await writeFile(join(workspace, "step-limit-edit-report.mjs"), 'console.log("pending");\n', "utf8");
 
-  class StepLimitEditResumeProvider implements ProviderClient {
-    readonly name = "step-limit-edit-resume-provider";
+  class StepLimitEditAutoContinueProvider implements ProviderClient {
+    readonly name = "step-limit-edit-auto-continue-provider";
 
     async *streamResponse(input: ProviderStreamInput): AsyncIterable<ProviderStreamChunk> {
       if (input.content === originalPrompt) {
@@ -4828,7 +4828,7 @@ async function verifyResumeAfterToolStepLimitBeforeEdit() {
 
       if (
         !input.content.startsWith("Original user request:")
-        && input.content.includes('The user replied "还能继续吗" and wants to continue the most recent unfinished task.')
+        && input.content.includes("The current task hit the per-slice tool budget but still has unfinished work.")
       ) {
         assert.match(input.content, /Original task: Read beta-1\.txt, beta-2\.txt, beta-3\.txt, beta-4\.txt, beta-5\.txt, beta-6\.txt, beta-7\.txt, and step-limit-edit-report\.mjs/);
         assert.match(input.content, /Pending next step target: step-limit-edit-report\.mjs/);
@@ -4846,7 +4846,7 @@ async function verifyResumeAfterToolStepLimitBeforeEdit() {
       }
 
       if (
-        input.content.startsWith('Original user request: The user replied "还能继续吗" and wants to continue the most recent unfinished task.')
+        input.content.startsWith("Original user request: The current task hit the per-slice tool budget but still has unfinished work.")
       ) {
         const toolName = extractLine(input.content, "Tool:") ?? extractLine(input.content, "Latest tool:");
         const summary = extractLine(input.content, "Summary:") ?? extractLine(input.content, "Latest summary:") ?? "";
@@ -4881,7 +4881,7 @@ async function verifyResumeAfterToolStepLimitBeforeEdit() {
 
   const runtime = new AgentRuntime({
     bus,
-    provider: new StepLimitEditResumeProvider(),
+    provider: new StepLimitEditAutoContinueProvider(),
     tools: new InMemoryToolRegistry(),
     session,
     transcriptStore,
@@ -4889,51 +4889,38 @@ async function verifyResumeAfterToolStepLimitBeforeEdit() {
   });
   await runtime.start();
 
-  const failedResult = await runAgentTask({
+  const result = await runAgentTask({
     bus,
     transcriptStore,
     sessionId: session.sessionId,
-    prompt: originalPrompt,
-    expectedState: "failed"
-  });
-
-  assert.ok(
-    failedResult.runtimeErrors.some((message) => message.includes("Agent stopped after 8 tool steps")),
-    "expected a deterministic step-limit failure before the pending edit"
-  );
-  assert.equal(
-    failedResult.toolSummaries.some((summary) => summary.startsWith("step-limit-edit-report.mjs:1-1 · updated")),
-    false,
-    "step-limit failure should stop before the pending edit executes"
-  );
-
-  const resumedResult = await runAgentTask({
-    bus,
-    transcriptStore,
-    sessionId: session.sessionId,
-    prompt: "还能继续吗"
+    prompt: originalPrompt
   });
 
   const resumedContent = await readFile(join(workspace, "step-limit-edit-report.mjs"), "utf8");
   assert.equal(resumedContent, 'console.log("ready");\n');
-  assert.match(resumedResult.assistantText, /step-limit-edit-report\.mjs|ready/i);
+  assert.match(result.assistantText, /step-limit-edit-report\.mjs|ready/i);
   assert.equal(
-    resumedResult.toolSummaries.some((summary) => summary.startsWith("beta-1.txt:1-1")),
+    result.toolSummaries.some((summary) => summary.startsWith("beta-1.txt:1-1")),
     false,
-    "step-limit edit resume should not restart from the earliest reads"
+    "automatic step-limit continuation should not restart from the earliest reads"
   );
   assert.equal(
-    resumedResult.toolSummaries.some((summary) => summary.startsWith("step-limit-edit-report.mjs:1-1")),
-    false,
-    "step-limit edit resume should not reread the already inspected target file"
+    result.toolSummaries.filter((summary) => summary.startsWith("step-limit-edit-report.mjs:1-1")).length,
+    1,
+    "automatic step-limit continuation should preserve the single target read before continuing"
   );
   assert.ok(
-    resumedResult.toolSummaries.some((summary) => summary.startsWith("step-limit-edit-report.mjs:1-1 · updated")),
-    "step-limit edit resume should continue directly with the pending edit"
+    result.toolSummaries.some((summary) => summary.startsWith("step-limit-edit-report.mjs:1-1 · updated")),
+    "automatic step-limit continuation should continue directly with the pending edit"
   );
   assert.ok(
-    resumedResult.toolSummaries.some((summary) => summary.startsWith("node step-limit-edit-report.mjs · completed")),
-    "step-limit edit resume should verify after the resumed edit"
+    result.toolSummaries.some((summary) => summary.startsWith("node step-limit-edit-report.mjs · completed")),
+    "automatic step-limit continuation should verify after the continued edit"
+  );
+  assert.equal(
+    result.runtimeErrors.some((message) => message.includes("Agent stopped after 8 tool steps")),
+    false,
+    "automatic step-limit continuation should finish without surfacing the old hard stop"
   );
 }
 

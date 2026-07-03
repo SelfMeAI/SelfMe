@@ -35,6 +35,7 @@ const EXTENDED_AGENT_TOOL_STEPS = 16;
 const VERIFICATION_AGENT_TOOL_STEPS = 24;
 const PROJECT_AGENT_TOOL_STEPS = 32;
 const ASSISTANT_PASS_MULTIPLIER = 4;
+const MAX_AUTO_STEP_LIMIT_CONTINUATIONS = 2;
 const MAX_REPEATED_IDENTICAL_TOOL_RESULTS = 2;
 const MAX_REPEATED_IDENTICAL_ASSISTANT_MESSAGES = 2;
 const MAX_MALFORMED_TOOL_CALL_RETRIES = 1;
@@ -623,6 +624,7 @@ export class AgentRuntime {
     let malformedToolCallRetryCount = 0;
     let unknownToolRetryCount = 0;
     let invalidToolInputRetryCount = 0;
+    let autoStepLimitContinuationCount = 0;
     const activeRun = this.startActiveRun(sessionId, responseTaskId);
     this.taskOriginalRequests.set(responseTaskId, originalRequest);
     this.taskKnownPaths.set(responseTaskId, new Set(extractWritableTaskPaths(originalRequest)));
@@ -812,6 +814,11 @@ export class AgentRuntime {
         }
 
         if (toolStepCount === maxToolSteps) {
+          const pendingTargetPath = extractPendingTargetPathFromToolRequest(
+            requestedTool.name,
+            validatedToolInput
+          );
+
           await this.recordStepLimitPendingCheckpoint({
             sessionId,
             taskId: responseTaskId,
@@ -820,6 +827,26 @@ export class AgentRuntime {
             toolInput: validatedToolInput,
             previousToolResult: lastToolResult
           });
+
+          if (
+            pendingTargetPath
+            && autoStepLimitContinuationCount < MAX_AUTO_STEP_LIMIT_CONTINUATIONS
+            && shouldAutoContinueAfterStepLimit(originalRequest, pendingTargetPath)
+          ) {
+            autoStepLimitContinuationCount += 1;
+            nextPrompt = buildStepLimitAutoContinuationPrompt({
+              originalRequest,
+              targetPath: pendingTargetPath,
+              previousToolResult: lastToolResult
+            });
+            toolStepCount = 0;
+            assistantPassCount = 0;
+            malformedToolCallRetryCount = 0;
+            unknownToolRetryCount = 0;
+            invalidToolInputRetryCount = 0;
+            continue;
+          }
+
           throw new Error(`Agent stopped after ${maxToolSteps} tool steps`);
         }
 
@@ -7061,6 +7088,38 @@ function buildStepLimitPendingCheckpointContent(input: {
   return [intro, bridge, `The pending next step target is ${input.targetPath}.`]
     .filter(Boolean)
     .join(" ");
+}
+
+function buildStepLimitAutoContinuationPrompt(input: {
+  originalRequest: string;
+  targetPath: string;
+  previousToolResult?: {
+    toolName: string;
+    summary: string;
+  };
+}) {
+  return [
+    "The current task hit the per-slice tool budget but still has unfinished work.",
+    "Continue the same task now instead of stopping or restarting from earlier completed steps.",
+    "Do not ask the user to continue; keep working from the pending next step target until the original request is actually complete or truly blocked.",
+    `Pending next step target: ${input.targetPath}`,
+    input.previousToolResult ? `Latest tool in context: ${input.previousToolResult.toolName}` : "",
+    input.previousToolResult ? `Latest tool summary in context: ${input.previousToolResult.summary}` : "",
+    `Original task: ${input.originalRequest}`
+  ].filter(Boolean).join("\n");
+}
+
+function shouldAutoContinueAfterStepLimit(
+  originalRequest: string,
+  targetPath: string
+) {
+  const taskContent = extractEmbeddedTaskContent(originalRequest);
+
+  if (!targetPath || looksLikeDiscussionRequest(taskContent)) {
+    return false;
+  }
+
+  return hasMutationIntent(taskContent);
 }
 
 function looksLikePathScopedCompletionForMultiTargetRequest(
