@@ -63,6 +63,7 @@ async function main() {
   await mkdir(join(workspace, "src", "shared"), { recursive: true });
   await mkdir(join(workspace, "src", "templates"), { recursive: true });
   await mkdir(join(workspace, "src", "web"), { recursive: true });
+  await mkdir(join(workspace, "alpha-demo"), { recursive: true });
   await mkdir(join(workspace, "node-todo"), { recursive: true });
   await mkdir(join(workspace, "node-todo", "views"), { recursive: true });
 
@@ -124,6 +125,12 @@ async function main() {
   await writeFile(join(workspace, "no-tool-malformed-resume-report.mjs"), 'console.log("pending");\n', "utf8");
   await writeFile(join(workspace, "option-start-report.mjs"), 'console.log("pending");\n', "utf8");
   await writeFile(join(workspace, "question-start-report.mjs"), 'console.log("pending");\n', "utf8");
+  await writeFile(
+    join(workspace, "alpha-demo", "package.json"),
+    '{\n  "name": "alpha-demo",\n  "version": "0.1.0",\n  "main": "cli.js"\n}\n',
+    "utf8"
+  );
+  await writeFile(join(workspace, "alpha-demo", "README.md"), '# alpha-demo\n\nTiny demo.\n', "utf8");
   await writeFile(
     join(workspace, "node-todo", "package.json"),
     '{\n  "name": "node-todo",\n  "version": "1.0.0",\n  "description": "Simple todo app",\n  "main": "app.js",\n  "scripts": {\n    "start": "node app.js"\n  },\n  "dependencies": {\n    "ejs": "^3.1.10",\n    "express": "^4.19.2"\n  }\n}\n',
@@ -1567,6 +1574,11 @@ async function main() {
   assert.ok(
     projectInspectionResult.toolSummaries.some((summary) => /^node-todo\/package\.json:1-\d+$/.test(summary)),
     "expected project inspection to continue into a concrete project entry"
+  );
+  assert.equal(
+    projectInspectionResult.toolSummaries.some((summary) => /^alpha-demo\/package\.json:1-\d+$/.test(summary)),
+    false,
+    "project inspection should prefer the richer real project over an earlier thinner decoy project"
   );
   assert.ok(
     projectInspectionResult.toolSummaries.some((summary) => /^node-todo\/app\.js:1-\d+/.test(summary)),

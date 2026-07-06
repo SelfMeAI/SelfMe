@@ -4025,26 +4025,103 @@ function extractLikelyProjectEntryFromListing(rawOutput?: string) {
     .split(/\r?\n/)
     .map((line) => line.trim())
     .filter(Boolean);
+  const candidates = new Map<string, {
+    packagePath?: string;
+    readmePath?: string;
+    entryPath?: string;
+    sourceCount: number;
+    implementationCount: number;
+  }>();
 
-  const candidates = [
-    /(?:^|\/)([^/\s]+\/package\.json)$/i,
-    /(?:^|\/)([^/\s]+\/README\.md)$/i,
-    /(?:^|\/)([^/\s]+\/app\.js)$/i,
-    /(?:^|\/)([^/\s]+\/src\/index\.(?:js|ts|tsx))$/i,
-    /(?:^|\/)(package\.json)$/i,
-    /(?:^|\/)(README\.md)$/i,
-    /(?:^|\/)(app\.js)$/i
-  ];
+  for (const line of lines) {
+    const normalizedLine = normalizePromptPath(line.replace(/^[./]+/, ""));
 
-  for (const pattern of candidates) {
-    const match = lines.find((line) => pattern.test(line))?.match(pattern);
-
-    if (match?.[1]) {
-      return match[1];
+    if (!normalizedLine || normalizedLine.startsWith(".") || normalizedLine.startsWith("node_modules/")) {
+      continue;
     }
+
+    const root = normalizedLine.includes("/") ? normalizedLine.split("/")[0] ?? normalizedLine : ".";
+
+    if (!root || root.startsWith(".")) {
+      continue;
+    }
+
+    const relativePath = root === "."
+      ? normalizedLine
+      : normalizedLine.slice(root.length + 1);
+
+    if (!relativePath) {
+      continue;
+    }
+
+    const candidate = candidates.get(root) ?? {
+      sourceCount: 0,
+      implementationCount: 0
+    };
+
+    if (/^package\.json$/i.test(relativePath)) {
+      candidate.packagePath = normalizedLine;
+    }
+
+    if (/^README\.md$/i.test(relativePath)) {
+      candidate.readmePath = normalizedLine;
+    }
+
+    if (
+      /^(?:app|main|server)\.(?:mjs|cjs|js|ts|tsx)$/i.test(relativePath)
+      || /^src\/index\.(?:mjs|cjs|js|ts|tsx)$/i.test(relativePath)
+    ) {
+      candidate.entryPath = candidate.entryPath ?? normalizedLine;
+    }
+
+    if (/\.(?:mjs|cjs|js|ts|tsx|ejs|html|css)$/i.test(relativePath)) {
+      candidate.sourceCount += 1;
+    }
+
+    if (
+      /^(?:src|app|routes?|views?|services?|server|lib)\//i.test(relativePath)
+      || /^(?:app|main|server)\.(?:mjs|cjs|js|ts|tsx)$/i.test(relativePath)
+      || /^src\/index\.(?:mjs|cjs|js|ts|tsx)$/i.test(relativePath)
+    ) {
+      candidate.implementationCount += 1;
+    }
+
+    candidates.set(root, candidate);
   }
 
-  return undefined;
+  const rankedCandidates = [...candidates.entries()]
+    .map(([root, candidate]) => ({
+      root,
+      candidate,
+      score:
+        (candidate.packagePath ? 120 : 0)
+        + (candidate.readmePath ? 40 : 0)
+        + (candidate.entryPath ? 80 : 0)
+        + Math.min(candidate.sourceCount, 8) * 10
+        + Math.min(candidate.implementationCount, 8) * 8
+        + (root === "." && candidate.packagePath ? 12 : 0)
+    }))
+    .filter(({ candidate }) => Boolean(
+      candidate.packagePath
+      || candidate.readmePath
+      || candidate.entryPath
+      || candidate.sourceCount > 0
+    ))
+    .sort((left, right) =>
+      right.score - left.score
+      || Number(Boolean(right.candidate.packagePath)) - Number(Boolean(left.candidate.packagePath))
+      || Number(Boolean(right.candidate.entryPath)) - Number(Boolean(left.candidate.entryPath))
+      || right.candidate.sourceCount - left.candidate.sourceCount
+      || right.candidate.implementationCount - left.candidate.implementationCount
+      || left.root.localeCompare(right.root)
+    );
+
+  const bestCandidate = rankedCandidates[0]?.candidate;
+
+  return bestCandidate?.packagePath
+    ?? bestCandidate?.readmePath
+    ?? bestCandidate?.entryPath
+    ?? undefined;
 }
 
 function extractMissingPath(content: string) {
