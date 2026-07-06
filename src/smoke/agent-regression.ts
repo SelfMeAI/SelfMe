@@ -4279,39 +4279,28 @@ async function verifyResumeAfterRepeatedFilesStall() {
 
       if (
         !input.content.startsWith("Original user request:")
-        && input.content.includes('The user replied "还能继续吗" and wants to continue the most recent unfinished task.')
+        && input.content.includes("The task stalled after repeated identical progress signals but the task context is still actionable.")
       ) {
-        assert.match(input.content, /Original task: Fix stuck-report\.mjs so running `node stuck-report\.mjs` prints exactly `ready`\./);
+        assert.match(input.content, /Latest stall kind: repeated identical files results\./);
         assert.match(input.content, /Pending next step target: stuck-report\.mjs/);
         assert.match(input.content, /Latest tool in context: files/);
         assert.match(input.content, /Latest tool summary in context: stuck-report\.mjs:1-1/);
         yield {
-          delta: toolCall("files", {
+          delta: toolCall("edit", {
             path: "stuck-report.mjs",
             startLine: 1,
-            endLine: 20
+            endLine: 1,
+            replacement: 'console.log("ready");'
           })
         };
         return;
       }
 
       if (
-        input.content.startsWith('Original user request: The user replied "还能继续吗" and wants to continue the most recent unfinished task.')
+        input.content.startsWith("Original user request: The task stalled after repeated identical progress signals but the task context is still actionable.")
       ) {
         const toolName = extractLine(input.content, "Tool:") ?? extractLine(input.content, "Latest tool:");
         const summary = extractLine(input.content, "Summary:") ?? extractLine(input.content, "Latest summary:") ?? "";
-
-        if (toolName === "files" && /stuck-report\.mjs/.test(summary)) {
-          yield {
-            delta: toolCall("edit", {
-              path: "stuck-report.mjs",
-              startLine: 1,
-              endLine: 1,
-              replacement: 'console.log("ready");'
-            })
-          };
-          return;
-        }
 
         if (toolName === "edit" && /stuck-report\.mjs/.test(summary)) {
           yield {
@@ -4358,40 +4347,27 @@ async function verifyResumeAfterRepeatedFilesStall() {
     }));
   });
 
-  const failedResult = await runAgentTask({
+  const result = await runAgentTask({
     bus,
     transcriptStore,
     sessionId: session.sessionId,
-    prompt: originalPrompt,
-    expectedState: "failed"
+    prompt: originalPrompt
   });
 
+  const content = await readFile(join(workspace, "stuck-report.mjs"), "utf8");
+  assert.equal(content, 'console.log("ready");\n');
+  assert.match(result.assistantText, /ready|stuck-report\.mjs/i);
   assert.ok(
-    failedResult.runtimeErrors.some((message) => /Agent stalled after repeated identical files results/.test(message)),
-    "expected repeated files stall before resume"
-  );
-
-  const resumedResult = await runAgentTask({
-    bus,
-    transcriptStore,
-    sessionId: session.sessionId,
-    prompt: "还能继续吗"
-  });
-
-  const resumedContent = await readFile(join(workspace, "stuck-report.mjs"), "utf8");
-  assert.equal(resumedContent, 'console.log("ready");\n');
-  assert.match(resumedResult.assistantText, /ready|stuck-report\.mjs/i);
-  assert.ok(
-    resumedResult.toolSummaries.some((summary) => summary.startsWith("stuck-report.mjs:1-1")),
-    "expected repeated-files-stall resume to continue directly into the target file read"
+    result.toolSummaries.filter((summary) => summary.startsWith("stuck-report.mjs:1-1")).length >= 3,
+    "expected the stalled file read loop to occur before auto-continuation kicked in"
   );
   assert.ok(
-    resumedResult.toolSummaries.some((summary) => summary.startsWith("stuck-report.mjs:1-1 · updated")),
-    "expected repeated-files-stall resume to repair the target file"
+    result.toolSummaries.some((summary) => summary.startsWith("stuck-report.mjs:1-1 · updated")),
+    "expected repeated-files-stall auto-continuation to repair the target file"
   );
   assert.ok(
-    resumedResult.toolSummaries.some((summary) => summary.startsWith("node stuck-report.mjs · completed")),
-    "expected repeated-files-stall resume to finish verification after the repair"
+    result.toolSummaries.some((summary) => summary.startsWith("node stuck-report.mjs · completed")),
+    "expected repeated-files-stall auto-continuation to finish verification after the repair"
   );
 }
 
@@ -4454,9 +4430,9 @@ async function verifyResumeAfterRepeatedToolStall() {
 
       if (
         !input.content.startsWith("Original user request:")
-        && input.content.includes('The user replied "还能继续吗" and wants to continue the most recent unfinished task.')
+        && input.content.includes("The task stalled after repeated identical progress signals but the task context is still actionable.")
       ) {
-        assert.match(input.content, /Original task: Read app\.config\.json and fix tool-stall-resume-report\.mjs/);
+        assert.match(input.content, /Latest stall kind: repeated identical shell results\./);
         assert.match(input.content, /Pending next step target: tool-stall-resume-report\.mjs/);
         assert.match(input.content, /Latest tool in context: shell/);
         assert.match(input.content, /Latest tool summary in context: node tool-stall-resume-report\.mjs · failed \(1\)/);
@@ -4471,7 +4447,7 @@ async function verifyResumeAfterRepeatedToolStall() {
       }
 
       if (
-        input.content.startsWith('Original user request: The user replied "还能继续吗" and wants to continue the most recent unfinished task.')
+        input.content.startsWith("Original user request: The task stalled after repeated identical progress signals but the task context is still actionable.")
       ) {
         const toolName = extractLine(input.content, "Tool:") ?? extractLine(input.content, "Latest tool:");
         const summary = extractLine(input.content, "Summary:") ?? extractLine(input.content, "Latest summary:") ?? "";
@@ -4533,45 +4509,32 @@ async function verifyResumeAfterRepeatedToolStall() {
     }));
   });
 
-  const failedResult = await runAgentTask({
+  const result = await runAgentTask({
     bus,
     transcriptStore,
     sessionId: session.sessionId,
-    prompt: originalPrompt,
-    expectedState: "failed"
+    prompt: originalPrompt
   });
 
-  assert.ok(
-    failedResult.runtimeErrors.some((message) => /Agent stalled after repeated identical shell results/.test(message)),
-    "expected repeated shell tool stall before resume"
-  );
-
-  const resumedResult = await runAgentTask({
-    bus,
-    transcriptStore,
-    sessionId: session.sessionId,
-    prompt: "还能继续吗"
-  });
-
-  const resumedContent = await readFile(join(workspace, "tool-stall-resume-report.mjs"), "utf8");
-  assert.match(resumedContent, /app\.config\.json/);
-  assert.match(resumedResult.assistantText, /SelfMe:3000|tool-stall-resume-report\.mjs/i);
+  const content = await readFile(join(workspace, "tool-stall-resume-report.mjs"), "utf8");
+  assert.match(content, /app\.config\.json/);
+  assert.match(result.assistantText, /SelfMe:3000|tool-stall-resume-report\.mjs/i);
   assert.equal(
-    resumedResult.toolSummaries.some((summary) => summary.startsWith("app.config.json:1-4")),
-    false,
-    "repeated-tool-stall resume should not reread the earlier config source"
+    result.toolSummaries.filter((summary) => summary.startsWith("app.config.json:1-4")).length,
+    1,
+    "repeated-tool-stall auto-continuation should preserve the original config read and avoid rereading it"
   );
   assert.ok(
-    resumedResult.toolSummaries.some((summary) => summary.startsWith("tool-stall-resume-report.mjs:1-2")),
-    "repeated-tool-stall resume should continue directly into the pending file read"
+    result.toolSummaries.some((summary) => summary.startsWith("tool-stall-resume-report.mjs:1-2")),
+    "repeated-tool-stall auto-continuation should continue directly into the pending file read"
   );
   assert.ok(
-    resumedResult.toolSummaries.some((summary) => summary.startsWith("tool-stall-resume-report.mjs:1-1 · updated")),
-    "repeated-tool-stall resume should repair the pending file after reading it"
+    result.toolSummaries.some((summary) => summary.startsWith("tool-stall-resume-report.mjs:1-1 · updated")),
+    "repeated-tool-stall auto-continuation should repair the pending file after reading it"
   );
   assert.ok(
-    resumedResult.toolSummaries.some((summary) => summary.startsWith("node tool-stall-resume-report.mjs · completed")),
-    "repeated-tool-stall resume should finish the pending verification after the repair"
+    result.toolSummaries.some((summary) => summary.startsWith("node tool-stall-resume-report.mjs · completed")),
+    "repeated-tool-stall auto-continuation should finish the pending verification after the repair"
   );
 }
 
@@ -6274,9 +6237,9 @@ async function verifyResumeAfterRepeatedAssistantStall() {
 
       if (
         !input.content.startsWith("Original user request:")
-        && input.content.includes('The user replied "还能继续吗" and wants to continue the most recent unfinished task.')
+        && input.content.includes("The task stalled after repeated identical progress signals but the task context is still actionable.")
       ) {
-        assert.match(input.content, /Original task: Read app\.config\.json and fix assistant-stall-resume-report\.mjs/);
+        assert.match(input.content, /Latest stall kind: repeated identical assistant replies\./);
         assert.match(input.content, /Pending next step target: assistant-stall-resume-report\.mjs/);
         assert.match(input.content, /Latest tool in context: shell/);
         assert.match(input.content, /Latest tool summary in context: node assistant-stall-resume-report\.mjs · failed \(1\)/);
@@ -6291,7 +6254,7 @@ async function verifyResumeAfterRepeatedAssistantStall() {
       }
 
       if (
-        input.content.startsWith('Original user request: The user replied "还能继续吗" and wants to continue the most recent unfinished task.')
+        input.content.startsWith("Original user request: The task stalled after repeated identical progress signals but the task context is still actionable.")
       ) {
         const toolName = extractLine(input.content, "Tool:") ?? extractLine(input.content, "Latest tool:");
         const summary = extractLine(input.content, "Summary:") ?? extractLine(input.content, "Latest summary:") ?? "";
@@ -6353,45 +6316,32 @@ async function verifyResumeAfterRepeatedAssistantStall() {
     }));
   });
 
-  const failedResult = await runAgentTask({
+  const result = await runAgentTask({
     bus,
     transcriptStore,
     sessionId: session.sessionId,
-    prompt: originalPrompt,
-    expectedState: "failed"
+    prompt: originalPrompt
   });
 
-  assert.ok(
-    failedResult.runtimeErrors.some((message) => /Agent stalled after repeated identical assistant replies/.test(message)),
-    "expected repeated assistant stall before resume"
-  );
-
-  const resumedResult = await runAgentTask({
-    bus,
-    transcriptStore,
-    sessionId: session.sessionId,
-    prompt: "还能继续吗"
-  });
-
-  const resumedContent = await readFile(join(workspace, "assistant-stall-resume-report.mjs"), "utf8");
-  assert.match(resumedContent, /app\.config\.json/);
-  assert.match(resumedResult.assistantText, /SelfMe:3000|assistant-stall-resume-report\.mjs/i);
+  const content = await readFile(join(workspace, "assistant-stall-resume-report.mjs"), "utf8");
+  assert.match(content, /app\.config\.json/);
+  assert.match(result.assistantText, /SelfMe:3000|assistant-stall-resume-report\.mjs/i);
   assert.equal(
-    resumedResult.toolSummaries.some((summary) => summary.startsWith("app.config.json:1-4")),
-    false,
-    "repeated-assistant-stall resume should not reread the earlier config source"
+    result.toolSummaries.filter((summary) => summary.startsWith("app.config.json:1-4")).length,
+    1,
+    "repeated-assistant-stall auto-continuation should preserve the original config read and avoid rereading it"
   );
   assert.ok(
-    resumedResult.toolSummaries.some((summary) => summary.startsWith("assistant-stall-resume-report.mjs:1-2")),
-    "repeated-assistant-stall resume should continue directly into the pending file read"
+    result.toolSummaries.some((summary) => summary.startsWith("assistant-stall-resume-report.mjs:1-2")),
+    "repeated-assistant-stall auto-continuation should continue directly into the pending file read"
   );
   assert.ok(
-    resumedResult.toolSummaries.some((summary) => summary.startsWith("assistant-stall-resume-report.mjs:1-1 · updated")),
-    "repeated-assistant-stall resume should repair the pending file after reading it"
+    result.toolSummaries.some((summary) => summary.startsWith("assistant-stall-resume-report.mjs:1-1 · updated")),
+    "repeated-assistant-stall auto-continuation should repair the pending file after reading it"
   );
   assert.ok(
-    resumedResult.toolSummaries.some((summary) => summary.startsWith("node assistant-stall-resume-report.mjs · completed")),
-    "repeated-assistant-stall resume should finish the pending verification after the repair"
+    result.toolSummaries.some((summary) => summary.startsWith("node assistant-stall-resume-report.mjs · completed")),
+    "repeated-assistant-stall auto-continuation should finish the pending verification after the repair"
   );
 }
 

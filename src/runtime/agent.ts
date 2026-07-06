@@ -38,6 +38,7 @@ const ASSISTANT_PASS_MULTIPLIER = 4;
 const MAX_AUTO_STEP_LIMIT_CONTINUATIONS = 2;
 const MAX_AUTO_ASSISTANT_PASS_LIMIT_CONTINUATIONS = 1;
 const MAX_AUTO_TOOL_RECOVERY_CONTINUATIONS = 1;
+const MAX_AUTO_REPEATED_STALL_CONTINUATIONS = 1;
 const MAX_REPEATED_IDENTICAL_TOOL_RESULTS = 2;
 const MAX_REPEATED_IDENTICAL_ASSISTANT_MESSAGES = 2;
 const MAX_MALFORMED_TOOL_CALL_RETRIES = 1;
@@ -629,6 +630,8 @@ export class AgentRuntime {
     let autoStepLimitContinuationCount = 0;
     let autoAssistantPassContinuationCount = 0;
     let autoToolRecoveryContinuationCount = 0;
+    let autoRepeatedToolStallContinuationCount = 0;
+    let autoRepeatedAssistantStallContinuationCount = 0;
     const activeRun = this.startActiveRun(sessionId, responseTaskId);
     this.taskOriginalRequests.set(responseTaskId, originalRequest);
     this.taskKnownPaths.set(responseTaskId, new Set(extractWritableTaskPaths(originalRequest)));
@@ -810,6 +813,28 @@ export class AgentRuntime {
               nextPrompt: messageStep.nextPrompt,
               previousToolResult: lastToolResult
             });
+
+            if (
+              autoRepeatedAssistantStallContinuationCount < MAX_AUTO_REPEATED_STALL_CONTINUATIONS
+              && shouldAutoContinueAfterRepeatedStall(originalRequest, messageStep.nextPrompt, lastToolResult)
+            ) {
+              autoRepeatedAssistantStallContinuationCount += 1;
+              nextPrompt = buildRepeatedStallAutoContinuationPrompt({
+                originalRequest,
+                nextPrompt: messageStep.nextPrompt,
+                previousToolResult: lastToolResult,
+                stallKind: "repeated identical assistant replies"
+              });
+              repeatedAssistantMessageCount = 0;
+              repeatedAssistantLoopCount = 0;
+              lastAssistantMessageSignature = undefined;
+              lastAssistantLoopSignature = undefined;
+              malformedToolCallRetryCount = 0;
+              unknownToolRetryCount = 0;
+              invalidToolInputRetryCount = 0;
+              continue;
+            }
+
             throw new Error(buildRepeatedAssistantStallError(assistantPass.messageText));
           }
 
@@ -987,6 +1012,25 @@ export class AgentRuntime {
             nextPrompt: toolStep.nextPrompt,
             previousToolResult: lastToolResult
           });
+
+          if (
+            autoRepeatedToolStallContinuationCount < MAX_AUTO_REPEATED_STALL_CONTINUATIONS
+            && shouldAutoContinueAfterRepeatedStall(originalRequest, toolStep.nextPrompt, lastToolResult)
+          ) {
+            autoRepeatedToolStallContinuationCount += 1;
+            nextPrompt = buildRepeatedStallAutoContinuationPrompt({
+              originalRequest,
+              nextPrompt: toolStep.nextPrompt,
+              previousToolResult: lastToolResult,
+              stallKind: `repeated identical ${lastToolResult.toolName} results`
+            });
+            repeatedToolResultCount = 0;
+            malformedToolCallRetryCount = 0;
+            unknownToolRetryCount = 0;
+            invalidToolInputRetryCount = 0;
+            continue;
+          }
+
           throw new Error(buildRepeatedToolStallError(lastToolResult));
         }
 
@@ -7241,6 +7285,33 @@ function buildToolRecoveryAutoContinuationPrompt(input: {
   ].filter(Boolean).join("\n");
 }
 
+function buildRepeatedStallAutoContinuationPrompt(input: {
+  originalRequest: string;
+  nextPrompt: string;
+  previousToolResult?: {
+    toolName: string;
+    summary: string;
+  };
+  stallKind: string;
+}) {
+  const targetPath = extractPendingTargetPathFromContinuationPrompt(input.nextPrompt)
+    ?? derivePendingTargetPathFromContinuationContext({
+      originalRequest: input.originalRequest,
+      previousToolResult: input.previousToolResult
+    });
+
+  return [
+    "The task stalled after repeated identical progress signals but the task context is still actionable.",
+    `Latest stall kind: ${input.stallKind}.`,
+    "Continue the same task now instead of stopping or asking the user to continue.",
+    "Do not repeat the same stalled loop. Move directly onto the pending next step target and keep working until the original task is complete or truly blocked.",
+    targetPath ? `Pending next step target: ${targetPath}` : "",
+    input.previousToolResult ? `Latest tool in context: ${input.previousToolResult.toolName}` : "",
+    input.previousToolResult ? `Latest tool summary in context: ${input.previousToolResult.summary}` : "",
+    `Original task: ${input.originalRequest}`
+  ].filter(Boolean).join("\n");
+}
+
 function shouldAutoContinueAfterStepLimit(
   originalRequest: string,
   targetPath: string
@@ -7257,6 +7328,29 @@ function shouldAutoContinueAfterStepLimit(
 }
 
 function shouldAutoContinueAfterToolRecovery(
+  originalRequest: string,
+  nextPrompt: string,
+  previousToolResult?: {
+    toolName: string;
+    summary: string;
+    rawOutput?: string;
+    errorMessage?: string;
+  }
+) {
+  const pendingTargetPath = extractPendingTargetPathFromContinuationPrompt(nextPrompt)
+    ?? derivePendingTargetPathFromContinuationContext({
+      originalRequest,
+      previousToolResult
+    });
+
+  if (!pendingTargetPath) {
+    return false;
+  }
+
+  return shouldAutoContinueAfterStepLimit(originalRequest, pendingTargetPath);
+}
+
+function shouldAutoContinueAfterRepeatedStall(
   originalRequest: string,
   nextPrompt: string,
   previousToolResult?: {
