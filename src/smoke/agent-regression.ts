@@ -4047,6 +4047,7 @@ async function main() {
   await verifyResumeAfterToolStepLimitFailure();
   await verifyAutomaticContinuationAfterToolStepLimitBeforeEdit();
   await verifyAutomaticContinuationAfterToolStepLimitBeforeShell();
+  await verifyAutomaticContinuationAfterToolStepLimitBeforeWrappedShell();
   await verifyAutomaticContinuationAfterToolStepLimitDuringWholeProjectInspection();
   await verifyAutomaticContinuationAfterAssistantPassLimitFailure();
   await verifyDeniedLaterApprovalDoesNotRetrySameAction();
@@ -5162,6 +5163,203 @@ async function verifyAutomaticContinuationAfterToolStepLimitBeforeShell() {
     result.runtimeErrors.some((message) => message.includes("Agent stopped after 16 tool steps")),
     false,
     "automatic step-limit continuation should finish without surfacing the extended-budget hard stop"
+  );
+}
+
+async function verifyAutomaticContinuationAfterToolStepLimitBeforeWrappedShell() {
+  const root = await mkdtemp(join(tmpdir(), "selfme-agent-resume-step-limit-shell-wrapped-"));
+  const workspace = join(root, "workspace");
+  const transcriptPath = join(root, "transcript.jsonl");
+  const logsPath = join(root, "logs.jsonl");
+  const originalPrompt = "Repair existing status.mjs so it outputs the release label correctly.";
+  await mkdir(join(workspace, "node-todo", "views"), { recursive: true });
+  await mkdir(join(workspace, "config"), { recursive: true });
+
+  await writeFile(join(workspace, "catalog.txt"), "name=SelfMe\nchannel=release\nport=3000\n", "utf8");
+  await writeFile(join(workspace, "status.mjs"), 'console.log("pending");\n', "utf8");
+  await writeFile(join(workspace, "app.config.json"), '{\n  "name": "SelfMe",\n  "port": 3000\n}\n', "utf8");
+  await writeFile(join(workspace, "serve.mjs"), 'console.log("serve");\n', "utf8");
+  await writeFile(join(workspace, "report.mjs"), 'console.log("report");\n', "utf8");
+  await writeFile(join(workspace, "dashboard.mjs"), 'console.log("dashboard");\n', "utf8");
+  await writeFile(join(workspace, "smoke-a.mjs"), 'console.log("warmup");\n', "utf8");
+  await writeFile(join(workspace, "greet.mjs"), 'console.log("hello");\n', "utf8");
+  await writeFile(join(workspace, "node-todo", "app.js"), 'const PORT = 3000;\nconsole.log(PORT);\n', "utf8");
+  await writeFile(join(workspace, "node-todo", "package.json"), '{\n  "name": "node-todo"\n}\n', "utf8");
+  await writeFile(join(workspace, "node-todo", "verify-setup.mjs"), 'console.log("ready");\n', "utf8");
+  await writeFile(join(workspace, "node-todo", "views", "index.ejs"), '<input name="title" />\n', "utf8");
+  await writeFile(join(workspace, "config", "theme.json"), '{\n  "name": "SelfMe",\n  "env": "local"\n}\n', "utf8");
+  await writeFile(join(workspace, "config", "profile.json"), '{\n  "product": "SelfMe"\n}\n', "utf8");
+  await writeFile(join(workspace, "config", "runtime.json"), '{\n  "product": "SelfMe",\n  "stage": "dev"\n}\n', "utf8");
+
+  class StepLimitWrappedShellAutoContinueProvider implements ProviderClient {
+    readonly name = "step-limit-shell-wrapped-auto-continue-provider";
+
+    async *streamResponse(input: ProviderStreamInput): AsyncIterable<ProviderStreamChunk> {
+      if (input.content === originalPrompt) {
+        yield {
+          delta: toolCall("files", {
+            path: "status.mjs",
+            startLine: 1,
+            endLine: 20
+          })
+        };
+        return;
+      }
+
+      if (input.content.startsWith(`Original user request: ${originalPrompt}`)) {
+        const toolName = extractLine(input.content, "Tool:") ?? extractLine(input.content, "Latest tool:");
+        const summary = extractLine(input.content, "Summary:") ?? extractLine(input.content, "Latest summary:") ?? "";
+
+        if (toolName === "files" && /status\.mjs:1-1/.test(summary)) {
+          yield {
+            delta: toolCall("files", {
+              path: "catalog.txt",
+              startLine: 1,
+              endLine: 3
+            })
+          };
+          return;
+        }
+
+        if (toolName === "files" && /catalog\.txt/.test(summary)) {
+          yield {
+            delta: toolCall("edit", {
+              path: "status.mjs",
+              startLine: 1,
+              endLine: 1,
+              replacement: 'import { readFileSync } from "node:fs";\nconst port = readFileSync("catalog.txt", "utf8").match(/^port=(\\d+)/m)?.[1] ?? "3000";\nconsole.log(`SelfMe release ${port}`);\n'
+            })
+          };
+          return;
+        }
+
+        const orderedReads = [
+          "app.config.json",
+          "serve.mjs",
+          "report.mjs",
+          "dashboard.mjs",
+          "smoke-a.mjs",
+          "node-todo/app.js",
+          "node-todo/views/index.ejs",
+          "node-todo/package.json",
+          "node-todo/verify-setup.mjs",
+          "config/theme.json",
+          "config/profile.json",
+          "config/runtime.json",
+          "greet.mjs"
+        ];
+
+        if (toolName === "edit" && /status\.mjs:1-1 · updated/.test(summary)) {
+          yield {
+            delta: toolCall("files", {
+              path: orderedReads[0],
+              startLine: 1,
+              endLine: 20
+            })
+          };
+          return;
+        }
+
+        if (toolName === "files") {
+          const currentIndex = orderedReads.findIndex((path) => summary.startsWith(`${path}:`));
+
+          if (currentIndex >= 0 && currentIndex < orderedReads.length - 1) {
+            yield {
+              delta: toolCall("files", {
+                path: orderedReads[currentIndex + 1],
+                startLine: 1,
+                endLine: 20
+              })
+            };
+            return;
+          }
+
+          if (currentIndex === orderedReads.length - 1) {
+            yield {
+              delta: toolCall("shell", {
+                command: "sh -lc 'node status.mjs'"
+              })
+            };
+            return;
+          }
+        }
+
+        if (toolName === "shell" && /sh -lc 'node status\.mjs'/.test(summary)) {
+          yield { delta: "status.mjs now prints SelfMe release 3000." };
+          return;
+        }
+      }
+
+      if (
+        !input.content.startsWith("Original user request:")
+        && input.content.includes("The current task hit the per-slice tool budget but still has unfinished work.")
+      ) {
+        assert.match(input.content, /Original task: Repair existing status\.mjs so it outputs the release label correctly\./);
+        assert.match(input.content, /Pending next step target: status\.mjs/);
+        assert.match(input.content, /Latest tool in context: files/);
+        assert.match(input.content, /Latest tool summary in context: greet\.mjs:1-1/);
+        yield {
+          delta: toolCall("shell", {
+            command: "sh -lc 'node status.mjs'"
+          })
+        };
+        return;
+      }
+
+      if (
+        input.content.startsWith("Original user request: The current task hit the per-slice tool budget but still has unfinished work.")
+      ) {
+        const toolName = extractLine(input.content, "Tool:") ?? extractLine(input.content, "Latest tool:");
+        const summary = extractLine(input.content, "Summary:") ?? extractLine(input.content, "Latest summary:") ?? "";
+
+        if (toolName === "shell" && /sh -lc 'node status\.mjs'/.test(summary)) {
+          yield { delta: "status.mjs now prints SelfMe release 3000." };
+          return;
+        }
+      }
+
+      yield { delta: "ok" };
+    }
+  }
+
+  const bus = new EventBus();
+  const transcriptStore = new TranscriptStore(transcriptPath);
+  const logStore = new LogStore(logsPath);
+  await transcriptStore.ensureInitialized();
+  await logStore.ensureInitialized();
+
+  const session = createDefaultSessionRecord(workspace, VERSION);
+  session.model = "regression-stub";
+
+  const runtime = new AgentRuntime({
+    bus,
+    provider: new StepLimitWrappedShellAutoContinueProvider(),
+    tools: new InMemoryToolRegistry(),
+    session,
+    transcriptStore,
+    logStore
+  });
+  await runtime.start();
+
+  const result = await runAgentTask({
+    bus,
+    transcriptStore,
+    sessionId: session.sessionId,
+    prompt: originalPrompt
+  });
+
+  const resumedContent = await readFile(join(workspace, "status.mjs"), "utf8");
+  assert.match(resumedContent, /SelfMe release/);
+  assert.match(result.assistantText, /status\.mjs|SelfMe release 3000/i);
+  assert.equal(
+    result.toolSummaries.filter((summary) => summary.startsWith("sh -lc 'node status.mjs' · completed")).length,
+    1,
+    "automatic step-limit continuation should execute the wrapped pending shell verification exactly once"
+  );
+  assert.equal(
+    result.runtimeErrors.some((message) => message.includes("Agent stopped after 16 tool steps")),
+    false,
+    "automatic step-limit continuation should finish wrapped shell verification without surfacing the extended-budget hard stop"
   );
 }
 

@@ -3649,7 +3649,7 @@ function extractReadmeCommandEntryPaths(content: string) {
   return candidates;
 }
 
-function extractScriptCommandEntryPath(command: string) {
+function extractScriptCommandEntryPath(command: string): string | undefined {
   const tokens = tokenizeShellLikeCommand(command);
   const runtimeEntry = extractScriptPathFromRuntimeTokens(tokens);
 
@@ -3659,6 +3659,14 @@ function extractScriptCommandEntryPath(command: string) {
 
   for (const token of tokens) {
     const normalizedToken = stripWrappingQuotes(token);
+
+    if (normalizedToken.includes(" ")) {
+      const nestedEntry = extractScriptCommandEntryPath(normalizedToken);
+
+      if (nestedEntry) {
+        return nestedEntry;
+      }
+    }
 
     if (looksLikeScriptPathCandidate(normalizedToken)) {
       return normalizedToken;
@@ -3919,10 +3927,11 @@ function extractShellCommandFromSummary(summary: string) {
 }
 
 function extractPrimaryPathFromShellCommand(command: string) {
-  const match = command.match(
+  const entryCandidate = extractScriptCommandEntryPath(command);
+  const fallbackMatch = command.match(
     /\b((?:src|config|apps?|packages?|docs)?\/?[A-Za-z0-9_./-]+\.(?:tsx|json|mjs|cjs|ejs|html|css|js|ts|txt|md|csv))\b/
   );
-  const candidate = match?.[1]?.trim();
+  const candidate = entryCandidate?.trim() || fallbackMatch?.[1]?.trim();
 
   if (!candidate) {
     return undefined;
