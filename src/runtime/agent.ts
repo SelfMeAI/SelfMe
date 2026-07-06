@@ -6590,7 +6590,7 @@ function getAgentToolStepBudget(content: string) {
 
 function hasMutationIntent(content: string) {
   return /\b(create|write|edit|fix|repair|update|change|modify|improve|optimize|refactor|rewrite|rebuild)\b/i.test(content)
-    || /(创建|写入|编辑|修复|更新|修改|优化|改进|重构|重写|重做|改成|改为|改下|改一下|换成)/u.test(content);
+    || /(创建|写入|编辑|修复|更新|修改|优化|改进|重构|重写|重做|改成|改为|改下|改一下|换成|处理下|处理一下|搞下|搞一下|弄下|弄一下|整下|整一下|搞成|弄成|整成)/u.test(content);
 }
 
 function looksLikeExtendedCodingTask(content: string) {
@@ -6667,6 +6667,10 @@ function looksLikeActionableTaskRequest(content: string) {
     return true;
   }
 
+  if (hasMutationIntent(taskContent)) {
+    return true;
+  }
+
   if (/\b(read|write|edit|fix|repair|create|inspect|run|running|verify|check|list|update|change|modify|improve|optimize|refactor)\b/i.test(taskContent)) {
     return true;
   }
@@ -6675,7 +6679,7 @@ function looksLikeActionableTaskRequest(content: string) {
     return true;
   }
 
-  if (/(读取|写入|编辑|修复|创建|检查|运行|验证|列出|修改|更新|优化|改进|重构|改成|改为|改下|改一下|换成)/u.test(taskContent)) {
+  if (/(读取|写入|编辑|修复|创建|检查|运行|验证|列出|修改|更新|优化|改进|重构|改成|改为|改下|改一下|换成|处理下|处理一下|搞下|搞一下|弄下|弄一下|整下|整一下|搞成|弄成|整成)/u.test(taskContent)) {
     return true;
   }
 

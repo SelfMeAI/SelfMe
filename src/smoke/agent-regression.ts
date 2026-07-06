@@ -3640,6 +3640,21 @@ async function main() {
   );
   await writeFile(join(workspace, "greet.mjs"), 'console.log("Hello");\n', "utf8");
 
+  console.log("task: start tool-grounded colloquial chinese mutation without standard change verbs");
+  const colloquialChineseMutationResult = await runAgentTask({
+    bus,
+    transcriptStore,
+    sessionId: session.sessionId,
+    prompt: '把 greet.mjs 搞一下，让它输出 "Casual"。你自己直接弄完。'
+  });
+
+  assert.match(colloquialChineseMutationResult.assistantText, /casual|greet\.mjs|已完成/i);
+  assert.ok(
+    colloquialChineseMutationResult.toolSummaries.some((summary) => summary.startsWith("greet.mjs:1-1 · updated")),
+    "expected colloquial Chinese mutation wording to execute a real edit instead of stopping at a non-actionable reply"
+  );
+  await writeFile(join(workspace, "greet.mjs"), 'console.log("Hello");\n', "utf8");
+
   console.log("task: start tool-grounded workspace inspection after an initial fabricated summary");
   const fabricatedWorkspaceSummaryRecoveryResult = await runAgentTask({
     bus,
@@ -26802,6 +26817,10 @@ function resolveProviderResponse(content: string) {
     return "我会先读取 greet.mjs，然后把输出改成 Natural。";
   }
 
+  if (content.startsWith('把 greet.mjs 搞一下，让它输出 "Casual"。你自己直接弄完。')) {
+    return "我先看看怎么弄。";
+  }
+
   if (content.startsWith("当前目录有哪些文件？如果你先概括，也要恢复并实际查看。")) {
     return "当前目录里应该就是一些脚本、配置和项目文件。";
   }
@@ -31468,6 +31487,21 @@ function resolveProviderResponse(content: string) {
 
     assert.match(content, /Summary: greet\.mjs:1-1 · updated/);
     return '已把 greet.mjs 改成输出 "Natural"。';
+  }
+
+  if (content.startsWith('Original user request: 把 greet.mjs 搞一下，让它输出 "Casual"。你自己直接弄完。')) {
+    if (!/Tool:/.test(content)) {
+      assert.match(content, /For actionable requests, do the work now instead of describing what you will do\./);
+      return toolCall("edit", {
+        path: "greet.mjs",
+        startLine: 1,
+        endLine: 1,
+        replacement: 'console.log("Casual");'
+      });
+    }
+
+    assert.match(content, /Summary: greet\.mjs:1-1 · updated/);
+    return '已把 greet.mjs 搞好，现在输出 "Casual"。';
   }
 
   if (content.startsWith("Original user request: 当前目录有哪些文件？如果你先概括，也要恢复并实际查看。")) {
