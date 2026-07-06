@@ -7168,7 +7168,9 @@ function shouldAutoContinueAfterStepLimit(
     return false;
   }
 
-  return hasMutationIntent(taskContent);
+  return hasMutationIntent(taskContent)
+    || looksLikeProjectInspectionRequest(taskContent)
+    || looksLikeWholeProjectInspectionRequest(taskContent);
 }
 
 function looksLikePathScopedCompletionForMultiTargetRequest(

@@ -3959,6 +3959,7 @@ async function main() {
 
   await verifyResumeAfterToolStepLimitFailure();
   await verifyAutomaticContinuationAfterToolStepLimitBeforeEdit();
+  await verifyAutomaticContinuationAfterToolStepLimitDuringWholeProjectInspection();
   await verifyAutomaticContinuationAfterAssistantPassLimitFailure();
   await verifyDeniedLaterApprovalDoesNotRetrySameAction();
   await verifyResumeAfterDeniedLaterApprovalStaysBlocked();
@@ -4921,6 +4922,171 @@ async function verifyAutomaticContinuationAfterToolStepLimitBeforeEdit() {
     result.runtimeErrors.some((message) => message.includes("Agent stopped after 8 tool steps")),
     false,
     "automatic step-limit continuation should finish without surfacing the old hard stop"
+  );
+}
+
+async function verifyAutomaticContinuationAfterToolStepLimitDuringWholeProjectInspection() {
+  const root = await mkdtemp(join(tmpdir(), "selfme-agent-whole-project-step-limit-auto-"));
+  const workspace = join(root, "workspace");
+  const transcriptPath = join(root, "transcript.jsonl");
+  const logsPath = join(root, "logs.jsonl");
+  await mkdir(join(workspace, "demo-app", "src"), { recursive: true });
+
+  await writeFile(
+    join(workspace, "demo-app", "package.json"),
+    '{\n  "name": "demo-app",\n  "version": "1.0.0"\n}\n',
+    "utf8"
+  );
+
+  for (let index = 1; index <= 15; index += 1) {
+    await writeFile(
+      join(workspace, "demo-app", "src", `file-${index}.js`),
+      `export const file${index} = ${index};\n`,
+      "utf8"
+    );
+  }
+
+  class WholeProjectStepLimitAutoContinueProvider implements ProviderClient {
+    readonly name = "whole-project-step-limit-auto-continue-provider";
+
+    async *streamResponse(input: ProviderStreamInput): AsyncIterable<ProviderStreamChunk> {
+      const originalPrompt = "帮我看看整个项目";
+
+      if (input.content === originalPrompt) {
+        yield {
+          delta: toolCall("shell", {
+            command: "pwd && ls -la && find demo-app -maxdepth 2 -type f | sort"
+          })
+        };
+        return;
+      }
+
+      if (input.content.startsWith(`Original user request: ${originalPrompt}`)) {
+        const toolName = extractLine(input.content, "Tool:") ?? extractLine(input.content, "Latest tool:");
+        const summary = extractLine(input.content, "Summary:") ?? extractLine(input.content, "Latest summary:") ?? "";
+
+        if (toolName === "shell") {
+          yield {
+            delta: toolCall("files", {
+              path: "demo-app/package.json",
+              startLine: 1,
+              endLine: 20
+            })
+          };
+          return;
+        }
+
+        if (toolName === "files" && /demo-app\/package\.json/.test(summary)) {
+          yield {
+            delta: toolCall("files", {
+              path: "demo-app/src/file-1.js",
+              startLine: 1,
+              endLine: 20
+            })
+          };
+          return;
+        }
+
+        const fileMatch = summary.match(/^demo-app\/src\/file-(\d+)\.js:1-1$/);
+
+        if (toolName === "files" && fileMatch) {
+          const nextIndex = Number(fileMatch[1]) + 1;
+
+          if (nextIndex <= 15) {
+            yield {
+              delta: toolCall("files", {
+                path: `demo-app/src/file-${nextIndex}.js`,
+                startLine: 1,
+                endLine: 20
+              })
+            };
+            return;
+          }
+
+          yield { delta: "I finished the whole-project inspection through demo-app/src/file-15.js." };
+          return;
+        }
+      }
+
+      if (
+        !input.content.startsWith("Original user request:")
+        && input.content.includes("The current task hit the per-slice tool budget but still has unfinished work.")
+      ) {
+        assert.match(input.content, /Pending next step target: demo-app\/src\/file-15\.js/);
+        assert.match(input.content, /Latest tool in context: files/);
+        assert.match(input.content, /Latest tool summary in context: demo-app\/src\/file-14\.js:1-1/);
+        yield {
+          delta: toolCall("files", {
+            path: "demo-app/src/file-15.js",
+            startLine: 1,
+            endLine: 20
+          })
+        };
+        return;
+      }
+
+      if (
+        input.content.startsWith("Original user request: The current task hit the per-slice tool budget but still has unfinished work.")
+      ) {
+        const toolName = extractLine(input.content, "Tool:") ?? extractLine(input.content, "Latest tool:");
+        const summary = extractLine(input.content, "Summary:") ?? extractLine(input.content, "Latest summary:") ?? "";
+
+        if (toolName === "files" && /demo-app\/src\/file-15\.js/.test(summary)) {
+          yield { delta: "I finished the whole-project inspection through demo-app/src/file-15.js." };
+          return;
+        }
+      }
+
+      yield { delta: "ok" };
+    }
+  }
+
+  const bus = new EventBus();
+  const transcriptStore = new TranscriptStore(transcriptPath);
+  const logStore = new LogStore(logsPath);
+  await transcriptStore.ensureInitialized();
+  await logStore.ensureInitialized();
+
+  const session = createDefaultSessionRecord(workspace, VERSION);
+  session.model = "regression-stub";
+
+  const runtime = new AgentRuntime({
+    bus,
+    provider: new WholeProjectStepLimitAutoContinueProvider(),
+    tools: new InMemoryToolRegistry(),
+    session,
+    transcriptStore,
+    logStore
+  });
+  await runtime.start();
+
+  const result = await runAgentTask({
+    bus,
+    transcriptStore,
+    sessionId: session.sessionId,
+    prompt: "帮我看看整个项目"
+  });
+
+  assert.match(result.assistantText, /file-15\.js/);
+  assert.equal(
+    result.toolSummaries.some((summary) => summary.startsWith("demo-app/src/file-1.js:1-1")),
+    true,
+    "whole-project auto-continuation should inspect the early implementation files"
+  );
+  assert.equal(
+    result.toolSummaries.filter((summary) => summary.startsWith("demo-app/src/file-14.js:1-1")).length,
+    1,
+    "whole-project auto-continuation should preserve the latest pre-limit file read once"
+  );
+  assert.equal(
+    result.toolSummaries.filter((summary) => summary.startsWith("demo-app/src/file-15.js:1-1")).length,
+    1,
+    "whole-project auto-continuation should continue directly with the pending fifteenth file"
+  );
+  assert.equal(
+    result.runtimeErrors.some((message) => message.includes("Agent stopped after 16 tool steps")),
+    false,
+    "whole-project auto-continuation should finish without surfacing the old step-limit hard stop"
   );
 }
 
