@@ -4084,6 +4084,7 @@ async function main() {
   await verifyResumeAfterRepeatedToolStall();
   await verifyExplicitProjectInspectionContinuesFromDirectoryOnlyListing();
   await verifyNestedProjectInspectionContinuesFromSparseRootOnlyListing();
+  await verifyNestedProjectImprovementContinuesFromSparseRootOnlyListing();
   await verifyBareCompletionReplyStillTriggersVerification();
   await verifyRepeatedIdenticalAssistantRepliesAbortAsStalled();
   await verifyResumeAfterRepeatedAssistantStall();
@@ -5077,6 +5078,154 @@ async function verifyNestedProjectInspectionContinuesFromSparseRootOnlyListing()
     result.toolSummaries.some((summary) => summary.startsWith("packages/aaa-workbench/package.json:1-4")),
     false,
     "expected nested explicit project inspection to avoid drifting into the sibling decoy project"
+  );
+}
+
+async function verifyNestedProjectImprovementContinuesFromSparseRootOnlyListing() {
+  const root = await mkdtemp(join(tmpdir(), "selfme-agent-sparse-root-only-nested-project-improvement-"));
+  const workspace = join(root, "workspace");
+  const transcriptPath = join(root, "transcript.jsonl");
+  const logsPath = join(root, "logs.jsonl");
+  const originalPrompt = "看看 packages/demo-core 项目，然后优化它。你自己直接搞完。";
+  await mkdir(join(workspace, "packages", "demo-core"), { recursive: true });
+  await mkdir(join(workspace, "packages", "aaa-workbench"), { recursive: true });
+  await mkdir(join(workspace, "docs"), { recursive: true });
+
+  await writeFile(join(workspace, "docs", "plan.md"), "# plan\n", "utf8");
+  await writeFile(
+    join(workspace, "packages", "demo-core", "package.json"),
+    '{\n  "name": "demo-core",\n  "version": "1.0.0",\n  "main": "app.js"\n}\n',
+    "utf8"
+  );
+  await writeFile(
+    join(workspace, "packages", "demo-core", "app.js"),
+    'const PORT = 3000;\nconsole.log(PORT);\n',
+    "utf8"
+  );
+  await writeFile(
+    join(workspace, "packages", "aaa-workbench", "package.json"),
+    '{\n  "name": "aaa-workbench",\n  "version": "1.0.0",\n  "main": "server.js"\n}\n',
+    "utf8"
+  );
+  await writeFile(
+    join(workspace, "packages", "aaa-workbench", "server.js"),
+    'console.log("decoy");\n',
+    "utf8"
+  );
+
+  class SparseRootOnlyNestedProjectImprovementProvider implements ProviderClient {
+    readonly name = "sparse-root-only-nested-project-improvement-provider";
+
+    async *streamResponse(input: ProviderStreamInput): AsyncIterable<ProviderStreamChunk> {
+      if (input.content === originalPrompt) {
+        yield {
+          delta: toolCall("shell", {
+            command: "pwd && ls -la"
+          })
+        };
+        return;
+      }
+
+      if (input.content.startsWith(`Original user request: ${originalPrompt}`)) {
+        const toolName = extractLine(input.content, "Tool:") ?? extractLine(input.content, "Latest tool:");
+        const summary = extractLine(input.content, "Summary:") ?? extractLine(input.content, "Latest summary:") ?? "";
+
+        if (toolName === "shell" && /pwd && ls -la/.test(summary)) {
+          assert.match(input.content, /Likely project entry: packages\/demo-core\/package\.json/);
+          assert.doesNotMatch(input.content, /Likely project entry: packages\/aaa-workbench\/package\.json/);
+          yield {
+            delta: toolCall("files", {
+              path: "packages/demo-core/package.json",
+              startLine: 1,
+              endLine: 20
+            })
+          };
+          return;
+        }
+
+        if (toolName === "files" && /packages\/demo-core\/package\.json/.test(summary)) {
+          assert.match(input.content, /You are in the middle of a project improvement task\./);
+          yield {
+            delta: toolCall("files", {
+              path: "packages/demo-core/app.js",
+              startLine: 1,
+              endLine: 20
+            })
+          };
+          return;
+        }
+
+        if (toolName === "files" && /packages\/demo-core\/app\.js/.test(summary)) {
+          yield {
+            delta: toolCall("edit", {
+              path: "packages/demo-core/app.js",
+              startLine: 1,
+              endLine: 1,
+              replacement: 'const PORT = Number(process.env.PORT || 3000);\nconsole.log(PORT);\n'
+            })
+          };
+          return;
+        }
+
+        if (toolName === "edit" && /packages\/demo-core\/app\.js/.test(summary)) {
+          yield { delta: "我已经直接把 packages/demo-core/app.js 的端口配置改成了 process.env.PORT。" };
+          return;
+        }
+      }
+
+      yield { delta: "ok" };
+    }
+  }
+
+  const bus = new EventBus();
+  const transcriptStore = new TranscriptStore(transcriptPath);
+  const logStore = new LogStore(logsPath);
+  await transcriptStore.ensureInitialized();
+  await logStore.ensureInitialized();
+
+  const session = createDefaultSessionRecord(workspace, VERSION);
+  session.model = "regression-stub";
+
+  const runtime = new AgentRuntime({
+    bus,
+    provider: new SparseRootOnlyNestedProjectImprovementProvider(),
+    tools: new InMemoryToolRegistry(),
+    session,
+    transcriptStore,
+    logStore
+  });
+  await runtime.start();
+
+  const result = await runAgentTask({
+    bus,
+    transcriptStore,
+    sessionId: session.sessionId,
+    prompt: originalPrompt
+  });
+
+  const content = await readFile(join(workspace, "packages", "demo-core", "app.js"), "utf8");
+  assert.equal(content, 'const PORT = Number(process.env.PORT || 3000);\nconsole.log(PORT);\n');
+  assert.match(result.assistantText, /packages\/demo-core\/app\.js|process\.env\.PORT/i);
+  assert.ok(
+    result.toolSummaries.some((summary) => summary.startsWith("pwd && ls -la · completed")),
+    "expected nested explicit project improvement to start from a sparse root-only listing"
+  );
+  assert.ok(
+    result.toolSummaries.some((summary) => summary.startsWith("packages/demo-core/package.json:1-4")),
+    "expected nested explicit project improvement to infer the named nested project from the sparse root-only listing"
+  );
+  assert.ok(
+    result.toolSummaries.some((summary) => summary.startsWith("packages/demo-core/app.js:1-2")),
+    "expected nested explicit project improvement to continue into the nested project's implementation file"
+  );
+  assert.ok(
+    result.toolSummaries.some((summary) => summary.startsWith("packages/demo-core/app.js:1-1 · updated")),
+    "expected nested explicit project improvement to edit the intended nested project implementation file"
+  );
+  assert.equal(
+    result.toolSummaries.some((summary) => summary.startsWith("packages/aaa-workbench/package.json:1-4")),
+    false,
+    "expected nested explicit project improvement to avoid drifting into the sibling decoy project"
   );
 }
 
