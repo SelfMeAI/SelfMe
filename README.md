@@ -1,6 +1,6 @@
 # SelfMe
 
-Local-first agent CLI for real terminal work.
+Terminal agent CLI for real work in your workspace.
 
 SelfMe is a TypeScript + Node.js agent runtime focused on one surface only: the command line. It is being built to stay on task, survive interruptions, respect approvals, use real tools, and keep improving through regression pressure instead of demo-only patches.
 
@@ -10,7 +10,7 @@ SelfMe is still under active runtime development.
 
 What is already real:
 
-- terminal-first CLI workflow
+- terminal-native CLI workflow
 - file, write, edit, and shell tools
 - approval-gated risky actions
 - resumable task loop
@@ -26,10 +26,10 @@ If you are reading this from GitHub, treat the repository as a serious WIP basel
 
 ## At A Glance
 
-- Local CLI only
+- Runs directly in your terminal
 - TypeScript + Node.js runtime
 - File and shell tools built in
-- OpenAI-compatible, Anthropic-compatible, and local provider support
+- OpenAI-compatible, Anthropic-compatible, and self-hosted `local` provider support
 - Explicit approvals for risky actions
 - Resume and recovery oriented task loop
 - Regression suite treated as core product infrastructure
@@ -53,7 +53,7 @@ SelfMe is intentionally narrow.
 In scope:
 
 - a strong terminal-native agent experience
-- reliable local tool execution
+- reliable workspace tool execution
 - resumable multi-step task handling
 - clear storage, config, and approval behavior
 
@@ -89,10 +89,10 @@ Out of scope for the current product:
 
 ### Storage
 
-- Workspace-isolated settings and runtime state
+- Workspace-scoped settings and runtime state
 - Transcript persistence
 - Tool log persistence
-- Startup migration from older workspace-local state
+- Startup migration from older workspace `.selfme` state
 
 ## Quick Start
 
@@ -189,7 +189,7 @@ On startup, SelfMe will:
 - warn if workspace `.selfme` is tracked by git
 - warn if workspace `.selfme` is not ignored by git
 
-The goal is simple: local keys and runtime artifacts should not leak into the repository by accident.
+The goal is simple: keys and runtime artifacts should not leak into the repository by accident.
 
 ## Built-In Commands
 
@@ -235,7 +235,7 @@ The goal is not to patch isolated demos. The goal is to harden the runtime.
 src/
   app/        bootstrap, lifecycle, event bus
   editor/     input buffer, multiline composition, cursor handling
-  providers/  local / openai / anthropic integrations
+  providers/  `local` / openai / anthropic integrations
   runtime/    agent runtime, task intent, context, compaction, commands
   smoke/      regression coverage for runtime behavior
   storage/    settings, transcripts, tool logs
