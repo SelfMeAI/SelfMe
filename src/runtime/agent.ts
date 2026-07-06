@@ -7156,7 +7156,19 @@ function derivePendingNextTargetFromLatestToolContext(input: {
 }
 
 function extractPendingTargetPathFromToolRequest(toolName: string, toolInput: unknown) {
-  if ((toolName !== "files" && toolName !== "edit" && toolName !== "write") || !toolInput || typeof toolInput !== "object") {
+  if (!toolInput || typeof toolInput !== "object") {
+    return undefined;
+  }
+
+  if (toolName === "shell") {
+    const command = "command" in toolInput && typeof toolInput.command === "string"
+      ? toolInput.command
+      : undefined;
+
+    return command ? extractPrimaryPathFromShellCommand(command) : undefined;
+  }
+
+  if (toolName !== "files" && toolName !== "edit" && toolName !== "write") {
     return undefined;
   }
 
