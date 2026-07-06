@@ -6882,6 +6882,20 @@ function looksLikeMultiTargetMutationTask(content: string) {
   return extractExplicitRequestedMutationTargets(taskContent).length >= 2;
 }
 
+function looksLikeMultiTargetInspectionTask(content: string) {
+  const taskContent = extractEmbeddedTaskContent(content);
+
+  if (looksLikeDiscussionRequest(taskContent) || hasMutationIntent(taskContent)) {
+    return false;
+  }
+
+  return extractExplicitFileTargets(taskContent).length >= 3
+    && (
+      /\b(read|inspect|check|review|look at|show)\b/i.test(taskContent)
+      || /(读取|检查|查看|看看|审查|展示)/u.test(taskContent)
+    );
+}
+
 function looksLikeExplicitFileContentQuestion(content: string) {
   const taskContent = extractEmbeddedTaskContent(content);
   const targets = extractExplicitFileTargets(taskContent);
@@ -7323,6 +7337,7 @@ function shouldAutoContinueAfterStepLimit(
   }
 
   return hasMutationIntent(taskContent)
+    || looksLikeMultiTargetInspectionTask(taskContent)
     || looksLikeProjectInspectionRequest(taskContent)
     || looksLikeWholeProjectInspectionRequest(taskContent);
 }

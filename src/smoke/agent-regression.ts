@@ -3897,15 +3897,10 @@ async function main() {
     bus,
     transcriptStore,
     sessionId: session.sessionId,
-    prompt: "Read app.config.json, greet.mjs, report.mjs, serve.mjs, dashboard.mjs, status.mjs, smoke-a.mjs, node-todo/app.js, and node-todo/views/index.ejs, then answer SHOULD-NOT-HAPPEN.",
-    expectedState: "failed"
+    prompt: "Read app.config.json, greet.mjs, report.mjs, serve.mjs, dashboard.mjs, status.mjs, smoke-a.mjs, node-todo/app.js, and node-todo/views/index.ejs, then answer SHOULD-NOT-HAPPEN."
   });
 
-  assert.equal(nineToolStepResult.assistantText, "");
-  assert.ok(
-    nineToolStepResult.runtimeErrors.some((message) => message.includes("Agent stopped after 8 tool steps")),
-    "expected deterministic step-limit runtime error"
-  );
+  assert.equal(nineToolStepResult.assistantText, "SHOULD-NOT-HAPPEN");
   assert.equal(
     nineToolStepResult.toolSummaries.filter((summary) =>
       summary.startsWith("app.config.json:")
@@ -3920,9 +3915,14 @@ async function main() {
     8
   );
   assert.equal(
-    nineToolStepResult.toolSummaries.some((summary) => summary.startsWith("node-todo/views/index.ejs:")),
+    nineToolStepResult.toolSummaries.filter((summary) => summary.startsWith("node-todo/views/index.ejs:")).length,
+    1,
+    "automatic step-limit continuation should execute the pending ninth read exactly once"
+  );
+  assert.equal(
+    nineToolStepResult.runtimeErrors.some((message) => message.includes("Agent stopped after 8 tool steps")),
     false,
-    "expected ninth tool request to stop before execution"
+    "automatic step-limit continuation should no longer surface the old ninth-step hard stop"
   );
 
   await verifyResumeAfterToolStepLimitFailure();
@@ -4590,7 +4590,7 @@ async function verifyResumeAfterToolStepLimitFailure() {
 
       if (
         !input.content.startsWith("Original user request:")
-        && input.content.includes('The user replied "还能继续吗" and wants to continue the most recent unfinished task.')
+        && input.content.includes("The current task hit the per-slice tool budget but still has unfinished work.")
       ) {
         assert.match(input.content, /Original task: Read alpha-1\.txt, alpha-2\.txt, alpha-3\.txt, alpha-4\.txt, alpha-5\.txt, alpha-6\.txt, alpha-7\.txt, alpha-8\.txt, and alpha-9\.txt, then finish\./);
         assert.match(input.content, /Pending next step target: alpha-9\.txt/);
@@ -4607,7 +4607,7 @@ async function verifyResumeAfterToolStepLimitFailure() {
       }
 
       if (
-        input.content.startsWith('Original user request: The user replied "还能继续吗" and wants to continue the most recent unfinished task.')
+        input.content.startsWith("Original user request: The current task hit the per-slice tool budget but still has unfinished work.")
       ) {
         const toolName = extractLine(input.content, "Tool:") ?? extractLine(input.content, "Latest tool:");
         const summary = extractLine(input.content, "Summary:") ?? extractLine(input.content, "Latest summary:") ?? "";
@@ -4643,47 +4643,33 @@ async function verifyResumeAfterToolStepLimitFailure() {
   });
   await runtime.start();
 
-  const failedResult = await runAgentTask({
+  const result = await runAgentTask({
     bus,
     transcriptStore,
     sessionId: session.sessionId,
-    prompt: originalPrompt,
-    expectedState: "failed"
+    prompt: originalPrompt
   });
 
-  assert.equal(failedResult.assistantText, "");
-  assert.ok(
-    failedResult.runtimeErrors.some((message) => message.includes("Agent stopped after 8 tool steps")),
-    "expected a deterministic step-limit failure before resume"
-  );
+  assert.match(result.assistantText, /step-limit resume handoff|alpha-9\.txt/i);
   assert.equal(
-    failedResult.toolSummaries.some((summary) => summary.startsWith("alpha-9.txt:1-1")),
-    false,
-    "step-limit failure should stop before the ninth file read executes"
-  );
-
-  const resumedResult = await runAgentTask({
-    bus,
-    transcriptStore,
-    sessionId: session.sessionId,
-    prompt: "还能继续吗"
-  });
-
-  assert.match(resumedResult.assistantText, /step-limit resume handoff|alpha-9\.txt/i);
-  assert.equal(
-    resumedResult.toolSummaries.some((summary) => summary.startsWith("alpha-1.txt:1-1")),
-    false,
-    "step-limit resume should not reread the earliest files"
-  );
-  assert.equal(
-    resumedResult.toolSummaries.some((summary) => summary.startsWith("alpha-8.txt:1-1")),
-    false,
-    "step-limit resume should not reread the latest completed file"
-  );
-  assert.equal(
-    resumedResult.toolSummaries.filter((summary) => summary.startsWith("alpha-9.txt:1-1")).length,
+    result.toolSummaries.filter((summary) => summary.startsWith("alpha-1.txt:1-1")).length,
     1,
-    "step-limit resume should execute only the pending ninth read"
+    "automatic step-limit continuation should preserve the original earliest read without restarting it"
+  );
+  assert.equal(
+    result.toolSummaries.filter((summary) => summary.startsWith("alpha-8.txt:1-1")).length,
+    1,
+    "automatic step-limit continuation should preserve the latest completed read once"
+  );
+  assert.equal(
+    result.toolSummaries.filter((summary) => summary.startsWith("alpha-9.txt:1-1")).length,
+    1,
+    "automatic step-limit continuation should execute only the pending ninth read"
+  );
+  assert.equal(
+    result.runtimeErrors.some((message) => message.includes("Agent stopped after 8 tool steps")),
+    false,
+    "automatic step-limit continuation should finish without surfacing the old hard stop"
   );
 }
 
@@ -31759,6 +31745,34 @@ function resolveProviderResponse(content: string) {
         startLine: 1,
         endLine: 20
       });
+    }
+
+    if (toolName === "files" && /node-todo\/views\/index\.ejs/.test(summary)) {
+      return "SHOULD-NOT-HAPPEN";
+    }
+  }
+
+  if (
+    !content.startsWith("Original user request:")
+    && content.includes("The current task hit the per-slice tool budget but still has unfinished work.")
+    && content.includes("Original task: Read app.config.json, greet.mjs, report.mjs, serve.mjs, dashboard.mjs, status.mjs, smoke-a.mjs, node-todo/app.js, and node-todo/views/index.ejs, then answer SHOULD-NOT-HAPPEN.")
+  ) {
+    return toolCall("files", {
+      path: "node-todo/views/index.ejs",
+      startLine: 1,
+      endLine: 20
+    });
+  }
+
+  if (
+    content.startsWith("Original user request: The current task hit the per-slice tool budget but still has unfinished work.")
+    && content.includes("Original task: Read app.config.json, greet.mjs, report.mjs, serve.mjs, dashboard.mjs, status.mjs, smoke-a.mjs, node-todo/app.js, and node-todo/views/index.ejs, then answer SHOULD-NOT-HAPPEN.")
+  ) {
+    const toolName = extractLine(content, "Tool:");
+    const summary = extractLine(content, "Summary:") ?? "";
+
+    if (toolName === "files" && /node-todo\/views\/index\.ejs/.test(summary)) {
+      return "SHOULD-NOT-HAPPEN";
     }
   }
 
