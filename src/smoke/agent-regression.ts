@@ -4087,6 +4087,8 @@ async function main() {
   await verifyNestedProjectImprovementContinuesFromSparseRootOnlyListing();
   await verifyNestedProjectRewriteContinuesFromSparseRootOnlyListing();
   await verifyNestedProjectVagueOptimizationFollowUpAnchorsAfterSparseInspection();
+  await verifyNestedProjectResumeAfterStageSummaryKeepsPendingEdit();
+  await verifyNestedProjectVerificationChainResumeAfterSparseListing();
   await verifyBareCompletionReplyStillTriggersVerification();
   await verifyRepeatedIdenticalAssistantRepliesAbortAsStalled();
   await verifyResumeAfterRepeatedAssistantStall();
@@ -5550,6 +5552,533 @@ async function verifyNestedProjectVagueOptimizationFollowUpAnchorsAfterSparseIns
     followUpResult.toolSummaries.some((summary) => /^packages\/aaa-workbench\/(?:package\.json|server\.js):1-\d+/.test(summary)),
     false,
     "expected vague optimization follow-up after sparse nested inspection to avoid drifting into the sibling decoy project"
+  );
+}
+
+async function verifyNestedProjectResumeAfterStageSummaryKeepsPendingEdit() {
+  const root = await mkdtemp(join(tmpdir(), "selfme-agent-nested-project-resume-stage-summary-"));
+  const workspace = join(root, "workspace");
+  const transcriptPath = join(root, "transcript.jsonl");
+  const logsPath = join(root, "logs.jsonl");
+  const originalPrompt = "看看 packages/demo-core 项目，然后优化它。你自己直接搞完。";
+  await mkdir(join(workspace, "packages", "demo-core"), { recursive: true });
+  await mkdir(join(workspace, "packages", "aaa-workbench"), { recursive: true });
+  await mkdir(join(workspace, "docs"), { recursive: true });
+
+  await writeFile(join(workspace, "docs", "plan.md"), "# plan\n", "utf8");
+  await writeFile(
+    join(workspace, "packages", "demo-core", "package.json"),
+    '{\n  "name": "demo-core",\n  "version": "1.0.0",\n  "main": "app.js"\n}\n',
+    "utf8"
+  );
+  await writeFile(
+    join(workspace, "packages", "demo-core", "app.js"),
+    'const PORT = 3000;\nconsole.log(PORT);\n',
+    "utf8"
+  );
+  await writeFile(
+    join(workspace, "packages", "aaa-workbench", "package.json"),
+    '{\n  "name": "aaa-workbench",\n  "version": "1.0.0",\n  "main": "server.js"\n}\n',
+    "utf8"
+  );
+  await writeFile(
+    join(workspace, "packages", "aaa-workbench", "server.js"),
+    'console.log("decoy");\n',
+    "utf8"
+  );
+
+  class NestedProjectResumeStageSummaryProvider implements ProviderClient {
+    readonly name = "nested-project-resume-stage-summary-provider";
+
+    async *streamResponse(input: ProviderStreamInput): AsyncIterable<ProviderStreamChunk> {
+      if (input.content === originalPrompt) {
+        yield {
+          delta: toolCall("shell", {
+            command: "pwd && ls -la"
+          })
+        };
+        return;
+      }
+
+      if (input.content.startsWith(`Original user request: ${originalPrompt}`)) {
+        const toolName = extractLine(input.content, "Tool:") ?? extractLine(input.content, "Latest tool:");
+        const summary = extractLine(input.content, "Summary:") ?? extractLine(input.content, "Latest summary:") ?? "";
+
+        if (toolName === "shell" && /pwd && ls -la/.test(summary)) {
+          assert.match(input.content, /Likely project entry: packages\/demo-core\/package\.json/);
+          yield {
+            delta: toolCall("files", {
+              path: "packages/demo-core/package.json",
+              startLine: 1,
+              endLine: 20
+            })
+          };
+          return;
+        }
+
+        if (toolName === "files" && /packages\/demo-core\/package\.json/.test(summary)) {
+          assert.match(input.content, /You are in the middle of a project improvement task\./);
+          yield {
+            delta: toolCall("files", {
+              path: "packages/demo-core/app.js",
+              startLine: 1,
+              endLine: 20
+            })
+          };
+          return;
+        }
+
+        if (toolName === "files" && /packages\/demo-core\/app\.js/.test(summary)) {
+          await waitForProviderDelay(input.signal, 120);
+          yield { delta: "我已经看了 packages/demo-core/app.js，下一步会直接把端口改成 process.env.PORT。" };
+          return;
+        }
+      }
+
+      if (input.content.startsWith('The user replied "还能继续吗" and wants to continue the most recent unfinished task.')) {
+        assert.match(input.content, /Original task: 看看 packages\/demo-core 项目，然后优化它。你自己直接搞完。/);
+        assert.match(input.content, /Recent editable working file: packages\/demo-core\/app\.js/);
+        assert.match(input.content, /Pending next step target: packages\/demo-core\/app\.js/);
+        assert.match(input.content, /Latest tool summary in context: packages\/demo-core\/app\.js:1-2/);
+        yield {
+          delta: toolCall("edit", {
+            path: "packages/demo-core/app.js",
+            startLine: 1,
+            endLine: 1,
+            replacement: 'const PORT = Number(process.env.PORT || 3000);\nconsole.log(PORT);\n'
+          })
+        };
+        return;
+      }
+
+      if (input.content.startsWith('Original user request: The user replied "还能继续吗" and wants to continue the most recent unfinished task.')) {
+        const toolName = extractLine(input.content, "Tool:") ?? extractLine(input.content, "Latest tool:");
+        const summary = extractLine(input.content, "Summary:") ?? extractLine(input.content, "Latest summary:") ?? "";
+
+        if (toolName === "edit" && /packages\/demo-core\/app\.js/.test(summary)) {
+          yield { delta: "我已经恢复执行，并直接继续改了 packages/demo-core/app.js。" };
+          return;
+        }
+      }
+
+      yield { delta: "ok" };
+    }
+  }
+
+  const bus = new EventBus();
+  const transcriptStore = new TranscriptStore(transcriptPath);
+  const logStore = new LogStore(logsPath);
+  await transcriptStore.ensureInitialized();
+  await logStore.ensureInitialized();
+
+  const session = createDefaultSessionRecord(workspace, VERSION);
+  session.model = "regression-stub";
+
+  const runtime = new AgentRuntime({
+    bus,
+    provider: new NestedProjectResumeStageSummaryProvider(),
+    tools: new InMemoryToolRegistry(),
+    session,
+    transcriptStore,
+    logStore
+  });
+  await runtime.start();
+
+  const completionPromise = waitForAssistantTaskCompletion(bus, session.sessionId);
+  const stageSummaryPromise = waitForAssistantDeltaContaining(
+    bus,
+    session.sessionId,
+    /packages\/demo-core\/app\.js/
+  );
+
+  bus.emit(createUserMessageSubmittedEvent({
+    sessionId: session.sessionId,
+    content: originalPrompt
+  }));
+
+  await stageSummaryPromise;
+  bus.emit(createRuntimeInterruptRequestedEvent({
+    sessionId: session.sessionId,
+    reason: "cancel"
+  }));
+
+  const cancelledTask = await completionPromise;
+  assert.equal(cancelledTask.payload.state, "cancelled");
+
+  const interruptedEvents = await transcriptStore.readEventsBySession(session.sessionId);
+  assert.ok(
+    interruptedEvents.some((event) =>
+      event.type === "tool.execution.completed" && event.payload.summary.startsWith("packages/demo-core/app.js:1-2")
+    ),
+    "nested project resume chain should preserve the implementation read before stop"
+  );
+  assert.equal(
+    interruptedEvents.some((event) =>
+      event.type === "tool.execution.completed" && event.payload.summary.startsWith("packages/demo-core/app.js:1-1 · updated")
+    ),
+    false,
+    "nested project resume chain should stop before the pending implementation edit is applied"
+  );
+
+  const resumedResult = await runAgentTask({
+    bus,
+    transcriptStore,
+    sessionId: session.sessionId,
+    prompt: "还能继续吗"
+  });
+
+  const content = await readFile(join(workspace, "packages", "demo-core", "app.js"), "utf8");
+  assert.equal(content, 'const PORT = Number(process.env.PORT || 3000);\nconsole.log(PORT);\n');
+  assert.match(resumedResult.assistantText, /packages\/demo-core\/app\.js|process\.env\.PORT/i);
+  assert.equal(
+    resumedResult.toolSummaries.some((summary) => summary.startsWith("pwd && ls -la · completed")),
+    false,
+    "nested project resume follow-up should not restart from the workspace listing"
+  );
+  assert.equal(
+    resumedResult.toolSummaries.some((summary) => summary.startsWith("packages/demo-core/package.json:1-")),
+    false,
+    "nested project resume follow-up should not reread package.json"
+  );
+  assert.equal(
+    resumedResult.toolSummaries.some((summary) => summary.startsWith("packages/demo-core/app.js:1-")),
+    false,
+    "nested project resume follow-up should not reread the implementation file when the pending edit target is already known"
+  );
+  assert.ok(
+    resumedResult.toolSummaries.some((summary) => summary.startsWith("packages/demo-core/app.js:1-1 · updated")),
+    "nested project resume follow-up should jump straight to the pending nested project edit"
+  );
+  assert.equal(
+    resumedResult.toolSummaries.some((summary) => summary.startsWith("packages/aaa-workbench/server.js:1-")),
+    false,
+    "nested project resume follow-up should not drift into the sibling decoy project"
+  );
+}
+
+async function verifyNestedProjectVerificationChainResumeAfterSparseListing() {
+  const root = await mkdtemp(join(tmpdir(), "selfme-agent-nested-project-resume-verify-chain-"));
+  const workspace = join(root, "workspace");
+  const transcriptPath = join(root, "transcript.jsonl");
+  const logsPath = join(root, "logs.jsonl");
+  const originalPrompt = "看看 packages/demo-core 项目，然后直接优化它：把 packages/demo-core/app.js 的端口改成 process.env.PORT，再给 packages/demo-core/views/index.ejs 的 title input 加上 maxlength 100，并运行 `node packages/demo-core/verify-setup.mjs` 验证，直到输出 exactly `ready`。";
+  await mkdir(join(workspace, "packages", "demo-core", "views"), { recursive: true });
+  await mkdir(join(workspace, "packages", "aaa-workbench"), { recursive: true });
+  await mkdir(join(workspace, "docs"), { recursive: true });
+
+  await writeFile(join(workspace, "docs", "plan.md"), "# plan\n", "utf8");
+  await writeFile(
+    join(workspace, "packages", "demo-core", "package.json"),
+    '{\n  "name": "demo-core",\n  "version": "1.0.0",\n  "scripts": {\n    "start": "node app.js"\n  }\n}\n',
+    "utf8"
+  );
+  await writeFile(
+    join(workspace, "packages", "demo-core", "app.js"),
+    'const PORT = 3000;\nconsole.log(PORT);\n',
+    "utf8"
+  );
+  await writeFile(
+    join(workspace, "packages", "demo-core", "views", "index.ejs"),
+    '<!DOCTYPE html>\n<form action="/add" method="post">\n  <input name="title" />\n</form>\n',
+    "utf8"
+  );
+  await writeFile(
+    join(workspace, "packages", "demo-core", "verify-setup.mjs"),
+    [
+      'import { readFileSync } from "node:fs";',
+      'const app = readFileSync(new URL("./app.js", import.meta.url), "utf8");',
+      'const view = readFileSync(new URL("./views/index.ejs", import.meta.url), "utf8");',
+      'const appReady = /process\\.env\\.PORT/.test(app);',
+      'const viewReady = /maxlength="100"/.test(view);',
+      'if (appReady && viewReady) {',
+      '  console.log("ready");',
+      '} else if (appReady) {',
+      '  console.log("app-only");',
+      '} else if (viewReady) {',
+      '  console.log("view-only");',
+      '} else {',
+      '  console.log("not-ready");',
+      '}'
+    ].join("\n") + "\n",
+    "utf8"
+  );
+  await writeFile(
+    join(workspace, "packages", "aaa-workbench", "package.json"),
+    '{\n  "name": "aaa-workbench",\n  "version": "1.0.0",\n  "main": "server.js"\n}\n',
+    "utf8"
+  );
+  await writeFile(
+    join(workspace, "packages", "aaa-workbench", "server.js"),
+    'console.log("decoy");\n',
+    "utf8"
+  );
+
+  class NestedProjectVerificationResumeProvider implements ProviderClient {
+    readonly name = "nested-project-verification-resume-provider";
+
+    async *streamResponse(input: ProviderStreamInput): AsyncIterable<ProviderStreamChunk> {
+      if (input.content === originalPrompt) {
+        yield {
+          delta: toolCall("shell", {
+            command: "pwd && ls -la"
+          })
+        };
+        return;
+      }
+
+      if (input.content.startsWith(`Original user request: ${originalPrompt}`)) {
+        const toolName = extractLine(input.content, "Tool:") ?? extractLine(input.content, "Latest tool:");
+        const summary = extractLine(input.content, "Summary:") ?? extractLine(input.content, "Latest summary:") ?? "";
+
+        if (toolName === "shell") {
+          if (/You are in the middle of a concrete project inspection request\./.test(input.content)) {
+            assert.match(input.content, /Likely project entry: packages\/demo-core\/package\.json/);
+            assert.doesNotMatch(input.content, /Likely project entry: packages\/aaa-workbench\/package\.json/);
+            yield {
+              delta: toolCall("files", {
+                path: "packages/demo-core/package.json",
+                startLine: 1,
+                endLine: 20
+              })
+            };
+            return;
+          }
+
+          if (/app-only/.test(input.content)) {
+            yield {
+              delta: toolCall("files", {
+                path: "packages/demo-core/views/index.ejs",
+                startLine: 1,
+                endLine: 4
+              })
+            };
+            return;
+          }
+
+          assert.match(input.content, /ready/);
+          yield { delta: "Completed the packages/demo-core verification chain after resuming from the latest failure point." };
+          return;
+        }
+
+        if (toolName === "files" && /packages\/demo-core\/package\.json/.test(summary)) {
+          yield {
+            delta: toolCall("files", {
+              path: "packages/demo-core/app.js",
+              startLine: 1,
+              endLine: 20
+            })
+          };
+          return;
+        }
+
+        if (toolName === "files" && /packages\/demo-core\/app\.js/.test(summary)) {
+          yield {
+            delta: toolCall("edit", {
+              path: "packages/demo-core/app.js",
+              startLine: 1,
+              endLine: 1,
+              replacement: 'const PORT = Number(process.env.PORT || 3000);\nconsole.log(PORT);\n'
+            })
+          };
+          return;
+        }
+
+        if (toolName === "edit" && /packages\/demo-core\/app\.js/.test(summary)) {
+          yield {
+            delta: toolCall("shell", {
+              command: "node packages/demo-core/verify-setup.mjs"
+            })
+          };
+          return;
+        }
+
+        if (toolName === "files" && /packages\/demo-core\/views\/index\.ejs/.test(summary)) {
+          await waitForProviderDelay(input.signal, 120);
+          yield {
+            delta: toolCall("edit", {
+              path: "packages/demo-core/views/index.ejs",
+              startLine: 3,
+              endLine: 3,
+              replacement: '  <input name="title" maxlength="100" />'
+            })
+          };
+          return;
+        }
+
+        if (toolName === "edit" && /packages\/demo-core\/views\/index\.ejs/.test(summary)) {
+          yield {
+            delta: toolCall("shell", {
+              command: "node packages/demo-core/verify-setup.mjs"
+            })
+          };
+          return;
+        }
+      }
+
+      if (input.content.startsWith('The user replied "还能继续吗" and wants to continue the most recent unfinished task.')) {
+        assert.match(input.content, /Original task: 看看 packages\/demo-core 项目，然后直接优化它/);
+        assert.match(input.content, /Latest tool in context: files/);
+        assert.match(input.content, /Latest tool summary in context: packages\/demo-core\/views\/index\.ejs:1-4/);
+        assert.match(input.content, /Interrupted pending approval: edit · packages\/demo-core\/views\/index\.ejs:3-3/);
+        yield {
+          delta: toolCall("edit", {
+            path: "packages/demo-core/views/index.ejs",
+            startLine: 3,
+            endLine: 3,
+            replacement: '  <input name="title" maxlength="100" />'
+          })
+        };
+        return;
+      }
+
+      if (input.content.startsWith('Original user request: The user replied "还能继续吗" and wants to continue the most recent unfinished task.')) {
+        const toolName = extractLine(input.content, "Tool:") ?? extractLine(input.content, "Latest tool:");
+        const summary = extractLine(input.content, "Summary:") ?? extractLine(input.content, "Latest summary:") ?? "";
+
+        if (toolName === "edit" && /packages\/demo-core\/views\/index\.ejs/.test(summary)) {
+          yield {
+            delta: toolCall("shell", {
+              command: "node packages/demo-core/verify-setup.mjs"
+            })
+          };
+          return;
+        }
+
+        if (toolName === "shell") {
+          assert.match(input.content, /ready/);
+          yield { delta: "Completed the packages/demo-core verification chain after resuming from the latest failure point." };
+          return;
+        }
+      }
+
+      yield { delta: "ok" };
+    }
+  }
+
+  const bus = new EventBus();
+  const transcriptStore = new TranscriptStore(transcriptPath);
+  const logStore = new LogStore(logsPath);
+  await transcriptStore.ensureInitialized();
+  await logStore.ensureInitialized();
+
+  const session = createDefaultSessionRecord(workspace, VERSION);
+  session.model = "regression-stub";
+
+  const runtime = new AgentRuntime({
+    bus,
+    provider: new NestedProjectVerificationResumeProvider(),
+    tools: new InMemoryToolRegistry(),
+    session,
+    transcriptStore,
+    logStore
+  });
+  await runtime.start();
+
+  let approvalCount = 0;
+  bus.on("approval.requested", (event) => {
+    approvalCount += 1;
+    bus.emit(createTerminalCommandInvokedEvent({
+      sessionId: event.sessionId,
+      content: `/approve ${event.payload.approvalId}`
+    }));
+  });
+
+  const completionPromise = waitForAssistantTaskCompletion(bus, session.sessionId);
+  const viewReadPromise = waitForToolExecutionCompleted(
+    bus,
+    session.sessionId,
+    (summary) => summary.startsWith("packages/demo-core/views/index.ejs:1-4")
+  );
+
+  bus.emit(createUserMessageSubmittedEvent({
+    sessionId: session.sessionId,
+    content: originalPrompt
+  }));
+
+  await viewReadPromise;
+  bus.emit(createRuntimeInterruptRequestedEvent({
+    sessionId: session.sessionId,
+    reason: "cancel"
+  }));
+
+  const cancelledTask = await completionPromise;
+  assert.equal(cancelledTask.payload.state, "cancelled");
+
+  const interruptedEvents = await transcriptStore.readEventsBySession(session.sessionId);
+  assert.ok(
+    interruptedEvents.some((event) =>
+      event.type === "tool.execution.completed" && event.payload.summary.startsWith("packages/demo-core/app.js:1-1 · updated")
+    ),
+    "interrupted nested project task should preserve the app.js edit before stop"
+  );
+  assert.ok(
+    interruptedEvents.some((event) =>
+      event.type === "tool.execution.completed" && event.payload.summary.startsWith("node packages/demo-core/verify-setup.mjs · completed")
+    ),
+    "interrupted nested project task should preserve the near-miss verification before stop"
+  );
+  assert.ok(
+    interruptedEvents.some((event) =>
+      event.type === "tool.execution.completed" && event.payload.summary.startsWith("packages/demo-core/views/index.ejs:1-4")
+    ),
+    "interrupted nested project task should already know the pending view working file"
+  );
+  assert.equal(
+    interruptedEvents.some((event) =>
+      event.type === "tool.execution.completed" && event.payload.summary.startsWith("packages/demo-core/views/index.ejs:3-3 · updated")
+    ),
+    false,
+    "interrupted nested project task should stop before the pending view edit is applied"
+  );
+
+  const resumedResult = await runAgentTask({
+    bus,
+    transcriptStore,
+    sessionId: session.sessionId,
+    prompt: "还能继续吗"
+  });
+
+  const resumedViewContent = await readFile(join(workspace, "packages", "demo-core", "views", "index.ejs"), "utf8");
+  assert.match(resumedViewContent, /maxlength="100"/);
+  assert.match(resumedResult.assistantText, /latest failure point|packages\/demo-core/i);
+  assert.doesNotMatch(resumedResult.assistantText, /^(可以|可以继续|好的|sure|okay)\b/i);
+  assert.equal(
+    resumedResult.toolSummaries.some((summary) => summary.startsWith("pwd && ls -la · completed")),
+    false,
+    "nested project verification resume should not restart from the workspace listing"
+  );
+  assert.equal(
+    resumedResult.toolSummaries.some((summary) => summary.startsWith("packages/demo-core/package.json:1-")),
+    false,
+    "nested project verification resume should not restart from package.json"
+  );
+  assert.equal(
+    resumedResult.toolSummaries.some((summary) => summary.startsWith("packages/demo-core/app.js:1-")),
+    false,
+    "nested project verification resume should not reread app.js after the failure point already moved to the view"
+  );
+  assert.equal(
+    resumedResult.toolSummaries.filter((summary) => summary.startsWith("node packages/demo-core/verify-setup.mjs · completed")).length,
+    1,
+    "nested project verification resume should only run the final verification after the resumed view edit"
+  );
+  assert.ok(
+    resumedResult.toolSummaries.some((summary) => summary.startsWith("packages/demo-core/views/index.ejs:3-3 · updated")),
+    "nested project verification resume should continue directly with the pending view edit"
+  );
+  assert.ok(
+    resumedResult.toolSummaries.some((summary) => summary.startsWith("node packages/demo-core/verify-setup.mjs · completed")),
+    "nested project verification resume should finish the final verification after the resumed edit"
+  );
+  assert.equal(
+    resumedResult.toolSummaries.some((summary) => summary.startsWith("packages/aaa-workbench/server.js:1-")),
+    false,
+    "nested project verification resume should not drift into the sibling decoy project"
+  );
+  assert.equal(
+    approvalCount,
+    2,
+    "expected one approval before interruption and one approval for the resumed nested view edit"
   );
 }
 
