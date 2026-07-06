@@ -4089,6 +4089,7 @@ async function main() {
   await verifyNestedProjectVagueOptimizationFollowUpAnchorsAfterSparseInspection();
   await verifyNestedProjectResumeAfterStageSummaryKeepsPendingEdit();
   await verifyNestedProjectVerificationChainResumeAfterSparseListing();
+  await verifyNestedProjectVagueOptimizationExecutesPreviousProposalAfterSparseInspection();
   await verifyBareCompletionReplyStillTriggersVerification();
   await verifyRepeatedIdenticalAssistantRepliesAbortAsStalled();
   await verifyResumeAfterRepeatedAssistantStall();
@@ -6079,6 +6080,221 @@ async function verifyNestedProjectVerificationChainResumeAfterSparseListing() {
     approvalCount,
     2,
     "expected one approval before interruption and one approval for the resumed nested view edit"
+  );
+}
+
+async function verifyNestedProjectVagueOptimizationExecutesPreviousProposalAfterSparseInspection() {
+  const root = await mkdtemp(join(tmpdir(), "selfme-agent-nested-project-vague-optimize-proposal-"));
+  const workspace = join(root, "workspace");
+  const transcriptPath = join(root, "transcript.jsonl");
+  const logsPath = join(root, "logs.jsonl");
+  const proposalPrompt = "看看 packages/demo-core 项目，但先别改，告诉我如果优化它你会怎么做。";
+  await mkdir(join(workspace, "packages", "demo-core", "views"), { recursive: true });
+  await mkdir(join(workspace, "packages", "aaa-workbench"), { recursive: true });
+  await mkdir(join(workspace, "docs"), { recursive: true });
+
+  await writeFile(join(workspace, "docs", "plan.md"), "# plan\n", "utf8");
+  await writeFile(
+    join(workspace, "packages", "demo-core", "package.json"),
+    '{\n  "name": "demo-core",\n  "version": "1.0.0",\n  "main": "app.js"\n}\n',
+    "utf8"
+  );
+  await writeFile(
+    join(workspace, "packages", "demo-core", "app.js"),
+    'const PORT = 3000;\nconsole.log(PORT);\n',
+    "utf8"
+  );
+  await writeFile(
+    join(workspace, "packages", "demo-core", "views", "index.ejs"),
+    '<input name="title" />\n',
+    "utf8"
+  );
+  await writeFile(
+    join(workspace, "packages", "aaa-workbench", "package.json"),
+    '{\n  "name": "aaa-workbench",\n  "version": "1.0.0",\n  "main": "server.js"\n}\n',
+    "utf8"
+  );
+  await writeFile(
+    join(workspace, "packages", "aaa-workbench", "server.js"),
+    'console.log("decoy");\n',
+    "utf8"
+  );
+
+  class NestedProjectVagueOptimizeProposalProvider implements ProviderClient {
+    readonly name = "nested-project-vague-optimize-proposal-provider";
+
+    async *streamResponse(input: ProviderStreamInput): AsyncIterable<ProviderStreamChunk> {
+      const executeProposalPrompt = 'The user replied "帮我优化下" and wants you to execute the immediately previous optimize proposal now.';
+
+      if (input.content === proposalPrompt) {
+        yield {
+          delta: toolCall("shell", {
+            command: "pwd && ls -la"
+          })
+        };
+        return;
+      }
+
+      if (input.content.startsWith(`Original user request: ${proposalPrompt}`)) {
+        const toolName = extractLine(input.content, "Tool:") ?? extractLine(input.content, "Latest tool:");
+        const summary = extractLine(input.content, "Summary:") ?? extractLine(input.content, "Latest summary:") ?? "";
+
+        if (toolName === "shell") {
+          assert.match(input.content, /Likely project entry: packages\/demo-core\/package\.json/);
+          assert.doesNotMatch(input.content, /Likely project entry: packages\/aaa-workbench\/package\.json/);
+          yield {
+            delta: toolCall("files", {
+              path: "packages/demo-core/package.json",
+              startLine: 1,
+              endLine: 20
+            })
+          };
+          return;
+        }
+
+        if (toolName === "files" && /packages\/demo-core\/package\.json/.test(summary)) {
+          yield {
+            delta: toolCall("files", {
+              path: "packages/demo-core/app.js",
+              startLine: 1,
+              endLine: 20
+            })
+          };
+          return;
+        }
+
+        if (toolName === "files" && /packages\/demo-core\/app\.js/.test(summary)) {
+          yield {
+            delta: [
+              "如果你要我继续，我会优化 packages/demo-core，先把 packages/demo-core/app.js 改成读取 process.env.PORT，",
+              "再给 packages/demo-core/views/index.ejs 的 title input 加上 maxlength 100。"
+            ].join("")
+          };
+          return;
+        }
+      }
+
+      if (input.content.startsWith(executeProposalPrompt) && !input.content.startsWith(`Original user request: ${executeProposalPrompt}`)) {
+        assert.match(input.content, /Approved proposal:/);
+        assert.match(input.content, /packages\/demo-core\/app\.js/);
+        assert.match(input.content, /packages\/demo-core\/views\/index\.ejs/);
+        yield {
+          delta: toolCall("files", {
+            path: "packages/demo-core/app.js",
+            startLine: 1,
+            endLine: 2
+          })
+        };
+        return;
+      }
+
+      if (input.content.startsWith(`Original user request: ${executeProposalPrompt}`)) {
+        const toolName = extractLine(input.content, "Tool:") ?? extractLine(input.content, "Latest tool:");
+        const summary = extractLine(input.content, "Summary:") ?? extractLine(input.content, "Latest summary:") ?? "";
+
+        if (toolName === "files" && /packages\/demo-core\/app\.js/.test(summary)) {
+          yield {
+            delta: toolCall("edit", {
+              path: "packages/demo-core/app.js",
+              startLine: 1,
+              endLine: 1,
+              replacement: "const PORT = Number(process.env.PORT || 3000);"
+            })
+          };
+          return;
+        }
+
+        if (toolName === "edit" && /packages\/demo-core\/app\.js/.test(summary)) {
+          yield {
+            delta: toolCall("files", {
+              path: "packages/demo-core/views/index.ejs",
+              startLine: 1,
+              endLine: 1
+            })
+          };
+          return;
+        }
+
+        if (toolName === "files" && /packages\/demo-core\/views\/index\.ejs/.test(summary)) {
+          yield {
+            delta: toolCall("edit", {
+              path: "packages/demo-core/views/index.ejs",
+              startLine: 1,
+              endLine: 1,
+              replacement: '<input name="title" maxlength="100" />'
+            })
+          };
+          return;
+        }
+
+        if (toolName === "edit" && /packages\/demo-core\/views\/index\.ejs/.test(summary)) {
+          yield { delta: "我已经按刚才的 proposal 优化了 packages/demo-core/app.js 和 packages/demo-core/views/index.ejs。" };
+          return;
+        }
+      }
+
+      yield { delta: "ok" };
+    }
+  }
+
+  const bus = new EventBus();
+  const transcriptStore = new TranscriptStore(transcriptPath);
+  const logStore = new LogStore(logsPath);
+  await transcriptStore.ensureInitialized();
+  await logStore.ensureInitialized();
+
+  const session = createDefaultSessionRecord(workspace, VERSION);
+  session.model = "regression-stub";
+
+  const runtime = new AgentRuntime({
+    bus,
+    provider: new NestedProjectVagueOptimizeProposalProvider(),
+    tools: new InMemoryToolRegistry(),
+    session,
+    transcriptStore,
+    logStore
+  });
+  await runtime.start();
+
+  const proposalResult = await runAgentTask({
+    bus,
+    transcriptStore,
+    sessionId: session.sessionId,
+    prompt: proposalPrompt
+  });
+
+  assert.match(proposalResult.assistantText, /packages\/demo-core\/app\.js/i);
+  assert.match(proposalResult.assistantText, /packages\/demo-core\/views\/index\.ejs/i);
+
+  const followUpResult = await runAgentTask({
+    bus,
+    transcriptStore,
+    sessionId: session.sessionId,
+    prompt: "帮我优化下"
+  });
+
+  const optimizedAppContent = await readFile(join(workspace, "packages", "demo-core", "app.js"), "utf8");
+  const optimizedViewContent = await readFile(join(workspace, "packages", "demo-core", "views", "index.ejs"), "utf8");
+  assert.match(optimizedAppContent, /process\.env\.PORT/);
+  assert.match(optimizedViewContent, /maxlength="100"/);
+  assert.match(followUpResult.assistantText, /packages\/demo-core/i);
+  assert.doesNotMatch(followUpResult.assistantText, /^(可以|可以继续|好的|sure|okay)\b/i);
+  assert.ok(
+    followUpResult.toolSummaries.some((summary) => summary.startsWith("packages/demo-core/app.js:1-2")),
+    "expected nested vague optimization follow-up to execute the previous optimize proposal from packages/demo-core/app.js"
+  );
+  assert.ok(
+    followUpResult.toolSummaries.some((summary) => summary.startsWith("packages/demo-core/views/index.ejs:1-1")),
+    "expected nested vague optimization follow-up to continue the previous optimize proposal into packages/demo-core/views/index.ejs"
+  );
+  assert.ok(
+    followUpResult.toolSummaries.some((summary) => summary.startsWith("packages/demo-core/views/index.ejs:1-1 · updated")),
+    "expected nested vague optimization follow-up to finish the pending nested view edit from the previous proposal"
+  );
+  assert.equal(
+    followUpResult.toolSummaries.some((summary) => /^packages\/aaa-workbench\/(?:package\.json|server\.js):1-\d+/.test(summary)),
+    false,
+    "expected nested vague optimization follow-up to avoid drifting into the sibling decoy project while executing the previous proposal"
   );
 }
 
