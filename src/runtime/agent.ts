@@ -6934,7 +6934,7 @@ function looksLikeExplicitFileExistenceQuestion(content: string) {
 
   return /\b(exists?|there)\b/i.test(taskContent)
     || /\b(is|are)\s+.+\s+there\b/i.test(taskContent)
-    || /(在吗|存在吗|有没有|找得到吗|是否存在)/u.test(taskContent);
+    || /(在吗|在不在|存在吗|有没有|找得到吗|是否存在)/u.test(taskContent);
 }
 
 function extractExplicitFileTargets(content: string) {

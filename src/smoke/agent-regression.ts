@@ -3705,6 +3705,20 @@ async function main() {
     "expected file existence question to recover by actually calling the files tool"
   );
 
+  console.log("task: start tool-grounded colloquial file existence check");
+  const colloquialExistenceResult = await runAgentTask({
+    bus,
+    transcriptStore,
+    sessionId: session.sessionId,
+    prompt: "帮我看看 missing.txt 在不在"
+  });
+
+  assert.match(colloquialExistenceResult.assistantText, /不存在|does not exist/i);
+  assert.ok(
+    colloquialExistenceResult.toolSummaries.some((summary) => summary.startsWith("missing.txt · failed")),
+    "expected colloquial file existence question to actually check missing.txt"
+  );
+
   console.log("task: accept loose files tool payload");
   const looseFilesPayloadResult = await runAgentTask({
     bus,
@@ -27056,6 +27070,10 @@ function resolveProviderResponse(content: string) {
     return "当前目录里大概就是一些项目文件。";
   }
 
+  if (content.startsWith("帮我看看 missing.txt 在不在")) {
+    return "应该还在当前目录里。";
+  }
+
   if (content.startsWith("missing.txt 在吗？如果你先猜，也要恢复并实际检查。")) {
     return "应该在当前目录里。";
   }
@@ -31799,6 +31817,20 @@ function resolveProviderResponse(content: string) {
     assert.match(content, /app\.config\.json/);
     assert.match(content, /node-todo/);
     return "当前目录里有 greet.mjs、app.config.json、node-todo 等条目。";
+  }
+
+  if (content.startsWith("Original user request: 帮我看看 missing.txt 在不在")) {
+    if (!/(?:Tool|Latest tool): files/.test(content)) {
+      assert.match(content, /For actionable requests, do the work now instead of describing what you will do\./);
+      return toolCall("files", {
+        path: "missing.txt",
+        startLine: 1,
+        endLine: 20
+      });
+    }
+
+    assert.match(content, /ENOENT|no such file or directory/i);
+    return "missing.txt 不存在。";
   }
 
   if (content.startsWith("Original user request: missing.txt 在吗？如果你先猜，也要恢复并实际检查。")) {
