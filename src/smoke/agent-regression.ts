@@ -4064,6 +4064,7 @@ async function main() {
   await verifyAutomaticContinuationAfterToolStepLimitDuringWholeProjectInspection();
   await verifyExplicitProjectMentionWinsOverRicherWorkspaceDecoy();
   await verifyExplicitProjectMentionWinsOverRicherWorkspaceDecoyDuringProjectImprovement();
+  await verifyExplicitProjectMentionWinsOverRicherWorkspaceDecoyDuringProjectRewrite();
   await verifyAutomaticContinuationAfterAssistantPassLimitFailure();
   await verifyDeniedLaterApprovalDoesNotRetrySameAction();
   await verifyResumeAfterDeniedLaterApprovalStaysBlocked();
@@ -5876,6 +5877,124 @@ async function verifyExplicitProjectMentionWinsOverRicherWorkspaceDecoyDuringPro
     result.toolSummaries.some((summary) => /^aaa-workbench\/package\.json:1-\d+$/.test(summary)),
     false,
     "explicit project mention should not drift into the richer decoy project during project improvement"
+  );
+}
+
+async function verifyExplicitProjectMentionWinsOverRicherWorkspaceDecoyDuringProjectRewrite() {
+  const root = await mkdtemp(join(tmpdir(), "selfme-agent-project-name-rewrite-priority-"));
+  const workspace = join(root, "workspace");
+  const transcriptPath = join(root, "transcript.jsonl");
+  const logsPath = join(root, "logs.jsonl");
+  const originalPrompt = "看看项目，然后重写 node-todo。你自己直接搞完。";
+  await mkdir(join(workspace, "aaa-workbench"), { recursive: true });
+  await mkdir(join(workspace, "node-todo"), { recursive: true });
+
+  await writeFile(join(workspace, "aaa-workbench", "package.json"), '{\n  "name": "aaa-workbench"\n}\n', "utf8");
+  await writeFile(join(workspace, "aaa-workbench", "README.md"), '# aaa-workbench\n', "utf8");
+  await writeFile(join(workspace, "aaa-workbench", "app.js"), 'console.log("decoy");\n', "utf8");
+  await writeFile(join(workspace, "aaa-workbench", "server.js"), 'console.log("server");\n', "utf8");
+  await writeFile(join(workspace, "node-todo", "package.json"), '{\n  "name": "node-todo"\n}\n', "utf8");
+  await writeFile(join(workspace, "node-todo", "app.js"), 'const PORT = 3000;\nconsole.log(PORT);\n', "utf8");
+
+  class ProjectNameRewritePriorityProvider implements ProviderClient {
+    readonly name = "project-name-rewrite-priority-provider";
+
+    async *streamResponse(input: ProviderStreamInput): AsyncIterable<ProviderStreamChunk> {
+      if (input.content === originalPrompt) {
+        yield {
+          delta: toolCall("shell", {
+            command: "pwd && ls -la && find . -maxdepth 2 -type f | sed 's#^./##' | sort | head -200"
+          })
+        };
+        return;
+      }
+
+      if (/^Original user request: 看看项目，然后重写 node-todo。你自己直接搞完。(?:\n|$)/.test(input.content)) {
+        const toolName = extractLine(input.content, "Tool:") ?? extractLine(input.content, "Latest tool:");
+        const summary = extractLine(input.content, "Summary:") ?? extractLine(input.content, "Latest summary:") ?? "";
+
+        if (toolName === "shell") {
+          assert.match(input.content, /Likely project entry: node-todo\/package\.json/);
+          assert.doesNotMatch(input.content, /Likely project entry: aaa-workbench\/package\.json/);
+          yield {
+            delta: toolCall("files", {
+              path: "node-todo/package.json",
+              startLine: 1,
+              endLine: 20
+            })
+          };
+          return;
+        }
+
+        if (toolName === "files" && /node-todo\/package\.json/.test(summary)) {
+          yield {
+            delta: toolCall("files", {
+              path: "node-todo/app.js",
+              startLine: 1,
+              endLine: 20
+            })
+          };
+          return;
+        }
+
+        if (toolName === "files" && /node-todo\/app\.js/.test(summary)) {
+          yield {
+            delta: toolCall("edit", {
+              path: "node-todo/app.js",
+              startLine: 1,
+              endLine: 1,
+              replacement: 'const PORT = Number(process.env.PORT || 3000);\nconsole.log(PORT);\n'
+            })
+          };
+          return;
+        }
+
+        if (toolName === "edit" && /node-todo\/app\.js/.test(summary)) {
+          yield { delta: "我已经直接把 node-todo 这轮重写落在了真正的实现文件上，而不是被其他项目带偏。" };
+          return;
+        }
+      }
+
+      yield { delta: "ok" };
+    }
+  }
+
+  const bus = new EventBus();
+  const transcriptStore = new TranscriptStore(transcriptPath);
+  const logStore = new LogStore(logsPath);
+  await transcriptStore.ensureInitialized();
+  await logStore.ensureInitialized();
+
+  const session = createDefaultSessionRecord(workspace, VERSION);
+  session.model = "regression-stub";
+
+  const runtime = new AgentRuntime({
+    bus,
+    provider: new ProjectNameRewritePriorityProvider(),
+    tools: new InMemoryToolRegistry(),
+    session,
+    transcriptStore,
+    logStore
+  });
+  await runtime.start();
+
+  const result = await runAgentTask({
+    bus,
+    transcriptStore,
+    sessionId: session.sessionId,
+    prompt: originalPrompt
+  });
+
+  const appContent = await readFile(join(workspace, "node-todo", "app.js"), "utf8");
+  assert.match(appContent, /process\.env\.PORT/);
+  assert.ok(
+    result.toolSummaries.some((summary) => /^node-todo\/package\.json:1-\d+$/.test(summary)),
+    "explicit project mention should anchor project rewrite on node-todo/package.json even when a richer decoy project exists"
+  );
+  assert.equal(
+    result.toolSummaries.some((summary) => /^aaa-workbench\/package\.json:1-\d+$/.test(summary)),
+    false,
+    "explicit project mention should not drift into the richer decoy project during project rewrite"
   );
 }
 
