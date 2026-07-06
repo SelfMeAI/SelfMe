@@ -4045,6 +4045,7 @@ async function main() {
   );
 
   await verifyResumeAfterToolStepLimitFailure();
+  await verifyAutomaticContinuationAcrossMultipleToolStepSlices();
   await verifyAutomaticContinuationAfterToolStepLimitBeforeEdit();
   await verifyAutomaticContinuationAfterToolStepLimitBeforeShell();
   await verifyAutomaticContinuationAfterToolStepLimitBeforeWrappedShell();
@@ -4966,6 +4967,118 @@ async function verifyAutomaticContinuationAfterToolStepLimitBeforeEdit() {
     result.runtimeErrors.some((message) => message.includes("Agent stopped after 8 tool steps")),
     false,
     "automatic step-limit continuation should finish without surfacing the old hard stop"
+  );
+}
+
+async function verifyAutomaticContinuationAcrossMultipleToolStepSlices() {
+  const root = await mkdtemp(join(tmpdir(), "selfme-agent-step-limit-multi-slice-"));
+  const workspace = join(root, "workspace");
+  const transcriptPath = join(root, "transcript.jsonl");
+  const logsPath = join(root, "logs.jsonl");
+  const filePaths = Array.from({ length: 25 }, (_, index) => `batch/file-${String(index + 1).padStart(2, "0")}.txt`);
+  const originalPrompt = `Read these files in order: ${filePaths.join(", ")}. Then answer BATCH-DONE.`;
+  await mkdir(join(workspace, "batch"), { recursive: true });
+
+  for (const [index, filePath] of filePaths.entries()) {
+    await writeFile(join(workspace, filePath), `line-${index + 1}\n`, "utf8");
+  }
+
+  class StepLimitMultiSliceProvider implements ProviderClient {
+    readonly name = "step-limit-multi-slice-provider";
+    continuationPromptCount = 0;
+
+    async *streamResponse(input: ProviderStreamInput): AsyncIterable<ProviderStreamChunk> {
+      if (input.content === originalPrompt) {
+        yield {
+          delta: toolCall("files", {
+            path: filePaths[0],
+            startLine: 1,
+            endLine: 20
+          })
+        };
+        return;
+      }
+
+      if (
+        !input.content.startsWith("Original user request:")
+        && input.content.includes("The current task hit the per-slice tool budget but still has unfinished work.")
+      ) {
+        this.continuationPromptCount += 1;
+        const pendingTarget = input.content.match(/Pending next step target:\s*(batch\/file-\d{2}\.txt)/)?.[1];
+        assert.ok(pendingTarget, "expected a concrete batch file target in the step-limit continuation prompt");
+        yield {
+          delta: toolCall("files", {
+            path: pendingTarget,
+            startLine: 1,
+            endLine: 20
+          })
+        };
+        return;
+      }
+
+      const summary = extractLine(input.content, "Summary:") ?? extractLine(input.content, "Latest summary:") ?? "";
+
+      if (/^batch\/file-\d{2}\.txt:1-1/.test(summary)) {
+        const currentIndex = filePaths.findIndex((filePath) => summary.startsWith(`${filePath}:`));
+        assert.notEqual(currentIndex, -1, "expected the latest summary to map back to a known batch file");
+
+        if (currentIndex === filePaths.length - 1) {
+          yield { delta: "BATCH-DONE" };
+          return;
+        }
+
+        yield {
+          delta: toolCall("files", {
+            path: filePaths[currentIndex + 1],
+            startLine: 1,
+            endLine: 20
+          })
+        };
+        return;
+      }
+
+      yield { delta: "ok" };
+    }
+  }
+
+  const provider = new StepLimitMultiSliceProvider();
+  const bus = new EventBus();
+  const transcriptStore = new TranscriptStore(transcriptPath);
+  const logStore = new LogStore(logsPath);
+  await transcriptStore.ensureInitialized();
+  await logStore.ensureInitialized();
+
+  const session = createDefaultSessionRecord(workspace, VERSION);
+  session.model = "regression-stub";
+
+  const runtime = new AgentRuntime({
+    bus,
+    provider,
+    tools: new InMemoryToolRegistry(),
+    session,
+    transcriptStore,
+    logStore
+  });
+  await runtime.start();
+
+  const result = await runAgentTask({
+    bus,
+    transcriptStore,
+    sessionId: session.sessionId,
+    prompt: originalPrompt
+  });
+
+  assert.equal(result.assistantText, "BATCH-DONE");
+  assert.equal(provider.continuationPromptCount, 3, "long sequential reads should auto-continue across three step-limit slices");
+  assert.equal(
+    result.toolSummaries.filter((summary) => summary.startsWith("batch/file-25.txt:")).length,
+    1,
+    "multi-slice step-limit continuation should reach the final pending batch file exactly once"
+  );
+  assert.equal(
+    result.runtimeErrors.some((message) => message.includes("Agent stopped after 8 tool steps")),
+    false,
+    "multi-slice step-limit continuation should finish without surfacing the old standard-budget hard stop"
   );
 }
 
