@@ -4094,6 +4094,7 @@ async function main() {
   await verifyNestedProjectLongHistoryRewriteFollowUpStillAnchorsAfterCompaction();
   await verifyNestedProjectLongHistoryProposalApprovalStillAnchorsAfterCompaction();
   await verifyNestedProjectLongHistoryRewriteProposalApprovalStillAnchorsAfterCompaction();
+  await verifyLongHistoryRewriteProposalApprovalStillAnchorsAfterCompaction();
   await verifyBareCompletionReplyStillTriggersVerification();
   await verifyRepeatedIdenticalAssistantRepliesAbortAsStalled();
   await verifyResumeAfterRepeatedAssistantStall();
@@ -7177,6 +7178,244 @@ async function verifyNestedProjectLongHistoryRewriteProposalApprovalStillAnchors
     result.toolSummaries.some((summary) => /^packages\/aaa-workbench\/(?:package\.json|server\.js):1-\d+/.test(summary)),
     false,
     "expected long-history nested rewrite proposal approval to avoid drifting into the sibling decoy project after compaction"
+  );
+}
+
+async function verifyLongHistoryRewriteProposalApprovalStillAnchorsAfterCompaction() {
+  const root = await mkdtemp(join(tmpdir(), "selfme-agent-long-history-rewrite-proposal-approval-"));
+  const workspace = join(root, "workspace");
+  const transcriptPath = join(root, "transcript.jsonl");
+  const logsPath = join(root, "logs.jsonl");
+  const proposalPrompt = "看看项目，但先别改，告诉我如果重写 node-todo 你会怎么做。";
+  await mkdir(join(workspace, "node-todo", "views"), { recursive: true });
+  await mkdir(join(workspace, "aaa-sidecar"), { recursive: true });
+  await mkdir(join(workspace, "docs"), { recursive: true });
+
+  await writeFile(join(workspace, "docs", "plan.md"), "# plan\n", "utf8");
+  await writeFile(
+    join(workspace, "node-todo", "package.json"),
+    '{\n  "name": "node-todo",\n  "version": "1.0.0",\n  "main": "app.js"\n}\n',
+    "utf8"
+  );
+  await writeFile(
+    join(workspace, "node-todo", "app.js"),
+    'const PORT = 3000;\nconsole.log(PORT);\n',
+    "utf8"
+  );
+  await writeFile(
+    join(workspace, "node-todo", "views", "index.ejs"),
+    '<input name="title" />\n',
+    "utf8"
+  );
+  await writeFile(
+    join(workspace, "aaa-sidecar", "package.json"),
+    '{\n  "name": "aaa-sidecar",\n  "version": "1.0.0",\n  "main": "server.js"\n}\n',
+    "utf8"
+  );
+  await writeFile(
+    join(workspace, "aaa-sidecar", "server.js"),
+    'console.log("decoy");\n',
+    "utf8"
+  );
+
+  class LongHistoryRewriteProposalApprovalProvider implements ProviderClient {
+    readonly name = "long-history-rewrite-proposal-approval-provider";
+
+    async *streamResponse(input: ProviderStreamInput): AsyncIterable<ProviderStreamChunk> {
+      const executeProposalPrompt = 'The user replied "可以" to approve the immediately previous proposal.';
+
+      if (input.content === proposalPrompt) {
+        yield { delta: "可以" };
+        return;
+      }
+
+      if (input.content.startsWith(executeProposalPrompt) && !input.content.startsWith(`Original user request: ${executeProposalPrompt}`)) {
+        assert.match(input.content, /Approved proposal:/);
+        assert.match(input.content, /node-todo\/app\.js/);
+        assert.match(input.content, /node-todo\/views\/index\.ejs/);
+        assert.match(input.content, /Recent editable working file: node-todo\/app\.js/);
+
+        const recentTaskState = input.contextMessages?.find((message) =>
+          message.role === "system" && message.content.includes("Recent task state:")
+        )?.content ?? "";
+        const earlierSummary = input.contextMessages?.find((message) =>
+          message.role === "system" && message.content.includes("Earlier session summary:")
+        )?.content ?? "";
+
+        assert.match(recentTaskState, /Current request: 可以/);
+        assert.match(recentTaskState, /Underlying task: 看看项目，但先别改，告诉我如果重写 node-todo 你会怎么做。/);
+        assert.match(recentTaskState, /Working files: node-todo\/app\.js/);
+        assert.ok(earlierSummary.length > 0, "expected long history generic rewrite proposal approval to build an earlier session summary");
+
+        yield {
+          delta: toolCall("files", {
+            path: "node-todo/app.js",
+            startLine: 1,
+            endLine: 2
+          })
+        };
+        return;
+      }
+
+      if (input.content.startsWith(`Original user request: ${executeProposalPrompt}`)) {
+        const toolName = extractLine(input.content, "Tool:") ?? extractLine(input.content, "Latest tool:");
+        const summary = extractLine(input.content, "Summary:") ?? extractLine(input.content, "Latest summary:") ?? "";
+
+        if (toolName === "files" && /node-todo\/app\.js/.test(summary)) {
+          yield {
+            delta: toolCall("edit", {
+              path: "node-todo/app.js",
+              startLine: 1,
+              endLine: 1,
+              replacement: "const PORT = Number(process.env.PORT || 3000);"
+            })
+          };
+          return;
+        }
+
+        if (toolName === "edit" && /node-todo\/app\.js/.test(summary)) {
+          yield {
+            delta: toolCall("files", {
+              path: "node-todo/views/index.ejs",
+              startLine: 1,
+              endLine: 1
+            })
+          };
+          return;
+        }
+
+        if (toolName === "files" && /node-todo\/views\/index\.ejs/.test(summary)) {
+          yield {
+            delta: toolCall("edit", {
+              path: "node-todo/views/index.ejs",
+              startLine: 1,
+              endLine: 1,
+              replacement: '<input name="title" maxlength="100" />'
+            })
+          };
+          return;
+        }
+
+        if (toolName === "edit" && /node-todo\/views\/index\.ejs/.test(summary)) {
+          yield { delta: "我已经在长历史上下文里按 rewrite proposal 完成了 node-todo 的改造。" };
+          return;
+        }
+      }
+
+      yield { delta: "ok" };
+    }
+  }
+
+  const bus = new EventBus();
+  const transcriptStore = new TranscriptStore(transcriptPath);
+  const logStore = new LogStore(logsPath);
+  await transcriptStore.ensureInitialized();
+  await logStore.ensureInitialized();
+
+  const session = createDefaultSessionRecord(workspace, VERSION);
+  session.model = "regression-stub";
+
+  for (let index = 1; index <= 6; index += 1) {
+    const taskId = `older-history-generic-rewrite-proposal-${index}`;
+    await transcriptStore.appendEvent(createUserMessageSubmittedEvent({
+      sessionId: session.sessionId,
+      content: `Older request ${index}`
+    }));
+    await transcriptStore.appendEvent(createAssistantDeltaEvent({
+      sessionId: session.sessionId,
+      taskId,
+      delta: `Older answer ${index}`
+    }));
+    await transcriptStore.appendEvent(createAssistantCompletedEvent({
+      sessionId: session.sessionId,
+      taskId,
+      model: "regression-stub"
+    }));
+  }
+
+  await transcriptStore.appendEvent(createToolExecutionCompletedEvent({
+    sessionId: session.sessionId,
+    taskId: "older-history-generic-rewrite-proposal-tool",
+    toolName: "shell",
+    summary: "yes · timed out · truncated",
+    rawOutput: "Y".repeat(4000)
+  }));
+
+  await transcriptStore.appendEvent(createUserMessageSubmittedEvent({
+    sessionId: session.sessionId,
+    content: proposalPrompt
+  }));
+  await transcriptStore.appendEvent(createToolExecutionCompletedEvent({
+    sessionId: session.sessionId,
+    taskId: "generic-history-rewrite-proposal-tool-1",
+    toolName: "shell",
+    summary: "pwd && ls -la · completed",
+    rawOutput: "/workspace\nnode-todo\naaa-sidecar\ndocs"
+  }));
+  await transcriptStore.appendEvent(createToolExecutionCompletedEvent({
+    sessionId: session.sessionId,
+    taskId: "generic-history-rewrite-proposal-tool-2",
+    toolName: "files",
+    summary: "node-todo/package.json:1-4",
+    rawOutput: '{\n  "name": "node-todo",\n  "version": "1.0.0",\n  "main": "app.js"\n}'
+  }));
+  await transcriptStore.appendEvent(createToolExecutionCompletedEvent({
+    sessionId: session.sessionId,
+    taskId: "generic-history-rewrite-proposal-tool-3",
+    toolName: "files",
+    summary: "node-todo/app.js:1-2",
+    rawOutput: '1 | const PORT = 3000;\n2 | console.log(PORT);'
+  }));
+  await transcriptStore.appendEvent(createAssistantDeltaEvent({
+    sessionId: session.sessionId,
+    taskId: "generic-history-rewrite-proposal-turn",
+    delta: "如果你要我继续，我会重写 node-todo，先把 node-todo/app.js 改成读取 process.env.PORT，再给 node-todo/views/index.ejs 的 title input 加上 maxlength 100。"
+  }));
+  await transcriptStore.appendEvent(createAssistantCompletedEvent({
+    sessionId: session.sessionId,
+    taskId: "generic-history-rewrite-proposal-turn",
+    model: "regression-stub"
+  }));
+
+  const runtime = new AgentRuntime({
+    bus,
+    provider: new LongHistoryRewriteProposalApprovalProvider(),
+    tools: new InMemoryToolRegistry(),
+    session,
+    transcriptStore,
+    logStore
+  });
+  await runtime.start();
+
+  const result = await runAgentTask({
+    bus,
+    transcriptStore,
+    sessionId: session.sessionId,
+    prompt: "可以"
+  });
+
+  const rewrittenAppContent = await readFile(join(workspace, "node-todo", "app.js"), "utf8");
+  const rewrittenViewContent = await readFile(join(workspace, "node-todo", "views", "index.ejs"), "utf8");
+  assert.match(rewrittenAppContent, /process\.env\.PORT/);
+  assert.match(rewrittenViewContent, /maxlength="100"/);
+  assert.match(result.assistantText, /node-todo/i);
+  assert.doesNotMatch(result.assistantText, /^(可以|可以继续|好的|sure|okay)\b/i);
+  assert.ok(
+    result.toolSummaries.some((summary) => summary.startsWith("node-todo/app.js:1-2")),
+    "expected long-history generic rewrite proposal approval to execute the approved proposal from node-todo/app.js"
+  );
+  assert.ok(
+    result.toolSummaries.some((summary) => summary.startsWith("node-todo/views/index.ejs:1-1")),
+    "expected long-history generic rewrite proposal approval to continue the approved proposal into node-todo/views/index.ejs"
+  );
+  assert.ok(
+    result.toolSummaries.some((summary) => summary.startsWith("node-todo/views/index.ejs:1-1 · updated")),
+    "expected long-history generic rewrite proposal approval to finish the view edit"
+  );
+  assert.equal(
+    result.toolSummaries.some((summary) => /^aaa-sidecar\/(?:package\.json|server\.js):1-\d+/.test(summary)),
+    false,
+    "expected long-history generic rewrite proposal approval to avoid drifting into the sibling decoy project after compaction"
   );
 }
 
