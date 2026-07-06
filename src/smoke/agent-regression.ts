@@ -3669,6 +3669,20 @@ async function main() {
     "expected workspace inspection question to recover by actually listing the current directory"
   );
 
+  console.log("task: start tool-grounded colloquial workspace inspection");
+  const colloquialWorkspaceInspectionResult = await runAgentTask({
+    bus,
+    transcriptStore,
+    sessionId: session.sessionId,
+    prompt: "帮我看看当前目录都有啥"
+  });
+
+  assert.match(colloquialWorkspaceInspectionResult.assistantText, /greet\.mjs|app\.config\.json|node-todo/i);
+  assert.ok(
+    colloquialWorkspaceInspectionResult.toolSummaries.some((summary) => summary.startsWith("ls -la · completed")),
+    "expected colloquial workspace inspection question to actually list the current directory"
+  );
+
   console.log("task: start tool-grounded file existence check after an initial fabricated answer");
   const beforeExistenceEvents = await transcriptStore.readEventsBySession(session.sessionId);
   const fabricatedExistenceRecoveryResult = await runAgentTask({
@@ -3827,6 +3841,20 @@ async function main() {
   assert.ok(
     politeColloquialDirectShellSuccessResult.toolSummaries.some((summary) => summary.startsWith("pwd · completed")),
     "expected polite colloquial direct shell success summary"
+  );
+
+  console.log("task: handle punctuated polite colloquial direct shell success");
+  const punctuatedPoliteColloquialDirectShellSuccessResult = await runAgentTask({
+    bus,
+    transcriptStore,
+    sessionId: session.sessionId,
+    prompt: "帮我跑下 pwd 看看。"
+  });
+
+  assert.equal(punctuatedPoliteColloquialDirectShellSuccessResult.assistantText, "当前工作目录就是这个会话的工作区目录。");
+  assert.ok(
+    punctuatedPoliteColloquialDirectShellSuccessResult.toolSummaries.some((summary) => summary.startsWith("pwd · completed")),
+    "expected punctuated polite colloquial direct shell success summary"
   );
 
   console.log("task: inherit chinese session language for bare direct shell failure");
@@ -27024,6 +27052,10 @@ function resolveProviderResponse(content: string) {
     return "当前目录里应该就是一些脚本、配置和项目文件。";
   }
 
+  if (content.startsWith("帮我看看当前目录都有啥")) {
+    return "当前目录里大概就是一些项目文件。";
+  }
+
   if (content.startsWith("missing.txt 在吗？如果你先猜，也要恢复并实际检查。")) {
     return "应该在当前目录里。";
   }
@@ -27092,6 +27124,12 @@ function resolveProviderResponse(content: string) {
   }
 
   if (content.startsWith("帮我跑下 pwd 看看")) {
+    return toolCall("shell", {
+      command: "pwd"
+    });
+  }
+
+  if (content.startsWith("帮我跑下 pwd 看看。")) {
     return toolCall("shell", {
       command: "pwd"
     });
@@ -31304,6 +31342,12 @@ function resolveProviderResponse(content: string) {
     return "当前工作目录就是这个会话的工作区目录。";
   }
 
+  if (content.startsWith("Original user request: 帮我跑下 pwd 看看。")) {
+    assert.match(content, /Tool: shell/);
+    assert.match(content, /Summary: pwd · completed/);
+    return "当前工作目录就是这个会话的工作区目录。";
+  }
+
   if (content.startsWith("Original user request: run pwd")) {
     assert.match(content, /Tool: shell/);
     assert.match(content, /Summary: pwd · completed/);
@@ -31728,6 +31772,21 @@ function resolveProviderResponse(content: string) {
   }
 
   if (content.startsWith("Original user request: 当前目录有哪些文件？如果你先概括，也要恢复并实际查看。")) {
+    if (!/Tool: shell/.test(content)) {
+      assert.match(content, /For actionable requests, do the work now instead of describing what you will do\./);
+      return toolCall("shell", {
+        command: "ls -la"
+      });
+    }
+
+    assert.match(content, /Summary: ls -la · completed/);
+    assert.match(content, /greet\.mjs/);
+    assert.match(content, /app\.config\.json/);
+    assert.match(content, /node-todo/);
+    return "当前目录里有 greet.mjs、app.config.json、node-todo 等条目。";
+  }
+
+  if (content.startsWith("Original user request: 帮我看看当前目录都有啥")) {
     if (!/Tool: shell/.test(content)) {
       assert.match(content, /For actionable requests, do the work now instead of describing what you will do\./);
       return toolCall("shell", {

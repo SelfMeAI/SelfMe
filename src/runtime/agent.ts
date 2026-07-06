@@ -6920,7 +6920,8 @@ function looksLikeWorkspaceInspectionQuestion(content: string) {
     || /\bwhat(?:'s| is)\s+in\s+(the\s+)?(current|working)\s+(directory|folder|workspace)\b/i.test(taskContent)
     || /(当前|工作).*(目录|文件夹|工作区)/u.test(taskContent)
     || /(目录|文件夹|工作区).*(有哪些|有什么|内容|文件)/u.test(taskContent)
-    || /(当前目录|当前文件夹|当前工作区).*(有哪些|有什么|内容|文件)/u.test(taskContent);
+    || /(当前目录|当前文件夹|当前工作区).*(有哪些|有什么|内容|文件|都有啥|都有些什么|都有什么)/u.test(taskContent)
+    || /(帮我|你)?\s*(看看|看下|瞅瞅).*(当前目录|当前文件夹|当前工作区).*(都有啥|都有些什么|都有什么)/u.test(taskContent);
 }
 
 function looksLikeExplicitFileExistenceQuestion(content: string) {
@@ -8022,13 +8023,17 @@ function describePreferredReplyLanguage(preferredLanguage: PreferredReplyLanguag
 
 function isDirectShellExecutionRequest(content: string) {
   const trimmed = content.trim();
-  const normalized = trimmed.replace(/^(?:请|麻烦|帮我|你|你帮我)\s*/u, "");
+  const normalized = trimmed
+    .replace(/^(?:请|麻烦|帮我|你|你帮我)\s*/u, "")
+    .replace(/[，。！？,.!?]+$/u, "");
 
   const prefixedMatch = normalized.match(/^(运行|执行|run|跑下|跑一下|试下|试一下|跑|试)\s+(.+)$/i);
 
   if (prefixedMatch) {
     const rawCommand = prefixedMatch[2] ?? "";
-    const normalizedCommand = rawCommand.replace(/\s*(看看|看下|看一下|试试)\s*$/u, "");
+    const normalizedCommand = rawCommand
+      .replace(/\s*(看看|看下|看一下|试试)\s*$/u, "")
+      .replace(/[，。！？,.!?]+$/u, "");
     return looksLikeStandaloneShellCommand(normalizedCommand);
   }
 
