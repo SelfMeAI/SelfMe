@@ -8023,10 +8023,12 @@ function describePreferredReplyLanguage(preferredLanguage: PreferredReplyLanguag
 function isDirectShellExecutionRequest(content: string) {
   const trimmed = content.trim();
 
-  const prefixedMatch = trimmed.match(/^(运行|执行|run)\s+(.+)$/i);
+  const prefixedMatch = trimmed.match(/^(运行|执行|run|跑下|跑一下|试下|试一下|跑|试)\s+(.+)$/i);
 
   if (prefixedMatch) {
-    return looksLikeStandaloneShellCommand(prefixedMatch[2] ?? "");
+    const rawCommand = prefixedMatch[2] ?? "";
+    const normalizedCommand = rawCommand.replace(/\s*(看看|看下|看一下|试试)\s*$/u, "");
+    return looksLikeStandaloneShellCommand(normalizedCommand);
   }
 
   return looksLikeStandaloneShellCommand(trimmed);
