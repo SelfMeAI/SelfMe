@@ -4976,7 +4976,7 @@ async function verifyAutomaticContinuationAcrossMultipleToolStepSlices() {
   const transcriptPath = join(root, "transcript.jsonl");
   const logsPath = join(root, "logs.jsonl");
   const filePaths = Array.from({ length: 25 }, (_, index) => `batch/file-${String(index + 1).padStart(2, "0")}.txt`);
-  const originalPrompt = `Read these files in order: ${filePaths.join(", ")}. Then answer BATCH-DONE.`;
+  const originalPrompt = "Read every batch file from batch/file-01.txt through batch/file-25.txt, then answer BATCH-DONE.";
   await mkdir(join(workspace, "batch"), { recursive: true });
 
   for (const [index, filePath] of filePaths.entries()) {

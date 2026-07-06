@@ -6922,6 +6922,27 @@ function looksLikeMultiTargetInspectionTask(content: string) {
   return extractExplicitFileTargets(taskContent).length >= 3;
 }
 
+function looksLikeSequentialFileInspectionTask(content: string) {
+  const taskContent = extractEmbeddedTaskContent(content);
+
+  if (looksLikeDiscussionRequest(taskContent) || hasMutationIntent(taskContent)) {
+    return false;
+  }
+
+  const explicitTargets = extractExplicitFileTargets(taskContent);
+
+  if (explicitTargets.length < 2) {
+    return false;
+  }
+
+  const hasInspectionCue = /\b(read|inspect|review|check|look at|open|scan)\b/i.test(taskContent)
+    || /(读取|读下|读一下|检查|查看|看看|看下|打开|扫一遍|过一遍)/u.test(taskContent);
+  const hasSequentialCue = /\b(in order|one by one|through|from .* to|all of them|every file)\b/i.test(taskContent)
+    || /(按顺序|依次|逐个|从.*到.*|全部|所有|每个文件)/u.test(taskContent);
+
+  return hasInspectionCue && hasSequentialCue;
+}
+
 function looksLikeExplicitFileContentQuestion(content: string) {
   const taskContent = extractEmbeddedTaskContent(content);
   const targets = extractExplicitFileTargets(taskContent);
@@ -7378,6 +7399,7 @@ function shouldAutoContinueAfterStepLimit(
 
   return hasMutationIntent(taskContent)
     || looksLikeMultiTargetInspectionTask(taskContent)
+    || looksLikeSequentialFileInspectionTask(taskContent)
     || looksLikeProjectInspectionRequest(taskContent)
     || looksLikeWholeProjectInspectionRequest(taskContent);
 }
