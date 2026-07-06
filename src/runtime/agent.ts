@@ -7427,6 +7427,20 @@ function derivePendingTargetPathFromContinuationContext(input: {
   }
 
   if (input.previousToolResult.toolName === "shell") {
+    const likelyProjectEntry = looksLikeProjectInspectionRequest(input.originalRequest)
+      || looksLikeWholeProjectInspectionRequest(input.originalRequest)
+      || looksLikeBroadProjectImprovementRequest(input.originalRequest)
+      || looksLikeExecutableProjectRewriteRequest(input.originalRequest)
+      ? extractLikelyProjectEntryFromListing(
+        input.previousToolResult.rawOutput,
+        input.originalRequest
+      )
+      : undefined;
+
+    if (likelyProjectEntry) {
+      return likelyProjectEntry;
+    }
+
     const shellText = [
       input.previousToolResult.summary,
       input.previousToolResult.errorMessage,

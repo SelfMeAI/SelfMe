@@ -4078,6 +4078,7 @@ async function main() {
 
   await verifyRepeatedIdenticalToolResultsAbortAsStalled();
   await verifyResumeAfterRepeatedFilesStall();
+  await verifyRepeatedProjectListingStallAutoContinuesIntoProjectEntry();
   await verifyResumeAfterRepeatedToolStall();
   await verifyBareCompletionReplyStillTriggersVerification();
   await verifyRepeatedIdenticalAssistantRepliesAbortAsStalled();
@@ -4512,6 +4513,148 @@ async function verifyResumeAfterRepeatedFilesStall() {
   assert.ok(
     result.toolSummaries.some((summary) => summary.startsWith("node stuck-report.mjs · completed")),
     "expected repeated-files-stall auto-continuation to finish verification after the repair"
+  );
+}
+
+async function verifyRepeatedProjectListingStallAutoContinuesIntoProjectEntry() {
+  const root = await mkdtemp(join(tmpdir(), "selfme-agent-repeated-project-listing-stall-"));
+  const workspace = join(root, "workspace");
+  const transcriptPath = join(root, "transcript.jsonl");
+  const logsPath = join(root, "logs.jsonl");
+  const originalPrompt = "看看项目";
+  await mkdir(join(workspace, "alpha-demo"), { recursive: true });
+  await mkdir(join(workspace, "node-todo"), { recursive: true });
+
+  await writeFile(
+    join(workspace, "alpha-demo", "package.json"),
+    '{\n  "name": "alpha-demo",\n  "version": "0.1.0"\n}\n',
+    "utf8"
+  );
+  await writeFile(
+    join(workspace, "node-todo", "package.json"),
+    '{\n  "name": "node-todo",\n  "version": "1.0.0",\n  "main": "app.js",\n  "dependencies": {\n    "express": "^4.19.2"\n  }\n}\n',
+    "utf8"
+  );
+  await writeFile(
+    join(workspace, "node-todo", "app.js"),
+    'const express = require("express");\nconst app = express();\napp.listen(3000);\n',
+    "utf8"
+  );
+
+  class RepeatedProjectListingStallProvider implements ProviderClient {
+    readonly name = "repeated-project-listing-stall-provider";
+    private repeatedListingCount = 0;
+
+    async *streamResponse(input: ProviderStreamInput): AsyncIterable<ProviderStreamChunk> {
+      const listingCommand = "pwd && ls -la && find . -maxdepth 2 -type f | sed 's#^./##' | sort | head -200";
+
+      if (input.content === originalPrompt) {
+        yield {
+          delta: toolCall("shell", {
+            command: listingCommand
+          })
+        };
+        return;
+      }
+
+      if (input.content.startsWith(`Original user request: ${originalPrompt}`)) {
+        const toolName = extractLine(input.content, "Tool:") ?? extractLine(input.content, "Latest tool:");
+        const summary = extractLine(input.content, "Summary:") ?? extractLine(input.content, "Latest summary:") ?? "";
+
+        if (toolName === "shell" && summary.startsWith("pwd && ls -la && find . -maxdepth 2 -type f")) {
+          this.repeatedListingCount += 1;
+
+          if (this.repeatedListingCount <= 2) {
+            yield {
+              delta: toolCall("shell", {
+                command: listingCommand
+              })
+            };
+            return;
+          }
+        }
+
+        if (toolName === "files" && /node-todo\/package\.json/.test(summary)) {
+          yield {
+            delta: toolCall("files", {
+              path: "node-todo/app.js",
+              startLine: 1,
+              endLine: 20
+            })
+          };
+          return;
+        }
+
+        if (toolName === "files" && /node-todo\/app\.js/.test(summary)) {
+          yield { delta: "我已经继续读到 node-todo/package.json 和 node-todo/app.js，当前最值得继续看的项目是 node-todo。" };
+          return;
+        }
+      }
+
+      if (
+        !input.content.startsWith("Original user request:")
+        && input.content.includes("The task stalled after repeated identical progress signals but the task context is still actionable.")
+      ) {
+        assert.match(input.content, /Latest stall kind: repeated identical shell results\./);
+        assert.match(input.content, /Pending next step target: node-todo\/package\.json/);
+        assert.match(input.content, /Latest tool in context: shell/);
+        yield {
+          delta: toolCall("files", {
+            path: "node-todo/package.json",
+            startLine: 1,
+            endLine: 20
+          })
+        };
+        return;
+      }
+
+      yield { delta: "ok" };
+    }
+  }
+
+  const bus = new EventBus();
+  const transcriptStore = new TranscriptStore(transcriptPath);
+  const logStore = new LogStore(logsPath);
+  await transcriptStore.ensureInitialized();
+  await logStore.ensureInitialized();
+
+  const session = createDefaultSessionRecord(workspace, VERSION);
+  session.model = "regression-stub";
+
+  const runtime = new AgentRuntime({
+    bus,
+    provider: new RepeatedProjectListingStallProvider(),
+    tools: new InMemoryToolRegistry(),
+    session,
+    transcriptStore,
+    logStore
+  });
+  await runtime.start();
+
+  const result = await runAgentTask({
+    bus,
+    transcriptStore,
+    sessionId: session.sessionId,
+    prompt: originalPrompt
+  });
+
+  assert.match(result.assistantText, /node-todo/i);
+  assert.ok(
+    result.toolSummaries.filter((summary) => summary.startsWith("pwd && ls -la && find . -maxdepth 2 -type f")).length >= 3,
+    "expected the repeated listing loop to happen before auto-continuation kicked in"
+  );
+  assert.ok(
+    result.toolSummaries.some((summary) => summary.startsWith("node-todo/package.json:1-6")),
+    "expected repeated project-listing stall auto-continuation to jump into the likely project entry"
+  );
+  assert.ok(
+    result.toolSummaries.some((summary) => summary.startsWith("node-todo/app.js:1-3")),
+    "expected repeated project-listing stall auto-continuation to continue from the entry into the implementation file"
+  );
+  assert.equal(
+    result.runtimeErrors.some((message) => /Agent stalled after repeated identical shell results/.test(message)),
+    false,
+    "expected repeated project listing stall to recover instead of terminating as a shell stall"
   );
 }
 
