@@ -4520,6 +4520,7 @@ async function main() {
   await verifyImplicitRemainingChainDoesNotEndAtHelperCompletion();
   await verifyNearMissShellCompletionToneStillRepairsRemainingHelper();
   await verifyProjectCommandStageSummaryResume();
+  await verifyTerminalLoopSubmitsAndContinuesMultiStepTask();
   verifyInterruptFallbackWhenWorkingUiLingers();
   verifyExitCommandShutsDownTerminalLoop();
   console.log("task: verify context compaction");
@@ -38433,6 +38434,197 @@ function verifyInterruptFallbackWhenWorkingUiLingers() {
     assert.deepEqual(interruptReasons, ["cancel", "quit"]);
   } finally {
     process.exit = originalExit;
+
+    for (const listener of process.stdin.listeners("data") as Array<(...args: any[]) => void>) {
+      if (!existingDataListeners.includes(listener)) {
+        process.stdin.off("data", listener);
+      }
+    }
+  }
+}
+
+async function verifyTerminalLoopSubmitsAndContinuesMultiStepTask() {
+  const root = await mkdtemp(join(tmpdir(), "selfme-agent-terminal-loop-multi-step-"));
+  const workspace = join(root, "workspace");
+  const transcriptPath = join(root, "transcript.jsonl");
+  const logsPath = join(root, "logs.jsonl");
+  const sessionId = "terminal-loop-multi-step";
+  await mkdir(workspace, { recursive: true });
+  await mkdir(join(workspace, "node-todo"), { recursive: true });
+  await mkdir(join(workspace, "node-todo", "views"), { recursive: true });
+  await writeFile(
+    join(workspace, "node-todo", "app.js"),
+    'const express = require("express");\nconst app = express();\nconst PORT = 3000;\napp.listen(PORT, () => {\n  console.log(`Todo app is running at http://localhost:${PORT}`);\n});\n',
+    "utf8"
+  );
+  await writeFile(
+    join(workspace, "node-todo", "views", "index.ejs"),
+    '<!DOCTYPE html>\n<form action="/add" method="post">\n  <input name="title" />\n</form>\n',
+    "utf8"
+  );
+
+  class TerminalLoopMultiStepProvider implements ProviderClient {
+    readonly name = "terminal-loop-multi-step-provider";
+
+    async *streamResponse(input: ProviderStreamInput): AsyncIterable<ProviderStreamChunk> {
+      const originalPrompt = "直接优化 node-todo 项目：把 node-todo/app.js 的端口改成 process.env.PORT，再给 node-todo/views/index.ejs 的 title input 加上 maxlength 100。";
+
+      if (input.content === originalPrompt) {
+        yield {
+          delta: toolCall("files", {
+            path: "node-todo/app.js",
+            startLine: 1,
+            endLine: 20
+          })
+        };
+        return;
+      }
+
+      if (input.content.startsWith(`Original user request: ${originalPrompt}`)) {
+        const toolName = extractLine(input.content, "Tool:") ?? extractLine(input.content, "Latest tool:");
+        const summary = extractLine(input.content, "Summary:") ?? extractLine(input.content, "Latest summary:") ?? "";
+
+        if (
+          toolName === "edit"
+          && /node-todo\/app\.js/.test(summary)
+          && /Pending next step target: node-todo\/views\/index\.ejs/.test(input.content)
+        ) {
+          yield {
+            delta: toolCall("files", {
+              path: "node-todo/views/index.ejs",
+              startLine: 1,
+              endLine: 4
+            })
+          };
+          return;
+        }
+
+        if (toolName === "files" && /node-todo\/app\.js/.test(summary)) {
+          yield {
+            delta: toolCall("edit", {
+              path: "node-todo/app.js",
+              startLine: 3,
+              endLine: 3,
+              replacement: "const PORT = Number(process.env.PORT || 3000);"
+            })
+          };
+          return;
+        }
+
+        if (toolName === "edit" && /node-todo\/app\.js/.test(summary)) {
+          yield {
+            delta: "I updated node-todo/app.js and will continue with node-todo/views/index.ejs next."
+          };
+          return;
+        }
+
+        if (toolName === "files" && /node-todo\/views\/index\.ejs/.test(summary)) {
+          yield {
+            delta: toolCall("edit", {
+              path: "node-todo/views/index.ejs",
+              startLine: 3,
+              endLine: 3,
+              replacement: '  <input name="title" maxlength="100" />'
+            })
+          };
+          return;
+        }
+
+        if (toolName === "edit" && /node-todo\/views\/index\.ejs/.test(summary)) {
+          yield { delta: "Completed the terminal-loop optimization across app.js and views/index.ejs." };
+          return;
+        }
+      }
+
+      yield { delta: "ok" };
+    }
+  }
+
+  const bus = new EventBus();
+  const transcriptStore = new TranscriptStore(transcriptPath);
+  const logStore = new LogStore(logsPath);
+  await transcriptStore.ensureInitialized();
+  await logStore.ensureInitialized();
+
+  const session = createDefaultSessionRecord(workspace, VERSION);
+  session.sessionId = sessionId;
+  session.model = "regression-stub";
+
+  const runtime = new AgentRuntime({
+    bus,
+    provider: new TerminalLoopMultiStepProvider(),
+    tools: new InMemoryToolRegistry(),
+    session,
+    transcriptStore,
+    logStore
+  });
+  await runtime.start();
+
+  const editor = new EditorController();
+  const panel = new TerminalPanelController();
+  const terminal = new TerminalEventLoop({
+    bus,
+    editor,
+    panel,
+    sessionId
+  });
+
+  const originalExit = process.exit;
+  const existingDataListeners = process.stdin.listeners("data") as Array<(...args: any[]) => void>;
+
+  (process as typeof process & {
+    exit: (code?: number) => never;
+  }).exit = ((code?: number) => {
+    throw new Error(`EXIT:${code ?? 0}`);
+  }) as typeof process.exit;
+
+  bus.on("approval.requested", (event) => {
+    bus.emit(createTerminalCommandInvokedEvent({
+      sessionId: event.sessionId,
+      content: `/approve ${event.payload.approvalId}`
+    }));
+  });
+
+  try {
+    terminal.start();
+    const completion = waitForAssistantTaskCompletion(bus, sessionId);
+    process.stdin.emit("data", Buffer.from("直接优化 node-todo 项目：把 node-todo/app.js 的端口改成 process.env.PORT，再给 node-todo/views/index.ejs 的 title input 加上 maxlength 100。\r"));
+    const task = await completion;
+    const events = await transcriptStore.readEventsBySession(sessionId);
+    const assistantText = collectAssistantText(events, task.taskId ?? "");
+    const optimizedAppContent = await readFile(join(workspace, "node-todo", "app.js"), "utf8");
+    const optimizedViewContent = await readFile(join(workspace, "node-todo", "views", "index.ejs"), "utf8");
+
+    assert.equal(task.payload.state, "completed");
+    assert.equal(editor.getState().value, "", "terminal submit should clear the editor buffer");
+    assert.match(optimizedAppContent, /process\.env\.PORT/);
+    assert.match(optimizedViewContent, /maxlength="100"/);
+    assert.match(assistantText, /Completed the terminal-loop optimization/i);
+    assert.ok(
+      events.some((event) =>
+        event.type === "assistant.delta.received"
+        && event.taskId === task.taskId
+        && /will continue with node-todo\/views\/index\.ejs next\./.test(event.payload.delta)
+      ),
+      "terminal loop task should preserve the stage summary before continuing"
+    );
+    assert.ok(
+      events.some((event) =>
+        event.type === "tool.execution.completed"
+        && event.payload.summary.startsWith("node-todo/views/index.ejs:3-3 · updated")
+      ),
+      "terminal loop task should continue into the pending view edit within the same task"
+    );
+  } finally {
+    process.exit = originalExit;
+    try {
+      bus.emit(createTerminalCommandInvokedEvent({
+        sessionId,
+        content: "/exit"
+      }));
+    } catch (error) {
+      assert.match(String(error), /EXIT:0/);
+    }
 
     for (const listener of process.stdin.listeners("data") as Array<(...args: any[]) => void>) {
       if (!existingDataListeners.includes(listener)) {
