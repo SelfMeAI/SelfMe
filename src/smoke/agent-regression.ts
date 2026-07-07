@@ -4070,6 +4070,7 @@ async function main() {
   await verifyNestedProjectMentionWinsOverRicherWorkspaceDecoyDuringProjectRewrite();
   await verifyAutomaticContinuationAfterAssistantPassLimitFailure();
   await verifyAutomaticContinuationAcrossMultipleAssistantPassSlices();
+  await verifyAutomaticContinuationAcrossMultipleToolRecoverySlices();
   await verifyDeniedLaterApprovalDoesNotRetrySameAction();
   await verifyResumeAfterDeniedLaterApprovalStaysBlocked();
   await verifyAffirmativeAfterDeniedLaterApprovalStaysBlocked();
@@ -10624,6 +10625,168 @@ async function verifyAutomaticContinuationAcrossMultipleAssistantPassSlices() {
     result.runtimeErrors.some((message) => message.includes("Agent stopped after 96 assistant passes")),
     false,
     "multi-slice assistant-pass continuation should finish without surfacing the assistant-pass hard stop"
+  );
+}
+
+async function verifyAutomaticContinuationAcrossMultipleToolRecoverySlices() {
+  const root = await mkdtemp(join(tmpdir(), "selfme-agent-resume-tool-recovery-multi-slice-"));
+  const workspace = join(root, "workspace");
+  const transcriptPath = join(root, "transcript.jsonl");
+  const logsPath = join(root, "logs.jsonl");
+  const originalPrompt = "Fix multi-tool-recovery-report.mjs so running `node multi-tool-recovery-report.mjs` prints exactly `ready`. Verify it before finishing, even if your edit tool input keeps coming out invalid.";
+  await mkdir(workspace, { recursive: true });
+  await writeFile(join(workspace, "multi-tool-recovery-report.mjs"), 'console.log("pending");\n', "utf8");
+
+  class MultiSliceToolRecoveryProvider implements ProviderClient {
+    readonly name = "multi-slice-tool-recovery-provider";
+    continuationPromptCount = 0;
+    private originalRepairPromptCount = 0;
+
+    private buildInvalidEditToolCall() {
+      return toolCall("edit", {
+        startLine: 1,
+        endLine: 1,
+        replacement: 'console.log("ready");'
+      });
+    }
+
+    async *streamResponse(input: ProviderStreamInput): AsyncIterable<ProviderStreamChunk> {
+      if (input.content === originalPrompt) {
+        yield { delta: this.buildInvalidEditToolCall() };
+        return;
+      }
+
+      if (input.content.startsWith(`Original user request: ${originalPrompt}`)) {
+        this.originalRepairPromptCount += 1;
+
+        if (this.originalRepairPromptCount <= 2) {
+          yield { delta: this.buildInvalidEditToolCall() };
+          return;
+        }
+      }
+
+      if (
+        !input.content.startsWith("Original user request:")
+        && input.content.includes("The task hit repeated tool-recovery failures but the task context is still actionable.")
+      ) {
+        this.continuationPromptCount += 1;
+        assert.match(input.content, /Pending next step target: multi-tool-recovery-report\.mjs/);
+
+        if (this.continuationPromptCount === 1) {
+          yield { delta: this.buildInvalidEditToolCall() };
+          return;
+        }
+
+        if (this.continuationPromptCount === 2) {
+          yield {
+            delta: toolCall("files", {
+              path: "multi-tool-recovery-report.mjs",
+              startLine: 1,
+              endLine: 20
+            })
+          };
+          return;
+        }
+
+        assert.fail(`unexpected tool-recovery continuation prompt ${this.continuationPromptCount}`);
+      }
+
+      if (
+        input.content.startsWith("Original user request: The task hit repeated tool-recovery failures but the task context is still actionable.")
+      ) {
+        const toolName = extractLine(input.content, "Tool:") ?? extractLine(input.content, "Latest tool:");
+        const summary = extractLine(input.content, "Summary:") ?? extractLine(input.content, "Latest summary:") ?? "";
+
+        if (toolName === "files" && /multi-tool-recovery-report\.mjs/.test(summary)) {
+          yield {
+            delta: toolCall("edit", {
+              path: "multi-tool-recovery-report.mjs",
+              startLine: 1,
+              endLine: 1,
+              replacement: 'console.log("ready");'
+            })
+          };
+          return;
+        }
+
+        if (toolName === "edit" && /multi-tool-recovery-report\.mjs/.test(summary)) {
+          yield {
+            delta: toolCall("shell", {
+              command: "node multi-tool-recovery-report.mjs"
+            })
+          };
+          return;
+        }
+
+        if (toolName === "shell" && /completed/.test(summary)) {
+          yield { delta: "Repaired multi-tool-recovery-report.mjs after two tool-recovery continuation slices and verified the final output is ready." };
+          return;
+        }
+      }
+
+      yield { delta: "ok" };
+    }
+  }
+
+  const provider = new MultiSliceToolRecoveryProvider();
+  const bus = new EventBus();
+  const transcriptStore = new TranscriptStore(transcriptPath);
+  const logStore = new LogStore(logsPath);
+  await transcriptStore.ensureInitialized();
+  await logStore.ensureInitialized();
+
+  const session = createDefaultSessionRecord(workspace, VERSION);
+  session.model = "regression-stub";
+
+  const runtime = new AgentRuntime({
+    bus,
+    provider,
+    tools: new InMemoryToolRegistry(),
+    session,
+    transcriptStore,
+    logStore
+  });
+  await runtime.start();
+
+  bus.on("approval.requested", (event) => {
+    bus.emit(createTerminalCommandInvokedEvent({
+      sessionId: event.sessionId,
+      content: `/approve ${event.payload.approvalId}`
+    }));
+  });
+
+  const result = await runAgentTask({
+    bus,
+    transcriptStore,
+    sessionId: session.sessionId,
+    prompt: originalPrompt
+  });
+
+  const content = await readFile(join(workspace, "multi-tool-recovery-report.mjs"), "utf8");
+  assert.equal(content, 'console.log("ready");\n');
+  assert.match(result.assistantText, /ready|multi-tool-recovery-report\.mjs/i);
+  assert.equal(
+    provider.continuationPromptCount,
+    2,
+    "tool-recovery auto-continuation should bridge two repeated recovery slices before finishing"
+  );
+  assert.equal(
+    result.toolSummaries.filter((summary) => summary.startsWith("multi-tool-recovery-report.mjs:1-1")).length,
+    1,
+    "multi-slice tool-recovery continuation should inspect the target file once after the final recovery handoff"
+  );
+  assert.ok(
+    result.toolSummaries.some((summary) => summary.startsWith("multi-tool-recovery-report.mjs:1-1 · updated")),
+    "multi-slice tool-recovery continuation should still reach the pending edit"
+  );
+  assert.ok(
+    result.toolSummaries.some((summary) => summary.startsWith("node multi-tool-recovery-report.mjs · completed")),
+    "multi-slice tool-recovery continuation should finish verification after the recovered edit"
+  );
+  assert.equal(
+    result.runtimeErrors.length,
+    0,
+    "multi-slice tool-recovery continuation should recover within the same task"
   );
 }
 
