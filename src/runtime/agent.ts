@@ -2865,7 +2865,8 @@ function buildExecutionConvergencePrompt(
         : "Your previous assistant message explained the situation but did not advance the task.",
       "Do not stop for explanation-only updates.",
       "Take the next concrete step that moves the task forward.",
-      "When the next short chain is already clear from the latest result, keep going through the next obvious 2 to 4 concrete steps instead of stopping after one.",
+      "When the next short chain is already clear from the latest result, keep going through the next obvious 2 to 6 concrete steps instead of stopping after one.",
+      "For multi-file or project-wide tasks, do not stop after the first successful mutation or near-miss verification when the next requested file edit or verifier repair is already clear.",
       "If tools are needed, return exactly one tool call block.",
       "Only answer directly when the task is actually complete or truly blocked on user input."
     ],
