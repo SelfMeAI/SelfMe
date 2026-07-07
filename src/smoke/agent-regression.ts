@@ -4061,6 +4061,7 @@ async function main() {
   await verifyAutomaticContinuationAcrossMultipleToolStepSlices();
   await verifyAutomaticContinuationAfterToolStepLimitBeforeEdit();
   await verifyAutomaticContinuationAfterToolStepLimitBeforeShell();
+  await verifyAutomaticContinuationAcrossToolStepLimitAndToolRecoverySlices();
   await verifyAutomaticContinuationAfterToolStepLimitBeforeWrappedShell();
   await verifyAutomaticContinuationAfterToolStepLimitDuringWholeProjectInspection();
   await verifyExplicitProjectMentionWinsOverRicherWorkspaceDecoy();
@@ -9551,6 +9552,222 @@ async function verifyAutomaticContinuationAfterToolStepLimitBeforeShell() {
     result.runtimeErrors.some((message) => message.includes("Agent stopped after 16 tool steps")),
     false,
     "automatic step-limit continuation should finish without surfacing the extended-budget hard stop"
+  );
+}
+
+async function verifyAutomaticContinuationAcrossToolStepLimitAndToolRecoverySlices() {
+  const root = await mkdtemp(join(tmpdir(), "selfme-agent-resume-step-limit-tool-recovery-"));
+  const workspace = join(root, "workspace");
+  const transcriptPath = join(root, "transcript.jsonl");
+  const logsPath = join(root, "logs.jsonl");
+  const originalPrompt = "Read gamma-1.txt, gamma-2.txt, gamma-3.txt, gamma-4.txt, gamma-5.txt, gamma-6.txt, gamma-7.txt, and step-limit-tool-recovery-report.mjs, then fix step-limit-tool-recovery-report.mjs so running `node step-limit-tool-recovery-report.mjs` prints exactly `ready`. Verify it before finishing, even if the first resumed edit input is invalid.";
+  await mkdir(workspace, { recursive: true });
+
+  for (let index = 1; index <= 7; index += 1) {
+    await writeFile(join(workspace, `gamma-${index}.txt`), `gamma-${index}\n`, "utf8");
+  }
+
+  await writeFile(join(workspace, "step-limit-tool-recovery-report.mjs"), 'console.log("pending");\n', "utf8");
+
+  class StepLimitAndToolRecoveryProvider implements ProviderClient {
+    readonly name = "step-limit-and-tool-recovery-provider";
+    stepLimitContinuationCount = 0;
+    toolRecoveryContinuationCount = 0;
+    private invalidEditAttemptCount = 0;
+
+    private buildInvalidEditToolCall() {
+      return toolCall("edit", {
+        startLine: 1,
+        endLine: 1,
+        replacement: 'console.log("ready");'
+      });
+    }
+
+    async *streamResponse(input: ProviderStreamInput): AsyncIterable<ProviderStreamChunk> {
+      if (input.content === originalPrompt) {
+        yield {
+          delta: toolCall("files", {
+            path: "gamma-1.txt",
+            startLine: 1,
+            endLine: 1
+          })
+        };
+        return;
+      }
+
+      if (input.content.startsWith(`Original user request: ${originalPrompt}`)) {
+        const toolName = extractLine(input.content, "Tool:") ?? extractLine(input.content, "Latest tool:");
+        const summary = extractLine(input.content, "Summary:") ?? extractLine(input.content, "Latest summary:") ?? "";
+        const gammaMatch = summary.match(/^gamma-(\d)\.txt:1-1$/);
+
+        if (toolName === "files" && gammaMatch) {
+          const nextIndex = Number(gammaMatch[1]) + 1;
+
+          if (nextIndex <= 7) {
+            yield {
+              delta: toolCall("files", {
+                path: `gamma-${nextIndex}.txt`,
+                startLine: 1,
+                endLine: 1
+              })
+            };
+            return;
+          }
+
+          yield {
+            delta: toolCall("files", {
+              path: "step-limit-tool-recovery-report.mjs",
+              startLine: 1,
+              endLine: 20
+            })
+          };
+          return;
+        }
+
+        if (toolName === "files" && /step-limit-tool-recovery-report\.mjs/.test(summary)) {
+          yield { delta: this.buildInvalidEditToolCall() };
+          return;
+        }
+      }
+
+      if (
+        !input.content.startsWith("Original user request:")
+        && input.content.includes("The current task hit the per-slice tool budget but still has unfinished work.")
+      ) {
+        this.stepLimitContinuationCount += 1;
+        assert.match(input.content, /Pending next step target: step-limit-tool-recovery-report\.mjs/);
+        yield { delta: this.buildInvalidEditToolCall() };
+        return;
+      }
+
+      if (
+        input.content.startsWith("Original user request: The current task hit the per-slice tool budget but still has unfinished work.")
+      ) {
+        this.invalidEditAttemptCount += 1;
+
+        if (this.invalidEditAttemptCount <= 2) {
+          yield { delta: this.buildInvalidEditToolCall() };
+          return;
+        }
+      }
+
+      if (
+        !input.content.startsWith("Original user request:")
+        && input.content.includes("The task hit repeated tool-recovery failures but the task context is still actionable.")
+      ) {
+        this.toolRecoveryContinuationCount += 1;
+        assert.match(input.content, /Pending next step target: step-limit-tool-recovery-report\.mjs/);
+        yield {
+          delta: toolCall("files", {
+            path: "step-limit-tool-recovery-report.mjs",
+            startLine: 1,
+            endLine: 20
+          })
+        };
+        return;
+      }
+
+      if (
+        input.content.startsWith("Original user request: The task hit repeated tool-recovery failures but the task context is still actionable.")
+      ) {
+        const toolName = extractLine(input.content, "Tool:") ?? extractLine(input.content, "Latest tool:");
+        const summary = extractLine(input.content, "Summary:") ?? extractLine(input.content, "Latest summary:") ?? "";
+
+        if (toolName === "files" && /step-limit-tool-recovery-report\.mjs/.test(summary)) {
+          yield {
+            delta: toolCall("edit", {
+              path: "step-limit-tool-recovery-report.mjs",
+              startLine: 1,
+              endLine: 1,
+              replacement: 'console.log("ready");'
+            })
+          };
+          return;
+        }
+
+        if (toolName === "edit" && /step-limit-tool-recovery-report\.mjs/.test(summary)) {
+          yield {
+            delta: toolCall("shell", {
+              command: "node step-limit-tool-recovery-report.mjs"
+            })
+          };
+          return;
+        }
+
+        if (toolName === "shell" && /completed/.test(summary)) {
+          yield { delta: "Repaired step-limit-tool-recovery-report.mjs after a step-limit continuation and a tool-recovery continuation, then verified the final output is ready." };
+          return;
+        }
+      }
+
+      yield { delta: "ok" };
+    }
+  }
+
+  const provider = new StepLimitAndToolRecoveryProvider();
+  const bus = new EventBus();
+  const transcriptStore = new TranscriptStore(transcriptPath);
+  const logStore = new LogStore(logsPath);
+  await transcriptStore.ensureInitialized();
+  await logStore.ensureInitialized();
+
+  const session = createDefaultSessionRecord(workspace, VERSION);
+  session.model = "regression-stub";
+
+  const runtime = new AgentRuntime({
+    bus,
+    provider,
+    tools: new InMemoryToolRegistry(),
+    session,
+    transcriptStore,
+    logStore
+  });
+  await runtime.start();
+
+  bus.on("approval.requested", (event) => {
+    bus.emit(createTerminalCommandInvokedEvent({
+      sessionId: event.sessionId,
+      content: `/approve ${event.payload.approvalId}`
+    }));
+  });
+
+  const result = await runAgentTask({
+    bus,
+    transcriptStore,
+    sessionId: session.sessionId,
+    prompt: originalPrompt
+  });
+
+  const content = await readFile(join(workspace, "step-limit-tool-recovery-report.mjs"), "utf8");
+  assert.equal(content, 'console.log("ready");\n');
+  assert.match(result.assistantText, /ready|step-limit-tool-recovery-report\.mjs/i);
+  assert.equal(
+    provider.stepLimitContinuationCount,
+    1,
+    "step-limit + tool-recovery chain should first bridge one tool-step-limit continuation slice"
+  );
+  assert.equal(
+    provider.toolRecoveryContinuationCount,
+    1,
+    "step-limit + tool-recovery chain should then bridge one tool-recovery continuation slice"
+  );
+  assert.equal(
+    result.toolSummaries.filter((summary) => summary.startsWith("step-limit-tool-recovery-report.mjs:1-1")).length,
+    1,
+    "step-limit + tool-recovery chain should inspect the target file once after the recovery handoff"
+  );
+  assert.ok(
+    result.toolSummaries.some((summary) => summary.startsWith("step-limit-tool-recovery-report.mjs:1-1 · updated")),
+    "step-limit + tool-recovery chain should still reach the pending edit"
+  );
+  assert.ok(
+    result.toolSummaries.some((summary) => summary.startsWith("node step-limit-tool-recovery-report.mjs · completed")),
+    "step-limit + tool-recovery chain should finish verification after the recovered edit"
+  );
+  assert.equal(
+    result.runtimeErrors.length,
+    0,
+    "step-limit + tool-recovery chain should recover within the same task without surfacing runtime errors"
   );
 }
 
