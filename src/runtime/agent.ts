@@ -6985,6 +6985,8 @@ function getAgentToolStepBudget(content: string) {
 
   if (
     looksLikeExtendedCodingTask(taskContent)
+    || looksLikeMultiTargetInspectionTask(taskContent)
+    || looksLikeSequentialFileInspectionTask(taskContent)
     || looksLikeProjectInspectionRequest(taskContent)
     || looksLikeLongRunningTask(taskContent)
   ) {

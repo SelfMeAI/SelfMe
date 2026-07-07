@@ -9371,16 +9371,20 @@ async function verifyAutomaticContinuationAcrossMultipleToolStepSlices() {
   });
 
   assert.equal(result.assistantText, "BATCH-DONE");
-  assert.equal(provider.continuationPromptCount, 3, "long sequential reads should auto-continue across three step-limit slices");
+  assert.equal(
+    provider.continuationPromptCount,
+    1,
+    "long sequential reads should get the extended inspection budget and only need one step-limit handoff"
+  );
   assert.equal(
     result.toolSummaries.filter((summary) => summary.startsWith("batch/file-25.txt:")).length,
     1,
     "multi-slice step-limit continuation should reach the final pending batch file exactly once"
   );
   assert.equal(
-    result.runtimeErrors.some((message) => message.includes("Agent stopped after 8 tool steps")),
+    result.runtimeErrors.some((message) => message.includes("Agent stopped after 16 tool steps")),
     false,
-    "multi-slice step-limit continuation should finish without surfacing the old standard-budget hard stop"
+    "multi-slice step-limit continuation should finish without surfacing the extended-budget hard stop"
   );
 }
 
@@ -9485,8 +9489,8 @@ async function verifyAutomaticContinuationAcrossAdvancingToolStepSlicesBeyondThr
   assert.equal(result.assistantText, "BATCH-LONG-DONE");
   assert.equal(
     provider.continuationPromptCount,
-    8,
-    "advancing long sequential reads should auto-continue across eight step-limit slices when the pending target keeps moving forward"
+    4,
+    "advancing long sequential reads should get the extended inspection budget and only need four step-limit handoffs while the pending target keeps moving forward"
   );
   assert.equal(
     result.toolSummaries.filter((summary) => summary.startsWith("batch-long/file-68.txt:")).length,
@@ -9494,9 +9498,9 @@ async function verifyAutomaticContinuationAcrossAdvancingToolStepSlicesBeyondThr
     "advancing multi-slice step-limit continuation should still reach the final pending batch file exactly once"
   );
   assert.equal(
-    result.runtimeErrors.some((message) => message.includes("Agent stopped after 8 tool steps")),
+    result.runtimeErrors.some((message) => message.includes("Agent stopped after 16 tool steps")),
     false,
-    "advancing multi-slice step-limit continuation should finish without surfacing the standard-budget hard stop"
+    "advancing multi-slice step-limit continuation should finish without surfacing the extended-budget hard stop"
   );
 }
 
