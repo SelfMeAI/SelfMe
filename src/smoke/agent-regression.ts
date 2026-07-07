@@ -4213,12 +4213,14 @@ async function main() {
   await verifyResumeFollowUpPullsBlockingQuestionBackIntoLatestFailurePoint();
   await verifyResumeFollowUpInProjectVerificationChain();
   await verifyCompletionToneReplyInProjectVerificationChain();
+  await verifyExplanationToneReplyInProjectVerificationChain();
   await verifyVagueOptimizationInProjectVerificationChain();
   await verifyProjectWordedOptimizationInProjectVerificationChain();
   await verifyVagueInspectionInProjectVerificationChain();
   await verifyProjectWordedInspectionInProjectVerificationChain();
   await verifyResumeFollowUpInProjectStageSummaryChain();
   await verifyCompletionToneReplyInProjectStageSummaryChain();
+  await verifyExplanationToneReplyInProjectStageSummaryChain();
   await verifyResumeFollowUpInProjectStageSummaryToolRecoveryChain();
   await verifyResumeFollowUpInProjectStageSummaryVerifierShiftChain();
   await verifyResumeFollowUpInImplicitProjectStageSummaryChain();
@@ -27489,6 +27491,12 @@ async function verifyCompletionToneReplyInProjectVerificationChain() {
   });
 }
 
+async function verifyExplanationToneReplyInProjectVerificationChain() {
+  await verifyProjectVerificationChainResume("还能继续吗", {
+    resumeIntermediateReply: "explanation"
+  });
+}
+
 async function verifyVagueOptimizationInProjectVerificationChain() {
   await verifyProjectVerificationChainResume("帮我优化下");
 }
@@ -27508,7 +27516,7 @@ async function verifyProjectWordedInspectionInProjectVerificationChain() {
 async function verifyProjectVerificationChainResume(
   followUpPrompt: "还能继续吗" | "帮我优化下" | "帮我优化项目" | "帮我看看" | "帮我看看项目",
   options: {
-    resumeIntermediateReply?: "completion";
+    resumeIntermediateReply?: "completion" | "explanation";
   } = {}
 ) {
   const root = await mkdtemp(join(tmpdir(), "selfme-agent-resume-project-chain-"));
@@ -27672,7 +27680,9 @@ async function verifyProjectVerificationChainResume(
         if (options.resumeIntermediateReply && !this.emittedResumeIntermediateReply) {
           this.emittedResumeIntermediateReply = true;
           yield {
-            delta: "The node-todo verification chain is basically finished overall."
+            delta: options.resumeIntermediateReply === "completion"
+              ? "The node-todo verification chain is basically finished overall."
+              : "I already fixed node-todo/app.js and the only remaining step is to update node-todo/views/index.ejs, then rerun node node-todo/verify-setup.mjs."
           };
           return;
         }
@@ -27812,9 +27822,15 @@ async function verifyProjectVerificationChainResume(
     assert.ok(
       resumedEvents.some((event) =>
         event.type === "assistant.delta.received"
-        && /The node-todo verification chain is basically finished overall\./.test(event.payload.delta)
+        && (
+          options.resumeIntermediateReply === "completion"
+            ? /The node-todo verification chain is basically finished overall\./.test(event.payload.delta)
+            : /I already fixed node-todo\/app\.js and the only remaining step is to update node-todo\/views\/index\.ejs, then rerun node node-todo\/verify-setup\.mjs\./.test(event.payload.delta)
+        )
       ),
-      "project verification completion-tone resume should preserve the intermediate completion-tone reply before retrying the pending view edit"
+      options.resumeIntermediateReply === "completion"
+        ? "project verification completion-tone resume should preserve the intermediate completion-tone reply before retrying the pending view edit"
+        : "project verification explanation-tone resume should preserve the intermediate explanation reply before retrying the pending view edit"
     );
   }
 
@@ -27859,6 +27875,12 @@ async function verifyResumeFollowUpInProjectStageSummaryChain() {
 async function verifyCompletionToneReplyInProjectStageSummaryChain() {
   await verifyProjectStageSummaryResume("还能继续吗", {
     resumeIntermediateReply: "completion"
+  });
+}
+
+async function verifyExplanationToneReplyInProjectStageSummaryChain() {
+  await verifyProjectStageSummaryResume("还能继续吗", {
+    resumeIntermediateReply: "explanation"
   });
 }
 
@@ -28569,7 +28591,7 @@ async function verifyResumeFollowUpInProjectStageSummaryVerifierShiftChain() {
 async function verifyProjectStageSummaryResume(
   followUpPrompt: "还能继续吗",
   options: {
-    resumeIntermediateReply?: "completion";
+    resumeIntermediateReply?: "completion" | "explanation";
   } = {}
 ) {
   const root = await mkdtemp(join(tmpdir(), "selfme-agent-resume-project-stage-"));
@@ -28737,7 +28759,9 @@ async function verifyProjectStageSummaryResume(
         if (options.resumeIntermediateReply && !this.emittedResumeIntermediateReply) {
           this.emittedResumeIntermediateReply = true;
           yield {
-            delta: "The node-todo stage-summary chain is basically finished overall."
+            delta: options.resumeIntermediateReply === "completion"
+              ? "The node-todo stage-summary chain is basically finished overall."
+              : "I already fixed node-todo/app.js and the remaining step is to read node-todo/views/index.ejs, update the title input, then rerun node node-todo/verify-setup.mjs."
           };
           return;
         }
@@ -28883,9 +28907,15 @@ async function verifyProjectStageSummaryResume(
     assert.ok(
       resumedEvents.some((event) =>
         event.type === "assistant.delta.received"
-        && /The node-todo stage-summary chain is basically finished overall\./.test(event.payload.delta)
+        && (
+          options.resumeIntermediateReply === "completion"
+            ? /The node-todo stage-summary chain is basically finished overall\./.test(event.payload.delta)
+            : /I already fixed node-todo\/app\.js and the remaining step is to read node-todo\/views\/index\.ejs, update the title input, then rerun node node-todo\/verify-setup\.mjs\./.test(event.payload.delta)
+        )
       ),
-      "project stage-summary completion-tone resume should preserve the intermediate completion-tone reply before retrying the pending view read"
+      options.resumeIntermediateReply === "completion"
+        ? "project stage-summary completion-tone resume should preserve the intermediate completion-tone reply before retrying the pending view read"
+        : "project stage-summary explanation-tone resume should preserve the intermediate explanation reply before retrying the pending view read"
     );
   }
 
