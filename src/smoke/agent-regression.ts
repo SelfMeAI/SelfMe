@@ -4064,6 +4064,7 @@ async function main() {
 
   await verifyResumeAfterToolStepLimitFailure();
   await verifyAutomaticContinuationAcrossMultipleToolStepSlices();
+  await verifyAutomaticContinuationAcrossAdvancingToolStepSlicesBeyondThreeHandoffs();
   await verifyAutomaticContinuationAfterToolStepLimitBeforeEdit();
   await verifyAutomaticContinuationAfterToolStepLimitBeforeShell();
   await verifyAutomaticContinuationAcrossToolStepLimitAndToolRecoverySlices();
@@ -9380,6 +9381,122 @@ async function verifyAutomaticContinuationAcrossMultipleToolStepSlices() {
     result.runtimeErrors.some((message) => message.includes("Agent stopped after 8 tool steps")),
     false,
     "multi-slice step-limit continuation should finish without surfacing the old standard-budget hard stop"
+  );
+}
+
+async function verifyAutomaticContinuationAcrossAdvancingToolStepSlicesBeyondThreeHandoffs() {
+  const root = await mkdtemp(join(tmpdir(), "selfme-agent-step-limit-advancing-multi-slice-"));
+  const workspace = join(root, "workspace");
+  const transcriptPath = join(root, "transcript.jsonl");
+  const logsPath = join(root, "logs.jsonl");
+  const filePaths = Array.from({ length: 68 }, (_, index) => `batch-long/file-${String(index + 1).padStart(2, "0")}.txt`);
+  const originalPrompt = "Read every batch file from batch-long/file-01.txt through batch-long/file-68.txt, then answer BATCH-LONG-DONE.";
+  await mkdir(join(workspace, "batch-long"), { recursive: true });
+
+  for (const [index, filePath] of filePaths.entries()) {
+    await writeFile(join(workspace, filePath), `line-${index + 1}\n`, "utf8");
+  }
+
+  class AdvancingStepLimitMultiSliceProvider implements ProviderClient {
+    readonly name = "advancing-step-limit-multi-slice-provider";
+    continuationPromptCount = 0;
+
+    async *streamResponse(input: ProviderStreamInput): AsyncIterable<ProviderStreamChunk> {
+      if (input.content === originalPrompt) {
+        yield {
+          delta: toolCall("files", {
+            path: filePaths[0],
+            startLine: 1,
+            endLine: 20
+          })
+        };
+        return;
+      }
+
+      if (
+        !input.content.startsWith("Original user request:")
+        && input.content.includes("The current task hit the per-slice tool budget but still has unfinished work.")
+      ) {
+        this.continuationPromptCount += 1;
+        const pendingTarget = input.content.match(/Pending next step target:\s*(batch-long\/file-\d{2}\.txt)/)?.[1];
+        assert.ok(pendingTarget, "expected a concrete advancing batch file target in the step-limit continuation prompt");
+        yield {
+          delta: toolCall("files", {
+            path: pendingTarget,
+            startLine: 1,
+            endLine: 20
+          })
+        };
+        return;
+      }
+
+      const summary = extractLine(input.content, "Summary:") ?? extractLine(input.content, "Latest summary:") ?? "";
+
+      if (/^batch-long\/file-\d{2}\.txt:1-1/.test(summary)) {
+        const currentIndex = filePaths.findIndex((filePath) => summary.startsWith(`${filePath}:`));
+        assert.notEqual(currentIndex, -1, "expected the latest summary to map back to a known advancing batch file");
+
+        if (currentIndex === filePaths.length - 1) {
+          yield { delta: "BATCH-LONG-DONE" };
+          return;
+        }
+
+        yield {
+          delta: toolCall("files", {
+            path: filePaths[currentIndex + 1],
+            startLine: 1,
+            endLine: 20
+          })
+        };
+        return;
+      }
+
+      yield { delta: "ok" };
+    }
+  }
+
+  const provider = new AdvancingStepLimitMultiSliceProvider();
+  const bus = new EventBus();
+  const transcriptStore = new TranscriptStore(transcriptPath);
+  const logStore = new LogStore(logsPath);
+  await transcriptStore.ensureInitialized();
+  await logStore.ensureInitialized();
+
+  const session = createDefaultSessionRecord(workspace, VERSION);
+  session.model = "regression-stub";
+
+  const runtime = new AgentRuntime({
+    bus,
+    provider,
+    tools: new InMemoryToolRegistry(),
+    session,
+    transcriptStore,
+    logStore
+  });
+  await runtime.start();
+
+  const result = await runAgentTask({
+    bus,
+    transcriptStore,
+    sessionId: session.sessionId,
+    prompt: originalPrompt
+  });
+
+  assert.equal(result.assistantText, "BATCH-LONG-DONE");
+  assert.equal(
+    provider.continuationPromptCount,
+    8,
+    "advancing long sequential reads should auto-continue across eight step-limit slices when the pending target keeps moving forward"
+  );
+  assert.equal(
+    result.toolSummaries.filter((summary) => summary.startsWith("batch-long/file-68.txt:")).length,
+    1,
+    "advancing multi-slice step-limit continuation should still reach the final pending batch file exactly once"
+  );
+  assert.equal(
+    result.runtimeErrors.some((message) => message.includes("Agent stopped after 8 tool steps")),
+    false,
+    "advancing multi-slice step-limit continuation should finish without surfacing the standard-budget hard stop"
   );
 }
 

@@ -35,10 +35,14 @@ const EXTENDED_AGENT_TOOL_STEPS = 16;
 const VERIFICATION_AGENT_TOOL_STEPS = 24;
 const PROJECT_AGENT_TOOL_STEPS = 32;
 const ASSISTANT_PASS_MULTIPLIER = 4;
-const MAX_AUTO_STEP_LIMIT_CONTINUATIONS = 3;
-const MAX_AUTO_ASSISTANT_PASS_LIMIT_CONTINUATIONS = 3;
-const MAX_AUTO_TOOL_RECOVERY_CONTINUATIONS = 3;
-const MAX_AUTO_REPEATED_STALL_CONTINUATIONS = 3;
+const MAX_AUTO_STEP_LIMIT_CONTINUATIONS_PER_TARGET = 3;
+const MAX_AUTO_STEP_LIMIT_CONTINUATIONS_TOTAL = 12;
+const MAX_AUTO_ASSISTANT_PASS_LIMIT_CONTINUATIONS_PER_TARGET = 3;
+const MAX_AUTO_ASSISTANT_PASS_LIMIT_CONTINUATIONS_TOTAL = 12;
+const MAX_AUTO_TOOL_RECOVERY_CONTINUATIONS_PER_TARGET = 3;
+const MAX_AUTO_TOOL_RECOVERY_CONTINUATIONS_TOTAL = 8;
+const MAX_AUTO_REPEATED_STALL_CONTINUATIONS_PER_TARGET = 3;
+const MAX_AUTO_REPEATED_STALL_CONTINUATIONS_TOTAL = 8;
 const MAX_REPEATED_IDENTICAL_TOOL_RESULTS = 2;
 const MAX_REPEATED_IDENTICAL_ASSISTANT_MESSAGES = 2;
 const MAX_MALFORMED_TOOL_CALL_RETRIES = 1;
@@ -86,6 +90,12 @@ interface RuntimeToolResult {
   summary: string;
   rawOutput?: string;
   errorMessage?: string;
+}
+
+interface AutoContinuationBudgetState {
+  totalCount: number;
+  repeatedTargetCount: number;
+  lastTargetKey?: string;
 }
 
 interface AnchoredRuntimeToolResult extends RuntimeToolResult {
@@ -635,11 +645,11 @@ export class AgentRuntime {
     let malformedToolCallRetryCount = 0;
     let unknownToolRetryCount = 0;
     let invalidToolInputRetryCount = 0;
-    let autoStepLimitContinuationCount = 0;
-    let autoAssistantPassContinuationCount = 0;
-    let autoToolRecoveryContinuationCount = 0;
-    let autoRepeatedToolStallContinuationCount = 0;
-    let autoRepeatedAssistantStallContinuationCount = 0;
+    const autoStepLimitContinuationBudget = createAutoContinuationBudgetState();
+    const autoAssistantPassContinuationBudget = createAutoContinuationBudgetState();
+    const autoToolRecoveryContinuationBudget = createAutoContinuationBudgetState();
+    const autoRepeatedToolStallContinuationBudget = createAutoContinuationBudgetState();
+    const autoRepeatedAssistantStallContinuationBudget = createAutoContinuationBudgetState();
     const activeRun = this.startActiveRun(sessionId, responseTaskId);
     this.taskOriginalRequests.set(responseTaskId, originalRequest);
     this.taskKnownPaths.set(responseTaskId, new Set(extractWritableTaskPaths(originalRequest)));
@@ -675,10 +685,14 @@ export class AgentRuntime {
 
           if (
             pendingTargetPath
-            && autoAssistantPassContinuationCount < MAX_AUTO_ASSISTANT_PASS_LIMIT_CONTINUATIONS
             && shouldAutoContinueAfterStepLimit(originalRequest, pendingTargetPath)
+            && shouldConsumeAutoContinuationBudget(
+              autoAssistantPassContinuationBudget,
+              pendingTargetPath,
+              MAX_AUTO_ASSISTANT_PASS_LIMIT_CONTINUATIONS_PER_TARGET,
+              MAX_AUTO_ASSISTANT_PASS_LIMIT_CONTINUATIONS_TOTAL
+            )
           ) {
-            autoAssistantPassContinuationCount += 1;
             nextPrompt = buildAssistantPassLimitAutoContinuationPrompt({
               originalRequest,
               targetPath: pendingTargetPath,
@@ -709,6 +723,12 @@ export class AgentRuntime {
           malformedToolCallRetryCount += 1;
 
           if (malformedToolCallRetryCount > MAX_MALFORMED_TOOL_CALL_RETRIES) {
+            const recoveryTargetPath = resolveContinuationTargetFromPromptOrContext(
+              originalRequest,
+              nextPrompt,
+              lastToolResult
+            );
+
             await this.recordContinuationPendingCheckpoint({
               sessionId,
               taskId: responseTaskId,
@@ -718,10 +738,15 @@ export class AgentRuntime {
             });
 
             if (
-              autoToolRecoveryContinuationCount < MAX_AUTO_TOOL_RECOVERY_CONTINUATIONS
-              && shouldAutoContinueAfterToolRecovery(originalRequest, nextPrompt, lastToolResult)
+              recoveryTargetPath
+              && shouldAutoContinueAfterStepLimit(originalRequest, recoveryTargetPath)
+              && shouldConsumeAutoContinuationBudget(
+                autoToolRecoveryContinuationBudget,
+                recoveryTargetPath,
+                MAX_AUTO_TOOL_RECOVERY_CONTINUATIONS_PER_TARGET,
+                MAX_AUTO_TOOL_RECOVERY_CONTINUATIONS_TOTAL
+              )
             ) {
-              autoToolRecoveryContinuationCount += 1;
               nextPrompt = buildToolRecoveryAutoContinuationPrompt({
                 originalRequest,
                 nextPrompt,
@@ -814,6 +839,12 @@ export class AgentRuntime {
               latestToolResult: lastToolResult
             })
           ) {
+            const repeatedAssistantStallTargetPath = resolveContinuationTargetFromPromptOrContext(
+              originalRequest,
+              messageStep.nextPrompt,
+              lastToolResult
+            );
+
             await this.recordContinuationPendingCheckpoint({
               sessionId,
               taskId: responseTaskId,
@@ -823,10 +854,15 @@ export class AgentRuntime {
             });
 
             if (
-              autoRepeatedAssistantStallContinuationCount < MAX_AUTO_REPEATED_STALL_CONTINUATIONS
-              && shouldAutoContinueAfterRepeatedStall(originalRequest, messageStep.nextPrompt, lastToolResult)
+              repeatedAssistantStallTargetPath
+              && shouldAutoContinueAfterStepLimit(originalRequest, repeatedAssistantStallTargetPath)
+              && shouldConsumeAutoContinuationBudget(
+                autoRepeatedAssistantStallContinuationBudget,
+                repeatedAssistantStallTargetPath,
+                MAX_AUTO_REPEATED_STALL_CONTINUATIONS_PER_TARGET,
+                MAX_AUTO_REPEATED_STALL_CONTINUATIONS_TOTAL
+              )
             ) {
-              autoRepeatedAssistantStallContinuationCount += 1;
               nextPrompt = buildRepeatedStallAutoContinuationPrompt({
                 originalRequest,
                 nextPrompt: messageStep.nextPrompt,
@@ -856,6 +892,12 @@ export class AgentRuntime {
           unknownToolRetryCount += 1;
 
           if (unknownToolRetryCount > MAX_UNKNOWN_TOOL_RETRIES) {
+            const recoveryTargetPath = resolveContinuationTargetFromPromptOrContext(
+              originalRequest,
+              nextPrompt,
+              lastToolResult
+            );
+
             await this.recordContinuationPendingCheckpoint({
               sessionId,
               taskId: responseTaskId,
@@ -865,10 +907,15 @@ export class AgentRuntime {
             });
 
             if (
-              autoToolRecoveryContinuationCount < MAX_AUTO_TOOL_RECOVERY_CONTINUATIONS
-              && shouldAutoContinueAfterToolRecovery(originalRequest, nextPrompt, lastToolResult)
+              recoveryTargetPath
+              && shouldAutoContinueAfterStepLimit(originalRequest, recoveryTargetPath)
+              && shouldConsumeAutoContinuationBudget(
+                autoToolRecoveryContinuationBudget,
+                recoveryTargetPath,
+                MAX_AUTO_TOOL_RECOVERY_CONTINUATIONS_PER_TARGET,
+                MAX_AUTO_TOOL_RECOVERY_CONTINUATIONS_TOTAL
+              )
             ) {
-              autoToolRecoveryContinuationCount += 1;
               nextPrompt = buildToolRecoveryAutoContinuationPrompt({
                 originalRequest,
                 nextPrompt,
@@ -903,6 +950,12 @@ export class AgentRuntime {
           invalidToolInputRetryCount += 1;
 
           if (invalidToolInputRetryCount > MAX_INVALID_TOOL_INPUT_RETRIES) {
+            const recoveryTargetPath = resolveContinuationTargetFromPromptOrContext(
+              originalRequest,
+              nextPrompt,
+              lastToolResult
+            );
+
             await this.recordContinuationPendingCheckpoint({
               sessionId,
               taskId: responseTaskId,
@@ -912,10 +965,15 @@ export class AgentRuntime {
             });
 
             if (
-              autoToolRecoveryContinuationCount < MAX_AUTO_TOOL_RECOVERY_CONTINUATIONS
-              && shouldAutoContinueAfterToolRecovery(originalRequest, nextPrompt, lastToolResult)
+              recoveryTargetPath
+              && shouldAutoContinueAfterStepLimit(originalRequest, recoveryTargetPath)
+              && shouldConsumeAutoContinuationBudget(
+                autoToolRecoveryContinuationBudget,
+                recoveryTargetPath,
+                MAX_AUTO_TOOL_RECOVERY_CONTINUATIONS_PER_TARGET,
+                MAX_AUTO_TOOL_RECOVERY_CONTINUATIONS_TOTAL
+              )
             ) {
-              autoToolRecoveryContinuationCount += 1;
               nextPrompt = buildToolRecoveryAutoContinuationPrompt({
                 originalRequest,
                 nextPrompt,
@@ -957,10 +1015,14 @@ export class AgentRuntime {
 
           if (
             pendingTargetPath
-            && autoStepLimitContinuationCount < MAX_AUTO_STEP_LIMIT_CONTINUATIONS
             && shouldAutoContinueAfterStepLimit(originalRequest, pendingTargetPath)
+            && shouldConsumeAutoContinuationBudget(
+              autoStepLimitContinuationBudget,
+              pendingTargetPath,
+              MAX_AUTO_STEP_LIMIT_CONTINUATIONS_PER_TARGET,
+              MAX_AUTO_STEP_LIMIT_CONTINUATIONS_TOTAL
+            )
           ) {
-            autoStepLimitContinuationCount += 1;
             nextPrompt = buildStepLimitAutoContinuationPrompt({
               originalRequest,
               targetPath: pendingTargetPath,
@@ -1013,6 +1075,12 @@ export class AgentRuntime {
             latestToolResult: lastToolResult
           })
         ) {
+          const repeatedToolStallTargetPath = resolveContinuationTargetFromPromptOrContext(
+            originalRequest,
+            toolStep.nextPrompt,
+            lastToolResult
+          );
+
           await this.recordContinuationPendingCheckpoint({
             sessionId,
             taskId: responseTaskId,
@@ -1022,10 +1090,15 @@ export class AgentRuntime {
           });
 
           if (
-            autoRepeatedToolStallContinuationCount < MAX_AUTO_REPEATED_STALL_CONTINUATIONS
-            && shouldAutoContinueAfterRepeatedStall(originalRequest, toolStep.nextPrompt, lastToolResult)
+            repeatedToolStallTargetPath
+            && shouldAutoContinueAfterStepLimit(originalRequest, repeatedToolStallTargetPath)
+            && shouldConsumeAutoContinuationBudget(
+                autoRepeatedToolStallContinuationBudget,
+                repeatedToolStallTargetPath,
+                MAX_AUTO_REPEATED_STALL_CONTINUATIONS_PER_TARGET,
+                MAX_AUTO_REPEATED_STALL_CONTINUATIONS_TOTAL
+              )
           ) {
-            autoRepeatedToolStallContinuationCount += 1;
             nextPrompt = buildRepeatedStallAutoContinuationPrompt({
               originalRequest,
               nextPrompt: toolStep.nextPrompt,
@@ -7470,6 +7543,51 @@ function pathsReferToSameTarget(left: string, right: string) {
     || normalizedRight.endsWith(`/${normalizedLeft}`);
 }
 
+function createAutoContinuationBudgetState(): AutoContinuationBudgetState {
+  return {
+    totalCount: 0,
+    repeatedTargetCount: 0
+  };
+}
+
+function normalizeContinuationTargetKey(targetPath: string) {
+  if (looksLikeExecutableCommandAnchor(targetPath)) {
+    return targetPath.trim().replace(/\s+/g, " ").toLowerCase();
+  }
+
+  return normalizeComparablePath(targetPath).toLowerCase();
+}
+
+function shouldConsumeAutoContinuationBudget(
+  state: AutoContinuationBudgetState,
+  targetPath: string | undefined,
+  perTargetLimit: number,
+  totalLimit: number
+) {
+  if (!targetPath || state.totalCount >= totalLimit) {
+    return false;
+  }
+
+  const targetKey = normalizeContinuationTargetKey(targetPath);
+
+  if (!targetKey) {
+    return false;
+  }
+
+  const repeatedTargetCount = state.lastTargetKey === targetKey
+    ? state.repeatedTargetCount + 1
+    : 1;
+
+  if (repeatedTargetCount > perTargetLimit) {
+    return false;
+  }
+
+  state.lastTargetKey = targetKey;
+  state.repeatedTargetCount = repeatedTargetCount;
+  state.totalCount += 1;
+  return true;
+}
+
 function extractLikelyNextTargetPathFromAssistantMessage(content: string) {
   if (
     !looksLikeStageSummaryWithPendingWork(content)
@@ -7632,6 +7750,23 @@ function extractPendingTargetPathFromContinuationPrompt(content: string) {
   }
 
   return undefined;
+}
+
+function resolveContinuationTargetFromPromptOrContext(
+  originalRequest: string,
+  nextPrompt: string,
+  previousToolResult?: {
+    toolName: string;
+    summary: string;
+    rawOutput?: string;
+    errorMessage?: string;
+  }
+) {
+  return extractPendingTargetPathFromContinuationPrompt(nextPrompt)
+    ?? derivePendingTargetPathFromContinuationContext({
+      originalRequest,
+      previousToolResult
+    });
 }
 
 function derivePendingTargetPathFromContinuationContext(input: {
@@ -7860,11 +7995,11 @@ function shouldAutoContinueAfterToolRecovery(
     errorMessage?: string;
   }
 ) {
-  const pendingTargetPath = extractPendingTargetPathFromContinuationPrompt(nextPrompt)
-    ?? derivePendingTargetPathFromContinuationContext({
-      originalRequest,
-      previousToolResult
-    });
+  const pendingTargetPath = resolveContinuationTargetFromPromptOrContext(
+    originalRequest,
+    nextPrompt,
+    previousToolResult
+  );
 
   if (!pendingTargetPath) {
     return false;
@@ -7883,11 +8018,11 @@ function shouldAutoContinueAfterRepeatedStall(
     errorMessage?: string;
   }
 ) {
-  const pendingTargetPath = extractPendingTargetPathFromContinuationPrompt(nextPrompt)
-    ?? derivePendingTargetPathFromContinuationContext({
-      originalRequest,
-      previousToolResult
-    });
+  const pendingTargetPath = resolveContinuationTargetFromPromptOrContext(
+    originalRequest,
+    nextPrompt,
+    previousToolResult
+  );
 
   if (!pendingTargetPath) {
     return false;
