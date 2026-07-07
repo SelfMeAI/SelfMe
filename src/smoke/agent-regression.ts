@@ -4100,6 +4100,8 @@ async function main() {
   await verifyLongHistoryResumeFollowUpInProjectVerificationChain();
   await verifyLongHistoryOptimizationFollowUpInProjectVerificationChain();
   await verifyLongHistoryAffirmativeResumeFollowUpInProjectVerificationChain();
+  await verifyLongHistoryApprovalWaitResumeFollowUpInProjectChain();
+  await verifyLongHistoryApprovalWaitAffirmativeResumeFollowUpInProjectChain();
   await verifyLongHistoryRewriteProposalApprovalStillAnchorsAfterCompaction();
   await verifyBareCompletionReplyStillTriggersVerification();
   await verifyRepeatedIdenticalAssistantRepliesAbortAsStalled();
@@ -7859,6 +7861,310 @@ async function verifyLongHistoryProjectResumeChain(
     result.toolSummaries.filter((summary) => summary.startsWith("node node-todo/verify-setup.mjs · completed")).length,
     1,
     "expected long-history project resume chain to run the final verification exactly once after the resumed edit"
+  );
+}
+
+async function verifyLongHistoryApprovalWaitResumeFollowUpInProjectChain() {
+  await verifyLongHistoryProjectApprovalResumeChain("还能继续吗");
+}
+
+async function verifyLongHistoryApprovalWaitAffirmativeResumeFollowUpInProjectChain() {
+  await verifyLongHistoryProjectApprovalResumeChain("可以");
+}
+
+async function verifyLongHistoryProjectApprovalResumeChain(
+  followUpPrompt: "还能继续吗" | "可以"
+) {
+  const root = await mkdtemp(join(tmpdir(), "selfme-agent-long-history-project-approval-resume-chain-"));
+  const workspace = join(root, "workspace");
+  const transcriptPath = join(root, "transcript.jsonl");
+  const logsPath = join(root, "logs.jsonl");
+  const originalPrompt = "看看项目，然后直接优化 node-todo：把 node-todo/app.js 的端口改成 process.env.PORT，再给 node-todo/views/index.ejs 的 title input 加上 maxlength 100，并运行 `node node-todo/verify-setup.mjs` 验证，直到输出 exactly `ready`。";
+  await mkdir(join(workspace, "node-todo", "views"), { recursive: true });
+  await mkdir(join(workspace, "aaa-sidecar"), { recursive: true });
+  await mkdir(join(workspace, "docs"), { recursive: true });
+
+  await writeFile(join(workspace, "docs", "plan.md"), "# plan\n", "utf8");
+  await writeFile(
+    join(workspace, "node-todo", "package.json"),
+    '{\n  "name": "node-todo",\n  "version": "1.0.0",\n  "scripts": {\n    "start": "node app.js"\n  }\n}\n',
+    "utf8"
+  );
+  await writeFile(
+    join(workspace, "node-todo", "app.js"),
+    'const express = require("express");\nconst app = express();\nconst PORT = 3000;\napp.listen(PORT, () => {\n  console.log(`Todo app is running at http://localhost:${PORT}`);\n});\n',
+    "utf8"
+  );
+  await writeFile(
+    join(workspace, "node-todo", "views", "index.ejs"),
+    '<!DOCTYPE html>\n<form action="/add" method="post">\n  <input name="title" />\n</form>\n',
+    "utf8"
+  );
+  await writeFile(
+    join(workspace, "node-todo", "verify-setup.mjs"),
+    [
+      'import { readFileSync } from "node:fs";',
+      'const app = readFileSync(new URL("./app.js", import.meta.url), "utf8");',
+      'const view = readFileSync(new URL("./views/index.ejs", import.meta.url), "utf8");',
+      'const appReady = /process\\.env\\.PORT/.test(app);',
+      'const viewReady = /maxlength="100"/.test(view);',
+      'if (appReady && viewReady) {',
+      '  console.log("ready");',
+      '} else if (appReady) {',
+      '  console.log("app-only");',
+      '} else if (viewReady) {',
+      '  console.log("view-only");',
+      '} else {',
+      '  console.log("not-ready");',
+      '}'
+    ].join("\n") + "\n",
+    "utf8"
+  );
+  await writeFile(
+    join(workspace, "aaa-sidecar", "server.js"),
+    'console.log("decoy");\n',
+    "utf8"
+  );
+
+  class LongHistoryProjectApprovalResumeChainProvider implements ProviderClient {
+    readonly name = "long-history-project-approval-resume-chain-provider";
+
+    async *streamResponse(input: ProviderStreamInput): AsyncIterable<ProviderStreamChunk> {
+      if (input.content.startsWith(`The user replied "${followUpPrompt}" and wants to continue the most recent unfinished task.`)) {
+        assert.match(input.content, /Original task: 看看项目，然后直接优化 node-todo/);
+        if (followUpPrompt === "还能继续吗") {
+          assert.match(input.content, /Resume that task now instead of treating this as a discussion question\./);
+        } else {
+          assert.match(input.content, /Resume that task now instead of treating this as a generic acknowledgement\./);
+        }
+        assert.match(input.content, /Recent editable working file: node-todo\/views\/index\.ejs/);
+        assert.match(input.content, /Latest tool in context: files/);
+        assert.match(input.content, /Latest tool summary in context: node-todo\/views\/index\.ejs:1-4/);
+        assert.match(input.content, /Interrupted pending approval: edit · node-todo\/views\/index\.ejs:3-3/);
+
+        const recentTaskState = input.contextMessages?.find((message) =>
+          message.role === "system" && message.content.includes("Recent task state:")
+        )?.content ?? "";
+        const earlierSummary = input.contextMessages?.find((message) =>
+          message.role === "system" && message.content.includes("Earlier session summary:")
+        )?.content ?? "";
+
+        assert.match(recentTaskState, new RegExp(`Current request: ${followUpPrompt.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}`));
+        assert.match(recentTaskState, /Underlying task: 看看项目，然后直接优化 node-todo/);
+        assert.match(recentTaskState, /Pending approval: edit · node-todo\/views\/index\.ejs:3-3/);
+        assert.match(recentTaskState, /Working files: node-todo\/views\/index\.ejs/);
+        assert.ok(earlierSummary.length > 0, "expected long history project approval resume chain to build an earlier session summary");
+
+        yield {
+          delta: toolCall("edit", {
+            path: "node-todo/views/index.ejs",
+            startLine: 3,
+            endLine: 3,
+            replacement: '  <input name="title" maxlength="100" />'
+          })
+        };
+        return;
+      }
+
+      if (input.content.startsWith(`Original user request: The user replied "${followUpPrompt}" and wants to continue the most recent unfinished task.`)) {
+        const toolName = extractLine(input.content, "Tool:") ?? extractLine(input.content, "Latest tool:");
+        const summary = extractLine(input.content, "Summary:") ?? extractLine(input.content, "Latest summary:") ?? "";
+
+        if (toolName === "edit" && /node-todo\/views\/index\.ejs/.test(summary)) {
+          yield {
+            delta: toolCall("shell", {
+              command: "node node-todo/verify-setup.mjs"
+            })
+          };
+          return;
+        }
+
+        if (toolName === "shell" && /node node-todo\/verify-setup\.mjs/.test(summary)) {
+          assert.match(input.content, /ready/);
+          yield { delta: "Completed the long-history node-todo approval-wait chain after resuming from the pending view edit." };
+          return;
+        }
+      }
+
+      yield { delta: "ok" };
+    }
+  }
+
+  const bus = new EventBus();
+  const transcriptStore = new TranscriptStore(transcriptPath);
+  const logStore = new LogStore(logsPath);
+  await transcriptStore.ensureInitialized();
+  await logStore.ensureInitialized();
+
+  const session = createDefaultSessionRecord(workspace, VERSION);
+  session.model = "regression-stub";
+
+  for (let index = 1; index <= 6; index += 1) {
+    const taskId = `older-history-project-approval-resume-${index}`;
+    await transcriptStore.appendEvent(createUserMessageSubmittedEvent({
+      sessionId: session.sessionId,
+      content: `Older request ${index}`
+    }));
+    await transcriptStore.appendEvent(createAssistantDeltaEvent({
+      sessionId: session.sessionId,
+      taskId,
+      delta: `Older answer ${index}`
+    }));
+    await transcriptStore.appendEvent(createAssistantCompletedEvent({
+      sessionId: session.sessionId,
+      taskId,
+      model: "regression-stub"
+    }));
+  }
+
+  await transcriptStore.appendEvent(createToolExecutionCompletedEvent({
+    sessionId: session.sessionId,
+    taskId: "older-history-project-approval-resume-tool",
+    toolName: "shell",
+    summary: "yes · timed out · truncated",
+    rawOutput: "Y".repeat(4000)
+  }));
+
+  const approvalRequestedEvent = createApprovalRequestedEvent({
+    sessionId: session.sessionId,
+    taskId: "generic-history-project-approval-task",
+    toolName: "edit",
+    input: {
+      path: "node-todo/views/index.ejs",
+      startLine: 3,
+      endLine: 3,
+      replacement: '  <input name="title" maxlength="100" />'
+    },
+    reason: "Edit node-todo/views/index.ejs",
+    risk: "high"
+  });
+
+  await transcriptStore.appendEvent(createUserMessageSubmittedEvent({
+    sessionId: session.sessionId,
+    content: originalPrompt
+  }));
+  await transcriptStore.appendEvent(createToolExecutionCompletedEvent({
+    sessionId: session.sessionId,
+    taskId: "generic-history-project-approval-tool-1",
+    toolName: "shell",
+    summary: "pwd && ls -la && find . -maxdepth 2 -type f | sed 's#^./##' | sort | head -200 · completed",
+    rawOutput: "/workspace\nnode-todo\naaa-sidecar\ndocs"
+  }));
+  await transcriptStore.appendEvent(createToolExecutionCompletedEvent({
+    sessionId: session.sessionId,
+    taskId: "generic-history-project-approval-tool-2",
+    toolName: "files",
+    summary: "node-todo/package.json:1-5",
+    rawOutput: '{\n  "name": "node-todo",\n  "version": "1.0.0",\n  "scripts": {\n    "start": "node app.js"\n  }\n}'
+  }));
+  await transcriptStore.appendEvent(createToolExecutionCompletedEvent({
+    sessionId: session.sessionId,
+    taskId: "generic-history-project-approval-tool-3",
+    toolName: "files",
+    summary: "node-todo/app.js:1-6",
+    rawOutput: '1 | const express = require("express");\n2 | const app = express();\n3 | const PORT = 3000;'
+  }));
+  await transcriptStore.appendEvent(createToolExecutionCompletedEvent({
+    sessionId: session.sessionId,
+    taskId: "generic-history-project-approval-tool-4",
+    toolName: "edit",
+    summary: "node-todo/app.js:3-3 · updated",
+    rawOutput: '3 | const PORT = Number(process.env.PORT || 3000);'
+  }));
+  await transcriptStore.appendEvent(createToolExecutionCompletedEvent({
+    sessionId: session.sessionId,
+    taskId: "generic-history-project-approval-tool-5",
+    toolName: "shell",
+    summary: "node node-todo/verify-setup.mjs · completed",
+    rawOutput: "app-only"
+  }));
+  await transcriptStore.appendEvent(createToolExecutionCompletedEvent({
+    sessionId: session.sessionId,
+    taskId: "generic-history-project-approval-tool-6",
+    toolName: "files",
+    summary: "node-todo/views/index.ejs:1-4",
+    rawOutput: '1 | <!DOCTYPE html>\n2 | <form action="/add" method="post">\n3 |   <input name="title" />\n4 | </form>'
+  }));
+  await transcriptStore.appendEvent(approvalRequestedEvent);
+  await transcriptStore.appendEvent(createRuntimeInterruptRequestedEvent({
+    sessionId: session.sessionId,
+    reason: "cancel"
+  }));
+  await transcriptStore.appendEvent(createApprovalResolvedEvent({
+    sessionId: session.sessionId,
+    taskId: "generic-history-project-approval-task",
+    approvalId: approvalRequestedEvent.payload.approvalId,
+    approved: false
+  }));
+  await transcriptStore.appendEvent(createTaskStateChangedEvent({
+    sessionId: session.sessionId,
+    taskId: "generic-history-project-approval-task",
+    state: "cancelled",
+    title: "Respond to user input"
+  }));
+
+  const runtime = new AgentRuntime({
+    bus,
+    provider: new LongHistoryProjectApprovalResumeChainProvider(),
+    tools: new InMemoryToolRegistry(),
+    session,
+    transcriptStore,
+    logStore
+  });
+  await runtime.start();
+
+  let approvalCount = 0;
+  bus.on("approval.requested", (event) => {
+    approvalCount += 1;
+    bus.emit(createTerminalCommandInvokedEvent({
+      sessionId: event.sessionId,
+      content: `/approve ${event.payload.approvalId}`
+    }));
+  });
+
+  const result = await runAgentTask({
+    bus,
+    transcriptStore,
+    sessionId: session.sessionId,
+    prompt: followUpPrompt
+  });
+
+  const resumedViewContent = await readFile(join(workspace, "node-todo", "views", "index.ejs"), "utf8");
+  assert.match(resumedViewContent, /maxlength="100"/);
+  assert.match(result.assistantText, /node-todo|pending view edit|approval-wait chain/i);
+  assert.doesNotMatch(result.assistantText, /^(可以|可以继续|好的|sure|okay)\b/i);
+  assert.equal(
+    result.toolSummaries.some((summary) => summary.startsWith("node-todo/package.json:1-")),
+    false,
+    "expected long-history approval resume chain to avoid restarting from package.json after compaction"
+  );
+  assert.equal(
+    result.toolSummaries.some((summary) => summary.startsWith("node-todo/app.js:1-")),
+    false,
+    "expected long-history approval resume chain to avoid rereading app.js after the task narrowed to the pending approval"
+  );
+  assert.equal(
+    result.toolSummaries.some((summary) => summary.startsWith("node-todo/views/index.ejs:1-4")),
+    false,
+    "expected long-history approval resume chain to avoid rereading the same view file before retrying the pending edit"
+  );
+  assert.equal(
+    result.toolSummaries.some((summary) => /^aaa-sidecar\/(?:package\.json|server\.js):1-\d+/.test(summary)),
+    false,
+    "expected long-history approval resume chain to avoid drifting into the sibling decoy project after compaction"
+  );
+  assert.ok(
+    result.toolSummaries.some((summary) => summary.startsWith("node-todo/views/index.ejs:3-3 · updated")),
+    "expected long-history approval resume chain to continue directly with the pending approved edit"
+  );
+  assert.ok(
+    result.toolSummaries.some((summary) => summary.startsWith("node node-todo/verify-setup.mjs · completed")),
+    "expected long-history approval resume chain to finish verification after the resumed edit"
+  );
+  assert.equal(
+    approvalCount,
+    1,
+    "expected one fresh approval request for the resumed pending view edit"
   );
 }
 
