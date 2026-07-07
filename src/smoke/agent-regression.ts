@@ -4071,6 +4071,7 @@ async function main() {
   await verifyAutomaticContinuationAfterAssistantPassLimitFailure();
   await verifyAutomaticContinuationAcrossMultipleAssistantPassSlices();
   await verifyAutomaticContinuationAcrossMultipleToolRecoverySlices();
+  await verifyAutomaticContinuationAcrossMixedRecoveryAndStallSlices();
   await verifyDeniedLaterApprovalDoesNotRetrySameAction();
   await verifyResumeAfterDeniedLaterApprovalStaysBlocked();
   await verifyAffirmativeAfterDeniedLaterApprovalStaysBlocked();
@@ -10987,6 +10988,205 @@ async function verifyAutomaticContinuationAcrossMultipleToolRecoverySlices() {
     result.runtimeErrors.length,
     0,
     "multi-slice tool-recovery continuation should recover within the same task"
+  );
+}
+
+async function verifyAutomaticContinuationAcrossMixedRecoveryAndStallSlices() {
+  const root = await mkdtemp(join(tmpdir(), "selfme-agent-resume-mixed-recovery-stall-"));
+  const workspace = join(root, "workspace");
+  const transcriptPath = join(root, "transcript.jsonl");
+  const logsPath = join(root, "logs.jsonl");
+  const originalPrompt = "Fix mixed-recovery-stall-report.mjs so running `node mixed-recovery-stall-report.mjs` prints exactly `ready`. Verify it before finishing, even if your edit tool input is invalid before you hit a repeated shell stall.";
+  await mkdir(workspace, { recursive: true });
+  await writeFile(join(workspace, "mixed-recovery-stall-report.mjs"), 'console.log("pending");\n', "utf8");
+
+  class MixedRecoveryAndStallProvider implements ProviderClient {
+    readonly name = "mixed-recovery-and-stall-provider";
+    private invalidEditAttemptCount = 0;
+    private repeatedShellCount = 0;
+    recoveryContinuationCount = 0;
+    stallContinuationCount = 0;
+
+    private buildInvalidEditToolCall() {
+      return toolCall("edit", {
+        startLine: 1,
+        endLine: 1,
+        replacement: 'console.log("ready");'
+      });
+    }
+
+    async *streamResponse(input: ProviderStreamInput): AsyncIterable<ProviderStreamChunk> {
+      if (input.content === originalPrompt) {
+        yield { delta: this.buildInvalidEditToolCall() };
+        return;
+      }
+
+      if (input.content.startsWith(`Original user request: ${originalPrompt}`)) {
+        this.invalidEditAttemptCount += 1;
+
+        if (this.invalidEditAttemptCount <= 2) {
+          yield { delta: this.buildInvalidEditToolCall() };
+          return;
+        }
+      }
+
+      if (
+        !input.content.startsWith("Original user request:")
+        && input.content.includes("The task hit repeated tool-recovery failures but the task context is still actionable.")
+      ) {
+        this.recoveryContinuationCount += 1;
+        assert.match(input.content, /Pending next step target: mixed-recovery-stall-report\.mjs/);
+        yield {
+          delta: toolCall("files", {
+            path: "mixed-recovery-stall-report.mjs",
+            startLine: 1,
+            endLine: 20
+          })
+        };
+        return;
+      }
+
+      if (
+        input.content.startsWith("Original user request: The task hit repeated tool-recovery failures but the task context is still actionable.")
+      ) {
+        const toolName = extractLine(input.content, "Tool:") ?? extractLine(input.content, "Latest tool:");
+        const summary = extractLine(input.content, "Summary:") ?? extractLine(input.content, "Latest summary:") ?? "";
+
+        if (toolName === "files" && /mixed-recovery-stall-report\.mjs/.test(summary)) {
+          yield {
+            delta: toolCall("shell", {
+              command: "node mixed-recovery-stall-report.mjs"
+            })
+          };
+          return;
+        }
+
+        if (toolName === "shell" && /failed \(1\)/.test(summary)) {
+          this.repeatedShellCount += 1;
+
+          if (this.repeatedShellCount <= 2) {
+            yield {
+              delta: toolCall("shell", {
+                command: "node mixed-recovery-stall-report.mjs"
+              })
+            };
+            return;
+          }
+        }
+      }
+
+      if (
+        !input.content.startsWith("Original user request:")
+        && input.content.includes("The task stalled after repeated identical progress signals but the task context is still actionable.")
+      ) {
+        this.stallContinuationCount += 1;
+        assert.match(input.content, /Latest stall kind: repeated identical shell results\./);
+        assert.match(input.content, /Pending next step target: mixed-recovery-stall-report\.mjs/);
+        assert.match(input.content, /Latest tool in context: shell/);
+        yield {
+          delta: toolCall("edit", {
+            path: "mixed-recovery-stall-report.mjs",
+            startLine: 1,
+            endLine: 1,
+            replacement: 'console.log("ready");'
+          })
+        };
+        return;
+      }
+
+      if (
+        input.content.startsWith("Original user request: The task stalled after repeated identical progress signals but the task context is still actionable.")
+      ) {
+        const toolName = extractLine(input.content, "Tool:") ?? extractLine(input.content, "Latest tool:");
+        const summary = extractLine(input.content, "Summary:") ?? extractLine(input.content, "Latest summary:") ?? "";
+
+        if (toolName === "edit" && /mixed-recovery-stall-report\.mjs/.test(summary)) {
+          yield {
+            delta: toolCall("shell", {
+              command: "node mixed-recovery-stall-report.mjs"
+            })
+          };
+          return;
+        }
+
+        if (toolName === "shell" && /completed/.test(summary)) {
+          yield { delta: "Repaired mixed-recovery-stall-report.mjs after a tool-recovery continuation and a repeated-shell-stall continuation, then verified the final output is ready." };
+          return;
+        }
+      }
+
+      yield { delta: "ok" };
+    }
+  }
+
+  const provider = new MixedRecoveryAndStallProvider();
+  const bus = new EventBus();
+  const transcriptStore = new TranscriptStore(transcriptPath);
+  const logStore = new LogStore(logsPath);
+  await transcriptStore.ensureInitialized();
+  await logStore.ensureInitialized();
+
+  const session = createDefaultSessionRecord(workspace, VERSION);
+  session.model = "regression-stub";
+
+  const runtime = new AgentRuntime({
+    bus,
+    provider,
+    tools: new InMemoryToolRegistry(),
+    session,
+    transcriptStore,
+    logStore
+  });
+  await runtime.start();
+
+  bus.on("approval.requested", (event) => {
+    bus.emit(createTerminalCommandInvokedEvent({
+      sessionId: event.sessionId,
+      content: `/approve ${event.payload.approvalId}`
+    }));
+  });
+
+  const result = await runAgentTask({
+    bus,
+    transcriptStore,
+    sessionId: session.sessionId,
+    prompt: originalPrompt
+  });
+
+  const content = await readFile(join(workspace, "mixed-recovery-stall-report.mjs"), "utf8");
+  assert.equal(content, 'console.log("ready");\n');
+  assert.match(result.assistantText, /ready|mixed-recovery-stall-report\.mjs/i);
+  assert.equal(
+    provider.recoveryContinuationCount,
+    1,
+    "mixed continuation chain should first bridge one tool-recovery continuation slice"
+  );
+  assert.equal(
+    provider.stallContinuationCount,
+    1,
+    "mixed continuation chain should then bridge one repeated-stall continuation slice"
+  );
+  assert.equal(
+    result.toolSummaries.filter((summary) => summary.startsWith("mixed-recovery-stall-report.mjs:1-1")).length,
+    1,
+    "mixed continuation chain should inspect the target file once after the tool-recovery handoff"
+  );
+  assert.ok(
+    result.toolSummaries.filter((summary) => summary.startsWith("node mixed-recovery-stall-report.mjs · failed (1)")).length >= 3,
+    "mixed continuation chain should preserve the repeated shell-failure loop before the stall handoff"
+  );
+  assert.ok(
+    result.toolSummaries.some((summary) => summary.startsWith("mixed-recovery-stall-report.mjs:1-1 · updated")),
+    "mixed continuation chain should still reach the pending edit after the stall handoff"
+  );
+  assert.ok(
+    result.toolSummaries.some((summary) => summary.startsWith("node mixed-recovery-stall-report.mjs · completed")),
+    "mixed continuation chain should finish verification after the recovered edit"
+  );
+  assert.equal(
+    result.runtimeErrors.length,
+    0,
+    "mixed continuation chain should recover within the same task without surfacing runtime errors"
   );
 }
 
