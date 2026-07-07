@@ -4073,6 +4073,7 @@ async function main() {
   await verifyAutomaticContinuationAcrossMultipleToolRecoverySlices();
   await verifyAutomaticContinuationAcrossMixedRecoveryAndStallSlices();
   await verifyAutomaticContinuationAcrossAssistantPassAndToolRecoverySlices();
+  await verifyAutomaticContinuationAcrossAssistantPassAndRepeatedStallSlices();
   await verifyDeniedLaterApprovalDoesNotRetrySameAction();
   await verifyResumeAfterDeniedLaterApprovalStaysBlocked();
   await verifyAffirmativeAfterDeniedLaterApprovalStaysBlocked();
@@ -11397,6 +11398,224 @@ async function verifyAutomaticContinuationAcrossAssistantPassAndToolRecoverySlic
     result.runtimeErrors.length,
     0,
     "assistant-pass + tool-recovery chain should recover within the same task without surfacing runtime errors"
+  );
+}
+
+async function verifyAutomaticContinuationAcrossAssistantPassAndRepeatedStallSlices() {
+  const root = await mkdtemp(join(tmpdir(), "selfme-agent-resume-assistant-pass-repeated-stall-"));
+  const workspace = join(root, "workspace");
+  const transcriptPath = join(root, "transcript.jsonl");
+  const logsPath = join(root, "logs.jsonl");
+  const originalPrompt = "Read app.config.json and fix assistant-pass-stall-report.mjs so running `node assistant-pass-stall-report.mjs` prints exactly `SelfMe:3000` on one line. Keep working until the output is exact, even if you first burn passes on progress replies and later repeat the same failed shell command.";
+  await mkdir(workspace, { recursive: true });
+  await writeFile(join(workspace, "app.config.json"), '{\n  "name": "SelfMe",\n  "port": 3000\n}\n', "utf8");
+  await writeFile(
+    join(workspace, "assistant-pass-stall-report.mjs"),
+    'import config from "./app.conf.json" with { type: "json" };\nconsole.log(`${config.name}:${config.port}`);\n',
+    "utf8"
+  );
+
+  class AssistantPassAndRepeatedStallProvider implements ProviderClient {
+    readonly name = "assistant-pass-and-repeated-stall-provider";
+    assistantPassContinuationCount = 0;
+    stallContinuationCount = 0;
+    private originalLoopReplyCount = 0;
+    private repeatedShellCount = 0;
+
+    async *streamResponse(input: ProviderStreamInput): AsyncIterable<ProviderStreamChunk> {
+      if (input.content === originalPrompt) {
+        yield {
+          delta: toolCall("files", {
+            path: "app.config.json",
+            startLine: 1,
+            endLine: 20
+          })
+        };
+        return;
+      }
+
+      if (input.content.startsWith(`Original user request: ${originalPrompt}`)) {
+        const toolName = extractLine(input.content, "Tool:") ?? extractLine(input.content, "Latest tool:");
+        const summary = extractLine(input.content, "Summary:") ?? extractLine(input.content, "Latest summary:") ?? "";
+
+        if (toolName === "files" && /app\.config\.json/.test(summary)) {
+          yield {
+            delta: toolCall("shell", {
+              command: "node assistant-pass-stall-report.mjs"
+            })
+          };
+          return;
+        }
+
+        if (toolName === "shell" && /failed \(1\)/.test(summary)) {
+          this.originalLoopReplyCount += 1;
+          yield {
+            delta: `Assistant-pass loop marker ${this.originalLoopReplyCount} stays focused on assistant-pass-stall-report.mjs and the unresolved import path app.conf.json, the target file is already narrow, this intentionally verbose sentence avoids short progress classification, and no user input ambiguity exists in this branch.`
+          };
+          return;
+        }
+      }
+
+      if (
+        !input.content.startsWith("Original user request:")
+        && input.content.includes("The current task used up its assistant pass budget but still has unfinished work.")
+      ) {
+        this.assistantPassContinuationCount += 1;
+        assert.match(input.content, /Pending next step target: assistant-pass-stall-report\.mjs/);
+        yield {
+          delta: toolCall("shell", {
+            command: "node assistant-pass-stall-report.mjs"
+          })
+        };
+        return;
+      }
+
+      if (
+        input.content.startsWith("Original user request: The current task used up its assistant pass budget but still has unfinished work.")
+      ) {
+        const toolName = extractLine(input.content, "Tool:") ?? extractLine(input.content, "Latest tool:");
+        const summary = extractLine(input.content, "Summary:") ?? extractLine(input.content, "Latest summary:") ?? "";
+
+        if (toolName === "shell" && /failed \(1\)/.test(summary)) {
+          this.repeatedShellCount += 1;
+          if (this.repeatedShellCount <= 2) {
+            yield {
+              delta: toolCall("shell", {
+                command: "node assistant-pass-stall-report.mjs"
+              })
+            };
+            return;
+          }
+        }
+      }
+
+      if (
+        !input.content.startsWith("Original user request:")
+        && input.content.includes("The task stalled after repeated identical progress signals but the task context is still actionable.")
+      ) {
+        this.stallContinuationCount += 1;
+        assert.match(input.content, /Latest stall kind: repeated identical shell results\./);
+        assert.match(input.content, /Pending next step target: assistant-pass-stall-report\.mjs/);
+        yield {
+          delta: toolCall("files", {
+            path: "assistant-pass-stall-report.mjs",
+            startLine: 1,
+            endLine: 20
+          })
+        };
+        return;
+      }
+
+      if (
+        input.content.startsWith("Original user request: The task stalled after repeated identical progress signals but the task context is still actionable.")
+      ) {
+        const toolName = extractLine(input.content, "Tool:") ?? extractLine(input.content, "Latest tool:");
+        const summary = extractLine(input.content, "Summary:") ?? extractLine(input.content, "Latest summary:") ?? "";
+
+        if (toolName === "files" && /assistant-pass-stall-report\.mjs/.test(summary)) {
+          yield {
+            delta: toolCall("edit", {
+              path: "assistant-pass-stall-report.mjs",
+              startLine: 1,
+              endLine: 1,
+              replacement: 'import config from "./app.config.json" with { type: "json" };'
+            })
+          };
+          return;
+        }
+
+        if (toolName === "edit" && /assistant-pass-stall-report\.mjs/.test(summary)) {
+          yield {
+            delta: toolCall("shell", {
+              command: "node assistant-pass-stall-report.mjs"
+            })
+          };
+          return;
+        }
+
+        if (toolName === "shell" && /completed/.test(summary)) {
+          yield { delta: "Repaired assistant-pass-stall-report.mjs after an assistant-pass continuation and a repeated-stall continuation, then verified the final output is SelfMe:3000." };
+          return;
+        }
+      }
+
+      yield { delta: "ok" };
+    }
+  }
+
+  const provider = new AssistantPassAndRepeatedStallProvider();
+  const bus = new EventBus();
+  const transcriptStore = new TranscriptStore(transcriptPath);
+  const logStore = new LogStore(logsPath);
+  await transcriptStore.ensureInitialized();
+  await logStore.ensureInitialized();
+
+  const session = createDefaultSessionRecord(workspace, VERSION);
+  session.model = "regression-stub";
+
+  const runtime = new AgentRuntime({
+    bus,
+    provider,
+    tools: new InMemoryToolRegistry(),
+    session,
+    transcriptStore,
+    logStore
+  });
+  await runtime.start();
+
+  bus.on("approval.requested", (event) => {
+    bus.emit(createTerminalCommandInvokedEvent({
+      sessionId: event.sessionId,
+      content: `/approve ${event.payload.approvalId}`
+    }));
+  });
+
+  const result = await runAgentTask({
+    bus,
+    transcriptStore,
+    sessionId: session.sessionId,
+    prompt: originalPrompt
+  });
+
+  const content = await readFile(join(workspace, "assistant-pass-stall-report.mjs"), "utf8");
+  assert.match(content, /app\.config\.json/);
+  assert.match(result.assistantText, /SelfMe:3000|assistant-pass-stall-report\.mjs/i);
+  assert.equal(
+    provider.assistantPassContinuationCount,
+    1,
+    "assistant-pass + repeated-stall chain should first bridge one assistant-pass continuation slice"
+  );
+  assert.equal(
+    provider.stallContinuationCount,
+    1,
+    "assistant-pass + repeated-stall chain should then bridge one repeated-stall continuation slice"
+  );
+  assert.equal(
+    result.toolSummaries.filter((summary) => summary.startsWith("app.config.json:1-4")).length,
+    1,
+    "assistant-pass + repeated-stall chain should preserve the original config read without rereading it"
+  );
+  assert.ok(
+    result.toolSummaries.filter((summary) => summary.startsWith("node assistant-pass-stall-report.mjs · failed (1)")).length >= 3,
+    "assistant-pass + repeated-stall chain should preserve the repeated shell-failure loop before the stall handoff"
+  );
+  assert.equal(
+    result.toolSummaries.filter((summary) => summary.startsWith("assistant-pass-stall-report.mjs:1-2")).length,
+    1,
+    "assistant-pass + repeated-stall chain should inspect the target file once after the stall handoff"
+  );
+  assert.ok(
+    result.toolSummaries.some((summary) => summary.startsWith("assistant-pass-stall-report.mjs:1-1 · updated")),
+    "assistant-pass + repeated-stall chain should still reach the pending edit"
+  );
+  assert.ok(
+    result.toolSummaries.some((summary) => summary.startsWith("node assistant-pass-stall-report.mjs · completed")),
+    "assistant-pass + repeated-stall chain should finish verification after the recovered edit"
+  );
+  assert.equal(
+    result.runtimeErrors.length,
+    0,
+    "assistant-pass + repeated-stall chain should recover within the same task without surfacing runtime errors"
   );
 }
 
