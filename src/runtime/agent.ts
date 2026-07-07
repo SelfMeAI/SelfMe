@@ -6604,6 +6604,10 @@ function shouldForceFollowUpReplyTightening(originalRequest: string, assistantMe
     return true;
   }
 
+  if (looksLikeProgressOnlyAssistantReply(assistantMessage)) {
+    return true;
+  }
+
   if (looksLikeThinCompletionReply(originalRequest, assistantMessage, latestToolResult)) {
     return true;
   }

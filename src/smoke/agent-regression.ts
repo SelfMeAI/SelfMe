@@ -4209,6 +4209,7 @@ async function main() {
   await verifyResumeFollowUpWhenHelperFailurePointNeedsToolRecovery();
   await verifyResumeFollowUpPullsCompletionToneBackIntoHelperFailurePoint();
   await verifyResumeFollowUpPullsExplanationBackIntoLatestFailurePoint();
+  await verifyResumeFollowUpPullsProgressOnlyBackIntoLatestFailurePoint();
   await verifyResumeFollowUpPullsCompletionToneBackIntoLatestFailurePoint();
   await verifyResumeFollowUpPullsBlockingQuestionBackIntoLatestFailurePoint();
   await verifyResumeFollowUpInProjectVerificationChain();
@@ -27288,6 +27289,207 @@ async function verifyResumeFollowUpPullsCompletionToneBackIntoLatestFailurePoint
     approvalCount,
     2,
     "expected one approval before interruption and one approval for the resumed completion-tone repair edit"
+  );
+}
+
+async function verifyResumeFollowUpPullsProgressOnlyBackIntoLatestFailurePoint() {
+  const root = await mkdtemp(join(tmpdir(), "selfme-agent-resume-progress-point-"));
+  const workspace = join(root, "workspace");
+  const transcriptPath = join(root, "transcript.jsonl");
+  const logsPath = join(root, "logs.jsonl");
+  await mkdir(workspace, { recursive: true });
+
+  class ResumeProgressPointProvider implements ProviderClient {
+    readonly name = "resume-progress-point-provider";
+
+    async *streamResponse(input: ProviderStreamInput): AsyncIterable<ProviderStreamChunk> {
+      if (input.content === "Create resume-progress-numbers.txt with three lines: 4, 5, 6. Then create resume-progress-total.mjs so running `node resume-progress-total.mjs` prints exactly `15`. Verify it and fix any errors before finishing.") {
+        yield {
+          delta: toolCall("write", {
+            path: "resume-progress-numbers.txt",
+            content: "4\n5\n6\n"
+          })
+        };
+        return;
+      }
+
+      if (input.content.startsWith("Original user request: Create resume-progress-numbers.txt with three lines: 4, 5, 6. Then create resume-progress-total.mjs so running `node resume-progress-total.mjs` prints exactly `15`. Verify it and fix any errors before finishing.")) {
+        const toolName = extractLine(input.content, "Tool:") ?? extractLine(input.content, "Latest tool:");
+        const summary = extractLine(input.content, "Summary:") ?? extractLine(input.content, "Latest summary:") ?? "";
+
+        if (toolName === "write" && /resume-progress-numbers\.txt/.test(summary)) {
+          yield {
+            delta: toolCall("write", {
+              path: "resume-progress-total.mjs",
+              content: "console.log(total);\n"
+            })
+          };
+          return;
+        }
+
+        if (toolName === "write" && /resume-progress-total\.mjs/.test(summary)) {
+          yield {
+            delta: toolCall("shell", {
+              command: "node resume-progress-total.mjs"
+            })
+          };
+          return;
+        }
+
+        if (toolName === "shell" && /The latest tool attempt failed\./.test(input.content)) {
+          yield {
+            delta: toolCall("files", {
+              path: "resume-progress-total.mjs",
+              startLine: 1,
+              endLine: 20
+            })
+          };
+          return;
+        }
+
+        if (toolName === "files" && /resume-progress-total\.mjs/.test(summary)) {
+          await waitForProviderDelay(input.signal, 120);
+          yield {
+            delta: toolCall("edit", {
+              path: "resume-progress-total.mjs",
+              startLine: 1,
+              endLine: 1,
+              replacement: 'import { readFileSync } from "node:fs";\nconst total = readFileSync("resume-progress-numbers.txt", "utf8").trim().split("\\n").map(Number).reduce((sum, value) => sum + value, 0);\nconsole.log(total);'
+            })
+          };
+          return;
+        }
+      }
+
+      if (input.content.startsWith('The user replied "还能继续吗" and wants to continue the most recent unfinished task.')) {
+        yield { delta: "Next I will repair resume-progress-total.mjs and rerun the verification." };
+        return;
+      }
+
+      if (input.content.startsWith('Original user request: The user replied "还能继续吗" and wants to continue the most recent unfinished task.')) {
+        const toolName = extractLine(input.content, "Tool:") ?? extractLine(input.content, "Latest tool:");
+        const summary = extractLine(input.content, "Summary:") ?? extractLine(input.content, "Latest summary:") ?? "";
+
+        if (/Your previous reply was too thin for an approval or continue follow-up\./.test(input.content)) {
+          assert.match(input.content, /resume-progress-total\.mjs/);
+          yield {
+            delta: toolCall("edit", {
+              path: "resume-progress-total.mjs",
+              startLine: 1,
+              endLine: 1,
+              replacement: 'import { readFileSync } from "node:fs";\nconst total = readFileSync("resume-progress-numbers.txt", "utf8").trim().split("\\n").map(Number).reduce((sum, value) => sum + value, 0);\nconsole.log(total);'
+            })
+          };
+          return;
+        }
+
+        if (toolName === "edit" && /resume-progress-total\.mjs/.test(summary)) {
+          yield {
+            delta: toolCall("shell", {
+              command: "node resume-progress-total.mjs"
+            })
+          };
+          return;
+        }
+
+        if (toolName === "shell") {
+          assert.match(input.content, /15/);
+          yield { delta: "Repaired resume-progress-total.mjs and continued the interrupted task from the latest failure point." };
+          return;
+        }
+      }
+
+      yield { delta: "ok" };
+    }
+  }
+
+  const bus = new EventBus();
+  const transcriptStore = new TranscriptStore(transcriptPath);
+  const logStore = new LogStore(logsPath);
+  await transcriptStore.ensureInitialized();
+  await logStore.ensureInitialized();
+
+  const session = createDefaultSessionRecord(workspace, VERSION);
+  session.model = "regression-stub";
+
+  const runtime = new AgentRuntime({
+    bus,
+    provider: new ResumeProgressPointProvider(),
+    tools: new InMemoryToolRegistry(),
+    session,
+    transcriptStore,
+    logStore
+  });
+  await runtime.start();
+
+  let approvalCount = 0;
+  bus.on("approval.requested", (event) => {
+    approvalCount += 1;
+    bus.emit(createTerminalCommandInvokedEvent({
+      sessionId: event.sessionId,
+      content: `/approve ${event.payload.approvalId}`
+    }));
+  });
+
+  const completionPromise = waitForAssistantTaskCompletion(bus, session.sessionId);
+  const fileReadPromise = waitForToolExecutionCompleted(bus, session.sessionId, (summary) => summary.startsWith("resume-progress-total.mjs:1-1"));
+
+  bus.emit(createUserMessageSubmittedEvent({
+    sessionId: session.sessionId,
+    content: "Create resume-progress-numbers.txt with three lines: 4, 5, 6. Then create resume-progress-total.mjs so running `node resume-progress-total.mjs` prints exactly `15`. Verify it and fix any errors before finishing."
+  }));
+
+  await fileReadPromise;
+  bus.emit(createRuntimeInterruptRequestedEvent({
+    sessionId: session.sessionId,
+    reason: "cancel"
+  }));
+
+  const cancelledTask = await completionPromise;
+  assert.equal(cancelledTask.payload.state, "cancelled");
+
+  const resumedResult = await runAgentTask({
+    bus,
+    transcriptStore,
+    sessionId: session.sessionId,
+    prompt: "还能继续吗"
+  });
+
+  const resumedEvents = await transcriptStore.readEventsBySession(session.sessionId);
+  assert.ok(
+    resumedEvents.some((event) =>
+      event.type === "assistant.delta.received"
+      && /Next I will repair resume-progress-total\.mjs and rerun the verification\./.test(event.payload.delta)
+    ),
+    "resume progress-only recovery should preserve the intermediate progress-only reply before retrying the latest failure point"
+  );
+
+  const resumedContent = await readFile(join(workspace, "resume-progress-total.mjs"), "utf8");
+  assert.match(resumedContent, /resume-progress-numbers\.txt/);
+  assert.match(resumedResult.assistantText, /latest failure point/i);
+  assert.doesNotMatch(resumedResult.assistantText, /^(可以|可以继续|好的|sure|okay)\b/i);
+  assert.equal(
+    resumedResult.toolSummaries.some((summary) => summary.startsWith("resume-progress-numbers.txt · created")),
+    false,
+    "resume progress-only recovery should not recreate the first file"
+  );
+  assert.equal(
+    resumedResult.toolSummaries.some((summary) => summary.startsWith("resume-progress-total.mjs · created")),
+    false,
+    "resume progress-only recovery should not recreate the second file"
+  );
+  assert.ok(
+    resumedResult.toolSummaries.some((summary) => summary.startsWith("resume-progress-total.mjs:1-1 · updated")),
+    "resume progress-only recovery should still be pulled back into the pending repair edit"
+  );
+  assert.ok(
+    resumedResult.toolSummaries.some((summary) => summary.startsWith("node resume-progress-total.mjs · completed")),
+    "resume progress-only recovery should still complete the verification"
+  );
+  assert.equal(
+    approvalCount,
+    2,
+    "expected one approval before interruption and one approval for the resumed progress-only repair edit"
   );
 }
 
