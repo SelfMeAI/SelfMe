@@ -4077,6 +4077,7 @@ async function main() {
   await verifyAutomaticContinuationAcrossAssistantPassAndToolRecoverySlices();
   await verifyAutomaticContinuationAcrossAssistantPassAndRepeatedStallSlices();
   await verifyAutomaticContinuationAcrossAssistantPassToolRecoveryAndRepeatedStallSlices();
+  await verifyProjectDrivenVerificationSurvivesToolRecovery();
   await verifyDeniedLaterApprovalDoesNotRetrySameAction();
   await verifyResumeAfterDeniedLaterApprovalStaysBlocked();
   await verifyAffirmativeAfterDeniedLaterApprovalStaysBlocked();
@@ -12297,6 +12298,263 @@ async function verifyAutomaticContinuationAcrossAssistantPassToolRecoveryAndRepe
     result.runtimeErrors.length,
     0,
     "triple continuation chain should recover within the same task without surfacing runtime errors"
+  );
+}
+
+async function verifyProjectDrivenVerificationSurvivesToolRecovery() {
+  const root = await mkdtemp(join(tmpdir(), "selfme-agent-project-driven-tool-recovery-"));
+  const workspace = join(root, "workspace");
+  const transcriptPath = join(root, "transcript.jsonl");
+  const logsPath = join(root, "logs.jsonl");
+  const originalPrompt = "看看项目，然后直接优化 node-todo：把 node-todo/app.js 的端口改成 process.env.PORT，再给 node-todo/views/index.ejs 的 title input 加上 maxlength 100，并运行 `node node-todo/verify-setup.mjs` 验证，直到输出 exactly `ready`。";
+  await mkdir(join(workspace, "node-todo", "views"), { recursive: true });
+
+  await writeFile(
+    join(workspace, "node-todo", "package.json"),
+    '{\n  "name": "node-todo",\n  "version": "1.0.0",\n  "scripts": {\n    "start": "node app.js"\n  }\n}\n',
+    "utf8"
+  );
+  await writeFile(
+    join(workspace, "node-todo", "app.js"),
+    'const express = require("express");\nconst app = express();\nconst PORT = 3000;\napp.listen(PORT, () => {\n  console.log(`Todo app is running at http://localhost:${PORT}`);\n});\n',
+    "utf8"
+  );
+  await writeFile(
+    join(workspace, "node-todo", "views", "index.ejs"),
+    '<!DOCTYPE html>\n<form action="/add" method="post">\n  <input name="title" />\n</form>\n',
+    "utf8"
+  );
+  await writeFile(
+    join(workspace, "node-todo", "verify-setup.mjs"),
+    [
+      'import { readFileSync } from "node:fs";',
+      'const app = readFileSync(new URL("./app.js", import.meta.url), "utf8");',
+      'const view = readFileSync(new URL("./views/index.ejs", import.meta.url), "utf8");',
+      'const appReady = /process\\.env\\.PORT/.test(app);',
+      'const viewReady = /maxlength="100"/.test(view);',
+      'if (appReady && viewReady) {',
+      '  console.log("ready");',
+      '} else if (appReady) {',
+      '  console.log("app-only");',
+      '} else if (viewReady) {',
+      '  console.log("view-only");',
+      '} else {',
+      '  console.log("not-ready");',
+      '}'
+    ].join("\n") + "\n",
+    "utf8"
+  );
+
+  class ProjectDrivenToolRecoveryProvider implements ProviderClient {
+    readonly name = "project-driven-tool-recovery-provider";
+    private invalidEditAttemptCount = 0;
+    toolRecoveryContinuationCount = 0;
+
+    private buildInvalidViewEditCall() {
+      return toolCall("edit", {
+        startLine: 3,
+        endLine: 3,
+        replacement: '  <input name="title" maxlength="100" />'
+      });
+    }
+
+    async *streamResponse(input: ProviderStreamInput): AsyncIterable<ProviderStreamChunk> {
+      if (input.content === originalPrompt) {
+        yield {
+          delta: toolCall("shell", {
+            command: "pwd && ls -la && find . -maxdepth 2 -type f | sed 's#^./##' | sort | head -200"
+          })
+        };
+        return;
+      }
+
+      if (input.content.startsWith(`Original user request: ${originalPrompt}`)) {
+        const toolName = extractLine(input.content, "Tool:") ?? extractLine(input.content, "Latest tool:");
+        const summary = extractLine(input.content, "Summary:") ?? extractLine(input.content, "Latest summary:") ?? "";
+
+        if (toolName === "shell" && /pwd && ls -la && find \. -maxdepth 2 -type f/.test(summary)) {
+          yield {
+            delta: toolCall("files", {
+              path: "node-todo/package.json",
+              startLine: 1,
+              endLine: 20
+            })
+          };
+          return;
+        }
+
+        if (toolName === "files" && /node-todo\/package\.json/.test(summary)) {
+          yield {
+            delta: toolCall("files", {
+              path: "node-todo/app.js",
+              startLine: 1,
+              endLine: 20
+            })
+          };
+          return;
+        }
+
+        if (toolName === "files" && /node-todo\/app\.js/.test(summary)) {
+          yield {
+            delta: toolCall("edit", {
+              path: "node-todo/app.js",
+              startLine: 3,
+              endLine: 3,
+              replacement: "const PORT = Number(process.env.PORT || 3000);"
+            })
+          };
+          return;
+        }
+
+        if (toolName === "edit" && /node-todo\/app\.js/.test(summary)) {
+          yield {
+            delta: toolCall("shell", {
+              command: "node node-todo/verify-setup.mjs"
+            })
+          };
+          return;
+        }
+
+        if (toolName === "shell" && /node node-todo\/verify-setup\.mjs · completed/.test(summary)) {
+          if (/app-only/.test(input.content)) {
+            yield {
+              delta: toolCall("files", {
+                path: "node-todo/views/index.ejs",
+                startLine: 1,
+                endLine: 4
+              })
+            };
+            return;
+          }
+
+          if (/ready/.test(input.content)) {
+            yield { delta: "Completed the project-driven verification chain and confirmed node-todo now prints ready." };
+            return;
+          }
+        }
+
+        if (toolName === "files" && /node-todo\/views\/index\.ejs/.test(summary)) {
+          this.invalidEditAttemptCount += 1;
+
+          if (this.invalidEditAttemptCount <= 2) {
+            yield { delta: this.buildInvalidViewEditCall() };
+            return;
+          }
+        }
+      }
+
+      if (
+        !input.content.startsWith("Original user request:")
+        && input.content.includes("The task hit repeated tool-recovery failures but the task context is still actionable.")
+      ) {
+        this.toolRecoveryContinuationCount += 1;
+        assert.match(input.content, /Pending next step target: node-todo\/views\/index\.ejs/);
+        assert.match(input.content, /Latest tool in context: files/);
+        yield {
+          delta: toolCall("edit", {
+            path: "node-todo/views/index.ejs",
+            startLine: 3,
+            endLine: 3,
+            replacement: '  <input name="title" maxlength="100" />'
+          })
+        };
+        return;
+      }
+
+      if (
+        input.content.startsWith("Original user request: The task hit repeated tool-recovery failures but the task context is still actionable.")
+      ) {
+        const toolName = extractLine(input.content, "Tool:") ?? extractLine(input.content, "Latest tool:");
+        const summary = extractLine(input.content, "Summary:") ?? extractLine(input.content, "Latest summary:") ?? "";
+
+        if (toolName === "edit" && /node-todo\/views\/index\.ejs/.test(summary)) {
+          yield {
+            delta: toolCall("shell", {
+              command: "node node-todo/verify-setup.mjs"
+            })
+          };
+          return;
+        }
+
+        if (toolName === "shell" && /node node-todo\/verify-setup\.mjs · completed/.test(summary)) {
+          yield { delta: "Completed the project-driven verification chain and confirmed node-todo now prints ready." };
+          return;
+        }
+      }
+
+      yield { delta: "ok" };
+    }
+  }
+
+  const provider = new ProjectDrivenToolRecoveryProvider();
+  const bus = new EventBus();
+  const transcriptStore = new TranscriptStore(transcriptPath);
+  const logStore = new LogStore(logsPath);
+  await transcriptStore.ensureInitialized();
+  await logStore.ensureInitialized();
+
+  const session = createDefaultSessionRecord(workspace, VERSION);
+  session.model = "regression-stub";
+
+  const runtime = new AgentRuntime({
+    bus,
+    provider,
+    tools: new InMemoryToolRegistry(),
+    session,
+    transcriptStore,
+    logStore
+  });
+  await runtime.start();
+
+  bus.on("approval.requested", (event) => {
+    bus.emit(createTerminalCommandInvokedEvent({
+      sessionId: event.sessionId,
+      content: `/approve ${event.payload.approvalId}`
+    }));
+  });
+
+  const result = await runAgentTask({
+    bus,
+    transcriptStore,
+    sessionId: session.sessionId,
+    prompt: originalPrompt
+  });
+
+  const appContent = await readFile(join(workspace, "node-todo", "app.js"), "utf8");
+  const viewContent = await readFile(join(workspace, "node-todo", "views", "index.ejs"), "utf8");
+  assert.match(appContent, /process\.env\.PORT/);
+  assert.match(viewContent, /maxlength="100"/);
+  assert.match(result.assistantText, /ready|node-todo/i);
+  assert.equal(
+    provider.toolRecoveryContinuationCount,
+    1,
+    "project-driven verification chain should bridge one tool-recovery continuation slice"
+  );
+  assert.ok(
+    result.toolSummaries.some((summary) => summary.startsWith("pwd && ls -la && find . -maxdepth 2 -type f")),
+    "project-driven tool-recovery chain should start from a workspace listing"
+  );
+  assert.ok(
+    result.toolSummaries.some((summary) => summary.startsWith("node-todo/app.js:3-3 · updated")),
+    "project-driven tool-recovery chain should still complete the app.js edit"
+  );
+  assert.ok(
+    result.toolSummaries.filter((summary) => summary.startsWith("node node-todo/verify-setup.mjs · completed")).length >= 2,
+    "project-driven tool-recovery chain should verify before and after the recovered view edit"
+  );
+  assert.equal(
+    result.toolSummaries.filter((summary) => summary.startsWith("node-todo/views/index.ejs:1-4")).length,
+    1,
+    "project-driven tool-recovery chain should inspect the view file once before the recovery handoff"
+  );
+  assert.ok(
+    result.toolSummaries.some((summary) => summary.startsWith("node-todo/views/index.ejs:3-3 · updated")),
+    "project-driven tool-recovery chain should finish the recovered view edit"
+  );
+  assert.equal(
+    result.runtimeErrors.length,
+    0,
+    "project-driven tool-recovery chain should finish without surfacing runtime errors"
   );
 }
 
