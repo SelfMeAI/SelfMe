@@ -4103,6 +4103,7 @@ async function main() {
   await verifyLongHistoryInspectionResumeFollowUpInProjectVerificationChain();
   await verifyLongHistoryApprovalWaitResumeFollowUpInProjectChain();
   await verifyLongHistoryApprovalWaitAffirmativeResumeFollowUpInProjectChain();
+  await verifyLongHistoryApprovalWaitInspectionResumeFollowUpInProjectChain();
   await verifyLongHistoryRewriteApprovalWaitResumeFollowUpInProjectChain();
   await verifyLongHistoryRewriteApprovalWaitAffirmativeResumeFollowUpInProjectChain();
   await verifyLongHistoryRewriteProposalApprovalStillAnchorsAfterCompaction();
@@ -7881,8 +7882,12 @@ async function verifyLongHistoryApprovalWaitAffirmativeResumeFollowUpInProjectCh
   await verifyLongHistoryProjectApprovalResumeChain("可以");
 }
 
+async function verifyLongHistoryApprovalWaitInspectionResumeFollowUpInProjectChain() {
+  await verifyLongHistoryProjectApprovalResumeChain("帮我看看");
+}
+
 async function verifyLongHistoryProjectApprovalResumeChain(
-  followUpPrompt: "还能继续吗" | "可以"
+  followUpPrompt: "还能继续吗" | "可以" | "帮我看看"
 ) {
   const root = await mkdtemp(join(tmpdir(), "selfme-agent-long-history-project-approval-resume-chain-"));
   const workspace = join(root, "workspace");
@@ -7943,6 +7948,8 @@ async function verifyLongHistoryProjectApprovalResumeChain(
         assert.match(input.content, /Original task: 看看项目，然后直接优化 node-todo/);
         if (followUpPrompt === "还能继续吗") {
           assert.match(input.content, /Resume that task now instead of treating this as a discussion question\./);
+        } else if (followUpPrompt === "帮我看看") {
+          assert.match(input.content, /Resume that task now instead of treating this as a broad inspection follow-up\./);
         } else {
           assert.match(input.content, /Resume that task now instead of treating this as a generic acknowledgement\./);
         }
