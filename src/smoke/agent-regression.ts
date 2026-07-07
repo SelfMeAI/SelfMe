@@ -4062,6 +4062,7 @@ async function main() {
   await verifyAutomaticContinuationAfterToolStepLimitBeforeEdit();
   await verifyAutomaticContinuationAfterToolStepLimitBeforeShell();
   await verifyAutomaticContinuationAcrossToolStepLimitAndToolRecoverySlices();
+  await verifyAutomaticContinuationAcrossToolStepLimitAndRepeatedStallSlices();
   await verifyAutomaticContinuationAfterToolStepLimitBeforeWrappedShell();
   await verifyAutomaticContinuationAfterToolStepLimitDuringWholeProjectInspection();
   await verifyExplicitProjectMentionWinsOverRicherWorkspaceDecoy();
@@ -9768,6 +9769,219 @@ async function verifyAutomaticContinuationAcrossToolStepLimitAndToolRecoverySlic
     result.runtimeErrors.length,
     0,
     "step-limit + tool-recovery chain should recover within the same task without surfacing runtime errors"
+  );
+}
+
+async function verifyAutomaticContinuationAcrossToolStepLimitAndRepeatedStallSlices() {
+  const root = await mkdtemp(join(tmpdir(), "selfme-agent-resume-step-limit-repeated-stall-"));
+  const workspace = join(root, "workspace");
+  const transcriptPath = join(root, "transcript.jsonl");
+  const logsPath = join(root, "logs.jsonl");
+  const originalPrompt = "Read delta-1.txt, delta-2.txt, delta-3.txt, delta-4.txt, delta-5.txt, delta-6.txt, delta-7.txt, and step-limit-stall-report.mjs, then fix step-limit-stall-report.mjs so running `node step-limit-stall-report.mjs` prints exactly `ready`. Verify it before finishing, even if the first resumed action repeats the same failed shell command.";
+  await mkdir(workspace, { recursive: true });
+
+  for (let index = 1; index <= 7; index += 1) {
+    await writeFile(join(workspace, `delta-${index}.txt`), `delta-${index}\n`, "utf8");
+  }
+
+  await writeFile(join(workspace, "step-limit-stall-report.mjs"), 'console.log("pending");\n', "utf8");
+
+  class StepLimitAndRepeatedStallProvider implements ProviderClient {
+    readonly name = "step-limit-and-repeated-stall-provider";
+    stepLimitContinuationCount = 0;
+    stallContinuationCount = 0;
+    private repeatedShellCount = 0;
+
+    async *streamResponse(input: ProviderStreamInput): AsyncIterable<ProviderStreamChunk> {
+      if (input.content === originalPrompt) {
+        yield {
+          delta: toolCall("files", {
+            path: "delta-1.txt",
+            startLine: 1,
+            endLine: 1
+          })
+        };
+        return;
+      }
+
+      if (input.content.startsWith(`Original user request: ${originalPrompt}`)) {
+        const toolName = extractLine(input.content, "Tool:") ?? extractLine(input.content, "Latest tool:");
+        const summary = extractLine(input.content, "Summary:") ?? extractLine(input.content, "Latest summary:") ?? "";
+        const deltaMatch = summary.match(/^delta-(\d)\.txt:1-1$/);
+
+        if (toolName === "files" && deltaMatch) {
+          const nextIndex = Number(deltaMatch[1]) + 1;
+
+          if (nextIndex <= 7) {
+            yield {
+              delta: toolCall("files", {
+                path: `delta-${nextIndex}.txt`,
+                startLine: 1,
+                endLine: 1
+              })
+            };
+            return;
+          }
+
+          yield {
+            delta: toolCall("files", {
+              path: "step-limit-stall-report.mjs",
+              startLine: 1,
+              endLine: 20
+            })
+          };
+          return;
+        }
+
+        if (toolName === "files" && /step-limit-stall-report\.mjs/.test(summary)) {
+          yield {
+            delta: toolCall("shell", {
+              command: "node step-limit-stall-report.mjs"
+            })
+          };
+          return;
+        }
+      }
+
+      if (
+        !input.content.startsWith("Original user request:")
+        && input.content.includes("The current task hit the per-slice tool budget but still has unfinished work.")
+      ) {
+        this.stepLimitContinuationCount += 1;
+        assert.match(input.content, /Pending next step target: step-limit-stall-report\.mjs/);
+        yield {
+          delta: toolCall("shell", {
+            command: "node step-limit-stall-report.mjs"
+          })
+        };
+        return;
+      }
+
+      if (
+        input.content.startsWith("Original user request: The current task hit the per-slice tool budget but still has unfinished work.")
+      ) {
+        const toolName = extractLine(input.content, "Tool:") ?? extractLine(input.content, "Latest tool:");
+        const summary = extractLine(input.content, "Summary:") ?? extractLine(input.content, "Latest summary:") ?? "";
+
+        if (toolName === "shell" && /failed \(1\)/.test(summary)) {
+          this.repeatedShellCount += 1;
+          if (this.repeatedShellCount <= 2) {
+            yield {
+              delta: toolCall("shell", {
+                command: "node step-limit-stall-report.mjs"
+              })
+            };
+            return;
+          }
+        }
+      }
+
+      if (
+        !input.content.startsWith("Original user request:")
+        && input.content.includes("The task stalled after repeated identical progress signals but the task context is still actionable.")
+      ) {
+        this.stallContinuationCount += 1;
+        assert.match(input.content, /Latest stall kind: repeated identical shell results\./);
+        assert.match(input.content, /Pending next step target: step-limit-stall-report\.mjs/);
+        yield {
+          delta: toolCall("edit", {
+            path: "step-limit-stall-report.mjs",
+            startLine: 1,
+            endLine: 1,
+            replacement: 'console.log("ready");'
+          })
+        };
+        return;
+      }
+
+      if (
+        input.content.startsWith("Original user request: The task stalled after repeated identical progress signals but the task context is still actionable.")
+      ) {
+        const toolName = extractLine(input.content, "Tool:") ?? extractLine(input.content, "Latest tool:");
+        const summary = extractLine(input.content, "Summary:") ?? extractLine(input.content, "Latest summary:") ?? "";
+
+        if (toolName === "edit" && /step-limit-stall-report\.mjs/.test(summary)) {
+          yield {
+            delta: toolCall("shell", {
+              command: "node step-limit-stall-report.mjs"
+            })
+          };
+          return;
+        }
+
+        if (toolName === "shell" && /completed/.test(summary)) {
+          yield { delta: "Repaired step-limit-stall-report.mjs after a step-limit continuation and a repeated-stall continuation, then verified the final output is ready." };
+          return;
+        }
+      }
+
+      yield { delta: "ok" };
+    }
+  }
+
+  const provider = new StepLimitAndRepeatedStallProvider();
+  const bus = new EventBus();
+  const transcriptStore = new TranscriptStore(transcriptPath);
+  const logStore = new LogStore(logsPath);
+  await transcriptStore.ensureInitialized();
+  await logStore.ensureInitialized();
+
+  const session = createDefaultSessionRecord(workspace, VERSION);
+  session.model = "regression-stub";
+
+  const runtime = new AgentRuntime({
+    bus,
+    provider,
+    tools: new InMemoryToolRegistry(),
+    session,
+    transcriptStore,
+    logStore
+  });
+  await runtime.start();
+
+  bus.on("approval.requested", (event) => {
+    bus.emit(createTerminalCommandInvokedEvent({
+      sessionId: event.sessionId,
+      content: `/approve ${event.payload.approvalId}`
+    }));
+  });
+
+  const result = await runAgentTask({
+    bus,
+    transcriptStore,
+    sessionId: session.sessionId,
+    prompt: originalPrompt
+  });
+
+  const content = await readFile(join(workspace, "step-limit-stall-report.mjs"), "utf8");
+  assert.equal(content, 'console.log("ready");\n');
+  assert.match(result.assistantText, /ready|step-limit-stall-report\.mjs/i);
+  assert.equal(
+    provider.stepLimitContinuationCount,
+    1,
+    "step-limit + repeated-stall chain should first bridge one tool-step-limit continuation slice"
+  );
+  assert.equal(
+    provider.stallContinuationCount,
+    1,
+    "step-limit + repeated-stall chain should then bridge one repeated-stall continuation slice"
+  );
+  assert.ok(
+    result.toolSummaries.filter((summary) => summary.startsWith("node step-limit-stall-report.mjs · failed (1)")).length >= 3,
+    "step-limit + repeated-stall chain should preserve the repeated shell-failure loop before the stall handoff"
+  );
+  assert.ok(
+    result.toolSummaries.some((summary) => summary.startsWith("step-limit-stall-report.mjs:1-1 · updated")),
+    "step-limit + repeated-stall chain should still reach the pending edit"
+  );
+  assert.ok(
+    result.toolSummaries.some((summary) => summary.startsWith("node step-limit-stall-report.mjs · completed")),
+    "step-limit + repeated-stall chain should finish verification after the recovered edit"
+  );
+  assert.equal(
+    result.runtimeErrors.length,
+    0,
+    "step-limit + repeated-stall chain should recover within the same task without surfacing runtime errors"
   );
 }
 
