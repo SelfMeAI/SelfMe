@@ -4072,6 +4072,7 @@ async function main() {
   await verifyAutomaticContinuationAcrossMultipleAssistantPassSlices();
   await verifyAutomaticContinuationAcrossMultipleToolRecoverySlices();
   await verifyAutomaticContinuationAcrossMixedRecoveryAndStallSlices();
+  await verifyAutomaticContinuationAcrossAssistantPassAndToolRecoverySlices();
   await verifyDeniedLaterApprovalDoesNotRetrySameAction();
   await verifyResumeAfterDeniedLaterApprovalStaysBlocked();
   await verifyAffirmativeAfterDeniedLaterApprovalStaysBlocked();
@@ -11187,6 +11188,215 @@ async function verifyAutomaticContinuationAcrossMixedRecoveryAndStallSlices() {
     result.runtimeErrors.length,
     0,
     "mixed continuation chain should recover within the same task without surfacing runtime errors"
+  );
+}
+
+async function verifyAutomaticContinuationAcrossAssistantPassAndToolRecoverySlices() {
+  const root = await mkdtemp(join(tmpdir(), "selfme-agent-resume-assistant-pass-tool-recovery-"));
+  const workspace = join(root, "workspace");
+  const transcriptPath = join(root, "transcript.jsonl");
+  const logsPath = join(root, "logs.jsonl");
+  const originalPrompt = "Read app.config.json and fix assistant-pass-tool-recovery-report.mjs so running `node assistant-pass-tool-recovery-report.mjs` prints exactly `SelfMe:3000` on one line. Keep working until the output is exact, even if you first burn passes on progress replies and later send invalid edit input.";
+  await mkdir(workspace, { recursive: true });
+  await writeFile(join(workspace, "app.config.json"), '{\n  "name": "SelfMe",\n  "port": 3000\n}\n', "utf8");
+  await writeFile(
+    join(workspace, "assistant-pass-tool-recovery-report.mjs"),
+    'import config from "./app.conf.json" with { type: "json" };\nconsole.log(`${config.name}:${config.port}`);\n',
+    "utf8"
+  );
+
+  class AssistantPassAndToolRecoveryProvider implements ProviderClient {
+    readonly name = "assistant-pass-and-tool-recovery-provider";
+    assistantPassContinuationCount = 0;
+    toolRecoveryContinuationCount = 0;
+    private originalLoopReplyCount = 0;
+    private invalidEditAttemptCount = 0;
+
+    private buildInvalidEditToolCall() {
+      return toolCall("edit", {
+        startLine: 1,
+        endLine: 1,
+        replacement: 'import config from "./app.config.json" with { type: "json" };'
+      });
+    }
+
+    async *streamResponse(input: ProviderStreamInput): AsyncIterable<ProviderStreamChunk> {
+      if (input.content === originalPrompt) {
+        yield {
+          delta: toolCall("files", {
+            path: "app.config.json",
+            startLine: 1,
+            endLine: 20
+          })
+        };
+        return;
+      }
+
+      if (input.content.startsWith(`Original user request: ${originalPrompt}`)) {
+        const toolName = extractLine(input.content, "Tool:") ?? extractLine(input.content, "Latest tool:");
+        const summary = extractLine(input.content, "Summary:") ?? extractLine(input.content, "Latest summary:") ?? "";
+
+        if (toolName === "files" && /app\.config\.json/.test(summary)) {
+          yield {
+            delta: toolCall("shell", {
+              command: "node assistant-pass-tool-recovery-report.mjs"
+            })
+          };
+          return;
+        }
+
+        if (toolName === "shell" && /failed \(1\)/.test(summary)) {
+          this.originalLoopReplyCount += 1;
+          yield {
+            delta: `Assistant-pass loop marker ${this.originalLoopReplyCount} stays focused on assistant-pass-tool-recovery-report.mjs and the unresolved import path app.conf.json, the target file is already narrow, this intentionally verbose sentence avoids short progress classification, and no user input ambiguity exists in this branch.`
+          };
+          return;
+        }
+      }
+
+      if (
+        !input.content.startsWith("Original user request:")
+        && input.content.includes("The current task used up its assistant pass budget but still has unfinished work.")
+      ) {
+        this.assistantPassContinuationCount += 1;
+        assert.match(input.content, /Pending next step target: assistant-pass-tool-recovery-report\.mjs/);
+        yield { delta: this.buildInvalidEditToolCall() };
+        return;
+      }
+
+      if (
+        input.content.startsWith("Original user request: The current task used up its assistant pass budget but still has unfinished work.")
+      ) {
+        this.invalidEditAttemptCount += 1;
+
+        if (this.invalidEditAttemptCount <= 2) {
+          yield { delta: this.buildInvalidEditToolCall() };
+          return;
+        }
+      }
+
+      if (
+        !input.content.startsWith("Original user request:")
+        && input.content.includes("The task hit repeated tool-recovery failures but the task context is still actionable.")
+      ) {
+        this.toolRecoveryContinuationCount += 1;
+        assert.match(input.content, /Pending next step target: assistant-pass-tool-recovery-report\.mjs/);
+        yield {
+          delta: toolCall("files", {
+            path: "assistant-pass-tool-recovery-report.mjs",
+            startLine: 1,
+            endLine: 20
+          })
+        };
+        return;
+      }
+
+      if (
+        input.content.startsWith("Original user request: The task hit repeated tool-recovery failures but the task context is still actionable.")
+      ) {
+        const toolName = extractLine(input.content, "Tool:") ?? extractLine(input.content, "Latest tool:");
+        const summary = extractLine(input.content, "Summary:") ?? extractLine(input.content, "Latest summary:") ?? "";
+
+        if (toolName === "files" && /assistant-pass-tool-recovery-report\.mjs/.test(summary)) {
+          yield {
+            delta: toolCall("edit", {
+              path: "assistant-pass-tool-recovery-report.mjs",
+              startLine: 1,
+              endLine: 1,
+              replacement: 'import config from "./app.config.json" with { type: "json" };'
+            })
+          };
+          return;
+        }
+
+        if (toolName === "edit" && /assistant-pass-tool-recovery-report\.mjs/.test(summary)) {
+          yield {
+            delta: toolCall("shell", {
+              command: "node assistant-pass-tool-recovery-report.mjs"
+            })
+          };
+          return;
+        }
+
+        if (toolName === "shell" && /completed/.test(summary)) {
+          yield { delta: "Repaired assistant-pass-tool-recovery-report.mjs after an assistant-pass continuation and a tool-recovery continuation, then verified the final output is SelfMe:3000." };
+          return;
+        }
+      }
+
+      yield { delta: "ok" };
+    }
+  }
+
+  const provider = new AssistantPassAndToolRecoveryProvider();
+  const bus = new EventBus();
+  const transcriptStore = new TranscriptStore(transcriptPath);
+  const logStore = new LogStore(logsPath);
+  await transcriptStore.ensureInitialized();
+  await logStore.ensureInitialized();
+
+  const session = createDefaultSessionRecord(workspace, VERSION);
+  session.model = "regression-stub";
+
+  const runtime = new AgentRuntime({
+    bus,
+    provider,
+    tools: new InMemoryToolRegistry(),
+    session,
+    transcriptStore,
+    logStore
+  });
+  await runtime.start();
+
+  bus.on("approval.requested", (event) => {
+    bus.emit(createTerminalCommandInvokedEvent({
+      sessionId: event.sessionId,
+      content: `/approve ${event.payload.approvalId}`
+    }));
+  });
+
+  const result = await runAgentTask({
+    bus,
+    transcriptStore,
+    sessionId: session.sessionId,
+    prompt: originalPrompt
+  });
+
+  const content = await readFile(join(workspace, "assistant-pass-tool-recovery-report.mjs"), "utf8");
+  assert.match(content, /app\.config\.json/);
+  assert.match(result.assistantText, /SelfMe:3000|assistant-pass-tool-recovery-report\.mjs/i);
+  assert.equal(
+    provider.assistantPassContinuationCount,
+    1,
+    "assistant-pass + tool-recovery chain should first bridge one assistant-pass continuation slice"
+  );
+  assert.equal(
+    provider.toolRecoveryContinuationCount,
+    1,
+    "assistant-pass + tool-recovery chain should then bridge one tool-recovery continuation slice"
+  );
+  assert.equal(
+    result.toolSummaries.filter((summary) => summary.startsWith("app.config.json:1-4")).length,
+    1,
+    "assistant-pass + tool-recovery chain should preserve the original config read without rereading it"
+  );
+  assert.equal(
+    result.toolSummaries.filter((summary) => summary.startsWith("assistant-pass-tool-recovery-report.mjs:1-2")).length,
+    1,
+    "assistant-pass + tool-recovery chain should inspect the target file once after the recovery handoff"
+  );
+  assert.ok(
+    result.toolSummaries.some((summary) => summary.startsWith("assistant-pass-tool-recovery-report.mjs:1-1 · updated")),
+    "assistant-pass + tool-recovery chain should still reach the pending edit"
+  );
+  assert.ok(
+    result.toolSummaries.some((summary) => summary.startsWith("node assistant-pass-tool-recovery-report.mjs · completed")),
+    "assistant-pass + tool-recovery chain should finish verification after the recovered edit"
+  );
+  assert.equal(
+    result.runtimeErrors.length,
+    0,
+    "assistant-pass + tool-recovery chain should recover within the same task without surfacing runtime errors"
   );
 }
 
