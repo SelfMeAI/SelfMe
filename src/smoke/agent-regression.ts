@@ -4085,6 +4085,7 @@ async function main() {
   await verifyResumeAfterRepeatedFilesStall();
   await verifyRepeatedProjectListingStallAutoContinuesIntoProjectEntry();
   await verifyResumeAfterRepeatedToolStall();
+  await verifyAutomaticContinuationAcrossMultipleToolStallSlices();
   await verifyExplicitProjectInspectionContinuesFromDirectoryOnlyListing();
   await verifyNestedProjectInspectionContinuesFromSparseRootOnlyListing();
   await verifyNestedProjectImprovementContinuesFromSparseRootOnlyListing();
@@ -4857,6 +4858,205 @@ async function verifyResumeAfterRepeatedToolStall() {
   assert.ok(
     result.toolSummaries.some((summary) => summary.startsWith("node tool-stall-resume-report.mjs · completed")),
     "repeated-tool-stall auto-continuation should finish the pending verification after the repair"
+  );
+}
+
+async function verifyAutomaticContinuationAcrossMultipleToolStallSlices() {
+  const root = await mkdtemp(join(tmpdir(), "selfme-agent-resume-repeated-tool-stall-multi-slice-"));
+  const workspace = join(root, "workspace");
+  const transcriptPath = join(root, "transcript.jsonl");
+  const logsPath = join(root, "logs.jsonl");
+  const originalPrompt = "Read app.config.json and fix tool-stall-multi-report.mjs so running `node tool-stall-multi-report.mjs` prints exactly `SelfMe:3000` on one line. Keep working until the output is exact.";
+  await mkdir(workspace, { recursive: true });
+  await writeFile(join(workspace, "app.config.json"), '{\n  "name": "SelfMe",\n  "port": 3000\n}\n', "utf8");
+  await writeFile(
+    join(workspace, "tool-stall-multi-report.mjs"),
+    'import config from "./app.conf.json" with { type: "json" };\nconsole.log(`${config.name}:${config.port}`);\n',
+    "utf8"
+  );
+
+  class RepeatedToolStallMultiSliceProvider implements ProviderClient {
+    readonly name = "repeated-tool-stall-multi-slice-provider";
+    continuationPromptCount = 0;
+    private originalRepeatedShellCount = 0;
+    private resumedRepeatedShellCount = 0;
+
+    async *streamResponse(input: ProviderStreamInput): AsyncIterable<ProviderStreamChunk> {
+      if (input.content === originalPrompt) {
+        yield {
+          delta: toolCall("files", {
+            path: "app.config.json",
+            startLine: 1,
+            endLine: 20
+          })
+        };
+        return;
+      }
+
+      if (input.content.startsWith(`Original user request: ${originalPrompt}`)) {
+        const toolName = extractLine(input.content, "Tool:") ?? extractLine(input.content, "Latest tool:");
+        const summary = extractLine(input.content, "Summary:") ?? extractLine(input.content, "Latest summary:") ?? "";
+
+        if (toolName === "files" && /app\.config\.json/.test(summary)) {
+          yield {
+            delta: toolCall("shell", {
+              command: "node tool-stall-multi-report.mjs"
+            })
+          };
+          return;
+        }
+
+        if (toolName === "shell" && /failed \(1\)/.test(summary)) {
+          this.originalRepeatedShellCount += 1;
+          if (this.originalRepeatedShellCount <= 2) {
+            yield {
+              delta: toolCall("shell", {
+                command: "node tool-stall-multi-report.mjs"
+              })
+            };
+            return;
+          }
+        }
+      }
+
+      if (
+        !input.content.startsWith("Original user request:")
+        && input.content.includes("The task stalled after repeated identical progress signals but the task context is still actionable.")
+      ) {
+        this.continuationPromptCount += 1;
+        assert.match(input.content, /Pending next step target: tool-stall-multi-report\.mjs/);
+
+        if (this.continuationPromptCount === 1) {
+          yield {
+            delta: toolCall("shell", {
+              command: "node tool-stall-multi-report.mjs"
+            })
+          };
+          return;
+        }
+
+        if (this.continuationPromptCount === 2) {
+          yield {
+            delta: toolCall("files", {
+              path: "tool-stall-multi-report.mjs",
+              startLine: 1,
+              endLine: 20
+            })
+          };
+          return;
+        }
+
+        assert.fail(`unexpected repeated-tool-stall continuation prompt ${this.continuationPromptCount}`);
+      }
+
+      if (
+        input.content.startsWith("Original user request: The task stalled after repeated identical progress signals but the task context is still actionable.")
+      ) {
+        const toolName = extractLine(input.content, "Tool:") ?? extractLine(input.content, "Latest tool:");
+        const summary = extractLine(input.content, "Summary:") ?? extractLine(input.content, "Latest summary:") ?? "";
+
+        if (toolName === "shell" && /failed \(1\)/.test(summary)) {
+          this.resumedRepeatedShellCount += 1;
+          if (this.continuationPromptCount === 1 && this.resumedRepeatedShellCount === 1) {
+            yield {
+              delta: toolCall("shell", {
+                command: "node tool-stall-multi-report.mjs"
+              })
+            };
+            return;
+          }
+        }
+
+        if (toolName === "files" && /tool-stall-multi-report\.mjs/.test(summary)) {
+          yield {
+            delta: toolCall("edit", {
+              path: "tool-stall-multi-report.mjs",
+              startLine: 1,
+              endLine: 1,
+              replacement: 'import config from "./app.config.json" with { type: "json" };'
+            })
+          };
+          return;
+        }
+
+        if (toolName === "edit" && /tool-stall-multi-report\.mjs/.test(summary)) {
+          yield {
+            delta: toolCall("shell", {
+              command: "node tool-stall-multi-report.mjs"
+            })
+          };
+          return;
+        }
+
+        if (toolName === "shell" && /completed/.test(summary)) {
+          yield { delta: "Repaired tool-stall-multi-report.mjs after two repeated-tool-stall continuation slices and verified the final output is SelfMe:3000." };
+          return;
+        }
+      }
+
+      yield { delta: "ok" };
+    }
+  }
+
+  const provider = new RepeatedToolStallMultiSliceProvider();
+  const bus = new EventBus();
+  const transcriptStore = new TranscriptStore(transcriptPath);
+  const logStore = new LogStore(logsPath);
+  await transcriptStore.ensureInitialized();
+  await logStore.ensureInitialized();
+
+  const session = createDefaultSessionRecord(workspace, VERSION);
+  session.model = "regression-stub";
+
+  const runtime = new AgentRuntime({
+    bus,
+    provider,
+    tools: new InMemoryToolRegistry(),
+    session,
+    transcriptStore,
+    logStore
+  });
+  await runtime.start();
+
+  bus.on("approval.requested", (event) => {
+    bus.emit(createTerminalCommandInvokedEvent({
+      sessionId: event.sessionId,
+      content: `/approve ${event.payload.approvalId}`
+    }));
+  });
+
+  const result = await runAgentTask({
+    bus,
+    transcriptStore,
+    sessionId: session.sessionId,
+    prompt: originalPrompt
+  });
+
+  const content = await readFile(join(workspace, "tool-stall-multi-report.mjs"), "utf8");
+  assert.match(content, /app\.config\.json/);
+  assert.match(result.assistantText, /SelfMe:3000|tool-stall-multi-report\.mjs/i);
+  assert.equal(
+    provider.continuationPromptCount,
+    2,
+    "repeated-tool-stall auto-continuation should bridge two stalled continuation slices before finishing"
+  );
+  assert.equal(
+    result.toolSummaries.filter((summary) => summary.startsWith("tool-stall-multi-report.mjs:1-2")).length,
+    1,
+    "multi-slice repeated-tool-stall continuation should preserve the single resumed file read"
+  );
+  assert.ok(
+    result.toolSummaries.some((summary) => summary.startsWith("tool-stall-multi-report.mjs:1-1 · updated")),
+    "multi-slice repeated-tool-stall continuation should still reach the pending edit"
+  );
+  assert.ok(
+    result.toolSummaries.some((summary) => summary.startsWith("node tool-stall-multi-report.mjs · completed")),
+    "multi-slice repeated-tool-stall continuation should finish verification after the resumed edit"
+  );
+  assert.equal(
+    result.runtimeErrors.some((message) => /Agent stalled after repeated identical shell results/.test(message)),
+    false,
+    "multi-slice repeated-tool-stall continuation should recover instead of surfacing the old shell stall error"
   );
 }
 
