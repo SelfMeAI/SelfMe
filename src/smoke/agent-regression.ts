@@ -4523,6 +4523,7 @@ async function main() {
   await verifyTerminalLoopSubmitsAndContinuesMultiStepTask();
   await verifyTerminalLoopAutoContinuesAfterToolStepLimit();
   await verifyTerminalLoopContinuesAfterExplanationOnlyReply();
+  await verifyTerminalLoopRecoversAfterRepeatedAssistantStall();
   await verifyTerminalLoopStopAndResumeCommandStageTask();
   await verifyTerminalLoopStopAndResumeApprovalWaitTask();
   await verifyTerminalLoopStageSummaryApprovalWaitResumeTask();
@@ -39034,6 +39035,238 @@ async function verifyTerminalLoopContinuesAfterExplanationOnlyReply() {
         && event.payload.summary.startsWith("node terminal-converge-report.mjs · completed")
       ),
       "terminal explanation-continue flow should rerun verification after the forced edit"
+    );
+  } finally {
+    process.exit = originalExit;
+    try {
+      bus.emit(createTerminalCommandInvokedEvent({
+        sessionId,
+        content: "/exit"
+      }));
+    } catch (error) {
+      assert.match(String(error), /EXIT:0/);
+    }
+
+    for (const listener of process.stdin.listeners("data") as Array<(...args: any[]) => void>) {
+      if (!existingDataListeners.includes(listener)) {
+        process.stdin.off("data", listener);
+      }
+    }
+  }
+}
+
+async function verifyTerminalLoopRecoversAfterRepeatedAssistantStall() {
+  const root = await mkdtemp(join(tmpdir(), "selfme-agent-terminal-loop-assistant-stall-"));
+  const workspace = join(root, "workspace");
+  const transcriptPath = join(root, "transcript.jsonl");
+  const logsPath = join(root, "logs.jsonl");
+  const sessionId = "terminal-loop-assistant-stall";
+  await mkdir(workspace, { recursive: true });
+  await writeFile(join(workspace, "app.config.json"), '{\n  "name": "SelfMe",\n  "port": 3000\n}\n', "utf8");
+  await writeFile(
+    join(workspace, "terminal-assistant-stall-report.mjs"),
+    'import config from "./app.conf.json" with { type: "json" };\nconsole.log(`${config.name}:${config.port}`);\n',
+    "utf8"
+  );
+
+  class TerminalLoopAssistantStallProvider implements ProviderClient {
+    readonly name = "terminal-loop-assistant-stall-provider";
+    private stallReplyCount = 0;
+
+    async *streamResponse(input: ProviderStreamInput): AsyncIterable<ProviderStreamChunk> {
+      const originalPrompt = "Read app.config.json and fix terminal-assistant-stall-report.mjs so running `node terminal-assistant-stall-report.mjs` prints exactly `SelfMe:3000` on one line. Keep working until the output is exact.";
+
+      if (input.content === originalPrompt) {
+        yield {
+          delta: toolCall("files", {
+            path: "app.config.json",
+            startLine: 1,
+            endLine: 20
+          })
+        };
+        return;
+      }
+
+      if (input.content.startsWith(`Original user request: ${originalPrompt}`)) {
+        const toolName = extractLine(input.content, "Tool:") ?? extractLine(input.content, "Latest tool:");
+        const summary = extractLine(input.content, "Summary:") ?? extractLine(input.content, "Latest summary:") ?? "";
+
+        if (toolName === "files" && /app\.config\.json/.test(summary)) {
+          yield {
+            delta: toolCall("shell", {
+              command: "node terminal-assistant-stall-report.mjs"
+            })
+          };
+          return;
+        }
+
+        if (toolName === "shell" && /failed \(1\)/.test(summary)) {
+          this.stallReplyCount += 1;
+          yield {
+            delta: this.stallReplyCount % 2 === 1
+              ? "The failure is understood and the remaining repair is clear in terminal-assistant-stall-report.mjs."
+              : "Okay, the remaining repair is still clear in `terminal-assistant-stall-report.mjs`, and the failure is already understood."
+          };
+          return;
+        }
+      }
+
+      if (
+        !input.content.startsWith("Original user request:")
+        && input.content.includes("The task stalled after repeated identical progress signals but the task context is still actionable.")
+      ) {
+        assert.match(input.content, /Latest stall kind: repeated identical assistant replies\./);
+        assert.match(input.content, /Pending next step target: terminal-assistant-stall-report\.mjs/);
+        assert.match(input.content, /Latest tool in context: shell/);
+        assert.match(input.content, /Latest tool summary in context: node terminal-assistant-stall-report\.mjs · failed \(1\)/);
+        yield {
+          delta: toolCall("files", {
+            path: "terminal-assistant-stall-report.mjs",
+            startLine: 1,
+            endLine: 20
+          })
+        };
+        return;
+      }
+
+      if (
+        input.content.startsWith("Original user request: The task stalled after repeated identical progress signals but the task context is still actionable.")
+      ) {
+        const toolName = extractLine(input.content, "Tool:") ?? extractLine(input.content, "Latest tool:");
+        const summary = extractLine(input.content, "Summary:") ?? extractLine(input.content, "Latest summary:") ?? "";
+
+        if (toolName === "files" && /terminal-assistant-stall-report\.mjs/.test(summary)) {
+          yield {
+            delta: toolCall("edit", {
+              path: "terminal-assistant-stall-report.mjs",
+              startLine: 1,
+              endLine: 1,
+              replacement: 'import config from "./app.config.json" with { type: "json" };'
+            })
+          };
+          return;
+        }
+
+        if (toolName === "edit" && /terminal-assistant-stall-report\.mjs/.test(summary)) {
+          yield {
+            delta: toolCall("shell", {
+              command: "node terminal-assistant-stall-report.mjs"
+            })
+          };
+          return;
+        }
+
+        if (toolName === "shell" && /completed/.test(summary)) {
+          assert.match(input.content, /SelfMe:3000/);
+          yield { delta: "Repaired terminal-assistant-stall-report.mjs and verified the final output is exactly SelfMe:3000." };
+          return;
+        }
+      }
+
+      yield { delta: "ok" };
+    }
+  }
+
+  const bus = new EventBus();
+  const transcriptStore = new TranscriptStore(transcriptPath);
+  const logStore = new LogStore(logsPath);
+  await transcriptStore.ensureInitialized();
+  await logStore.ensureInitialized();
+
+  const session = createDefaultSessionRecord(workspace, VERSION);
+  session.sessionId = sessionId;
+  session.model = "regression-stub";
+
+  const runtime = new AgentRuntime({
+    bus,
+    provider: new TerminalLoopAssistantStallProvider(),
+    tools: new InMemoryToolRegistry(),
+    session,
+    transcriptStore,
+    logStore
+  });
+  await runtime.start();
+
+  bus.on("approval.requested", (event) => {
+    bus.emit(createTerminalCommandInvokedEvent({
+      sessionId: event.sessionId,
+      content: `/approve ${event.payload.approvalId}`
+    }));
+  });
+
+  const editor = new EditorController();
+  const panel = new TerminalPanelController();
+  const terminal = new TerminalEventLoop({
+    bus,
+    editor,
+    panel,
+    sessionId
+  });
+
+  const originalExit = process.exit;
+  const existingDataListeners = process.stdin.listeners("data") as Array<(...args: any[]) => void>;
+
+  (process as typeof process & {
+    exit: (code?: number) => never;
+  }).exit = ((code?: number) => {
+    throw new Error(`EXIT:${code ?? 0}`);
+  }) as typeof process.exit;
+
+  try {
+    terminal.start();
+    const completion = waitForAssistantTaskCompletion(bus, sessionId);
+    process.stdin.emit("data", Buffer.from("Read app.config.json and fix terminal-assistant-stall-report.mjs so running `node terminal-assistant-stall-report.mjs` prints exactly `SelfMe:3000` on one line. Keep working until the output is exact.\r"));
+    const task = await completion;
+    const events = await transcriptStore.readEventsBySession(sessionId);
+    const assistantText = collectAssistantText(events, task.taskId ?? "");
+    const content = await readFile(join(workspace, "terminal-assistant-stall-report.mjs"), "utf8");
+
+    assert.equal(task.payload.state, "completed");
+    assert.equal(editor.getState().value, "", "terminal assistant-stall flow should clear the editor buffer");
+    assert.match(content, /app\.config\.json/);
+    assert.match(assistantText, /SelfMe:3000|terminal-assistant-stall-report\.mjs/i);
+    assert.ok(
+      events.some((event) =>
+        event.type === "assistant.delta.received"
+        && /remaining repair is clear in terminal-assistant-stall-report\.mjs/i.test(event.payload.delta)
+      ),
+      "terminal assistant-stall flow should preserve the first progress-only stall reply"
+    );
+    assert.ok(
+      events.some((event) =>
+        event.type === "assistant.delta.received"
+        && /remaining repair is still clear in `terminal-assistant-stall-report\.mjs`/i.test(event.payload.delta)
+      ),
+      "terminal assistant-stall flow should preserve the second repeated stall reply"
+    );
+    assert.equal(
+      events.filter((event) =>
+        event.type === "tool.execution.completed"
+        && event.payload.summary.startsWith("app.config.json:1-4")
+      ).length,
+      1,
+      "terminal assistant-stall flow should keep the original config read instead of restarting"
+    );
+    assert.ok(
+      events.some((event) =>
+        event.type === "tool.execution.completed"
+        && event.payload.summary.startsWith("terminal-assistant-stall-report.mjs:1-2")
+      ),
+      "terminal assistant-stall flow should continue directly into the pending file read after the stall recovery handoff"
+    );
+    assert.ok(
+      events.some((event) =>
+        event.type === "tool.execution.completed"
+        && event.payload.summary.startsWith("terminal-assistant-stall-report.mjs:1-1 · updated")
+      ),
+      "terminal assistant-stall flow should repair the pending file after the stall recovery handoff"
+    );
+    assert.ok(
+      events.some((event) =>
+        event.type === "tool.execution.completed"
+        && event.payload.summary.startsWith("node terminal-assistant-stall-report.mjs · completed")
+      ),
+      "terminal assistant-stall flow should finish the pending verification after the repair"
     );
   } finally {
     process.exit = originalExit;
