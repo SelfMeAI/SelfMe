@@ -4523,6 +4523,9 @@ async function main() {
   await verifyTerminalLoopSubmitsAndContinuesMultiStepTask();
   await verifyTerminalLoopStopAndResumeCommandStageTask();
   await verifyTerminalLoopStopAndResumeApprovalWaitTask();
+  await verifyTerminalLoopStageSummaryApprovalWaitResumeTask();
+  await verifyTerminalLoopNaturalLanguageApprovalShortcut();
+  await verifyTerminalLoopNaturalLanguageDenyShortcut();
   verifyInterruptFallbackWhenWorkingUiLingers();
   verifyExitCommandShutsDownTerminalLoop();
   console.log("task: verify context compaction");
@@ -39266,6 +39269,634 @@ async function verifyTerminalLoopStopAndResumeApprovalWaitTask() {
       approvalCount,
       3,
       "terminal-loop approval resume should need one original approval, one denied held approval, and one fresh resumed approval"
+    );
+  } finally {
+    process.exit = originalExit;
+    try {
+      bus.emit(createTerminalCommandInvokedEvent({
+        sessionId,
+        content: "/exit"
+      }));
+    } catch (error) {
+      assert.match(String(error), /EXIT:0/);
+    }
+
+    for (const listener of process.stdin.listeners("data") as Array<(...args: any[]) => void>) {
+      if (!existingDataListeners.includes(listener)) {
+        process.stdin.off("data", listener);
+      }
+    }
+  }
+}
+
+async function verifyTerminalLoopStageSummaryApprovalWaitResumeTask() {
+  const root = await mkdtemp(join(tmpdir(), "selfme-agent-terminal-loop-stage-approval-resume-"));
+  const workspace = join(root, "workspace");
+  const transcriptPath = join(root, "transcript.jsonl");
+  const logsPath = join(root, "logs.jsonl");
+  const sessionId = "terminal-loop-stage-approval-resume";
+  await mkdir(workspace, { recursive: true });
+  await mkdir(join(workspace, "node-todo"), { recursive: true });
+  await mkdir(join(workspace, "node-todo", "views"), { recursive: true });
+
+  await writeFile(
+    join(workspace, "node-todo", "package.json"),
+    '{\n  "name": "node-todo",\n  "version": "1.0.0",\n  "scripts": {\n    "start": "node app.js"\n  }\n}\n',
+    "utf8"
+  );
+  await writeFile(
+    join(workspace, "node-todo", "app.js"),
+    'const express = require("express");\nconst app = express();\nconst PORT = 3000;\napp.listen(PORT, () => {\n  console.log(`Todo app is running at http://localhost:${PORT}`);\n});\n',
+    "utf8"
+  );
+  await writeFile(
+    join(workspace, "node-todo", "views", "index.ejs"),
+    '<!DOCTYPE html>\n<form action="/add" method="post">\n  <input name="title" />\n</form>\n',
+    "utf8"
+  );
+
+  class TerminalLoopStageApprovalResumeProvider implements ProviderClient {
+    readonly name = "terminal-loop-stage-approval-resume-provider";
+
+    async *streamResponse(input: ProviderStreamInput): AsyncIterable<ProviderStreamChunk> {
+      const originalPrompt = "看看项目，然后直接优化 node-todo：把 node-todo/app.js 的端口改成 process.env.PORT，再给 node-todo/views/index.ejs 的 title input 加上 maxlength 100。";
+
+      if (input.content === originalPrompt) {
+        yield {
+          delta: toolCall("shell", {
+            command: "pwd && ls -la && find . -maxdepth 2 -type f | sed 's#^./##' | sort | head -200"
+          })
+        };
+        return;
+      }
+
+      if (input.content.startsWith(`Original user request: ${originalPrompt}`)) {
+        const toolName = extractLine(input.content, "Tool:") ?? extractLine(input.content, "Latest tool:");
+        const summary = extractLine(input.content, "Summary:") ?? extractLine(input.content, "Latest summary:") ?? "";
+
+        if (toolName === "shell" && /You are in the middle of a concrete project inspection request\./.test(input.content)) {
+          yield {
+            delta: toolCall("files", {
+              path: "node-todo/package.json",
+              startLine: 1,
+              endLine: 20
+            })
+          };
+          return;
+        }
+
+        if (toolName === "files" && /node-todo\/package\.json/.test(summary)) {
+          yield {
+            delta: toolCall("files", {
+              path: "node-todo/app.js",
+              startLine: 1,
+              endLine: 20
+            })
+          };
+          return;
+        }
+
+        if (toolName === "files" && /node-todo\/app\.js/.test(summary)) {
+          yield {
+            delta: toolCall("edit", {
+              path: "node-todo/app.js",
+              startLine: 3,
+              endLine: 3,
+              replacement: "const PORT = Number(process.env.PORT || 3000);"
+            })
+          };
+          return;
+        }
+
+        if (toolName === "edit" && /node-todo\/app\.js/.test(summary)) {
+          if (
+            /Pending next step target: node-todo\/views\/index\.ejs/.test(input.content)
+            || /You are already inside the execution phase of a concrete task\./.test(input.content)
+            || /You are still inside the same multi-step task\./.test(input.content)
+          ) {
+            yield {
+              delta: toolCall("files", {
+                path: "node-todo/views/index.ejs",
+                startLine: 1,
+                endLine: 4
+              })
+            };
+            return;
+          }
+
+          yield {
+            delta: "I updated node-todo/app.js and will continue with node-todo/views/index.ejs next."
+          };
+          return;
+        }
+
+        if (toolName === "files" && /node-todo\/views\/index\.ejs/.test(summary)) {
+          yield {
+            delta: toolCall("edit", {
+              path: "node-todo/views/index.ejs",
+              startLine: 3,
+              endLine: 3,
+              replacement: '  <input name="title" maxlength="100" />'
+            })
+          };
+          return;
+        }
+
+        if (toolName === "edit" && /node-todo\/views\/index\.ejs/.test(summary)) {
+          yield { delta: "Completed the terminal-loop stage-summary approval-resume chain." };
+          return;
+        }
+      }
+
+      if (input.content.startsWith('The user replied "还能继续吗" and wants to continue the most recent unfinished task.')) {
+        assert.match(input.content, /Original task: 看看项目，然后直接优化 node-todo/);
+        assert.match(input.content, /Latest tool in context: files/);
+        assert.match(input.content, /Latest tool summary in context: node-todo\/views\/index\.ejs:1-4/);
+        assert.match(input.content, /Interrupted pending approval: edit · node-todo\/views\/index\.ejs:3-3/);
+        yield {
+          delta: toolCall("edit", {
+            path: "node-todo/views/index.ejs",
+            startLine: 3,
+            endLine: 3,
+            replacement: '  <input name="title" maxlength="100" />'
+          })
+        };
+        return;
+      }
+
+      if (input.content.startsWith('Original user request: The user replied "还能继续吗" and wants to continue the most recent unfinished task.')) {
+        const toolName = extractLine(input.content, "Tool:") ?? extractLine(input.content, "Latest tool:");
+        const summary = extractLine(input.content, "Summary:") ?? extractLine(input.content, "Latest summary:") ?? "";
+
+        if (toolName === "edit" && /node-todo\/views\/index\.ejs/.test(summary)) {
+          yield { delta: "Completed the terminal-loop stage-summary approval-resume chain." };
+          return;
+        }
+      }
+
+      yield { delta: "ok" };
+    }
+  }
+
+  const bus = new EventBus();
+  const transcriptStore = new TranscriptStore(transcriptPath);
+  const logStore = new LogStore(logsPath);
+  await transcriptStore.ensureInitialized();
+  await logStore.ensureInitialized();
+
+  const session = createDefaultSessionRecord(workspace, VERSION);
+  session.sessionId = sessionId;
+  session.model = "regression-stub";
+
+  const runtime = new AgentRuntime({
+    bus,
+    provider: new TerminalLoopStageApprovalResumeProvider(),
+    tools: new InMemoryToolRegistry(),
+    session,
+    transcriptStore,
+    logStore
+  });
+  await runtime.start();
+
+  let approvalCount = 0;
+  let heldApprovalId: string | undefined;
+  let phaseTwo = false;
+  const secondApprovalPromise = new Promise<Extract<RuntimeEvent, { type: "approval.requested" }>>((resolve) => {
+    bus.on("approval.requested", (event) => {
+      approvalCount += 1;
+
+      if (!phaseTwo) {
+        if (approvalCount === 1) {
+          bus.emit(createTerminalCommandInvokedEvent({
+            sessionId: event.sessionId,
+            content: `/approve ${event.payload.approvalId}`
+          }));
+          return;
+        }
+
+        heldApprovalId = event.payload.approvalId;
+        resolve(event);
+        return;
+      }
+
+      bus.emit(createTerminalCommandInvokedEvent({
+        sessionId: event.sessionId,
+        content: `/approve ${event.payload.approvalId}`
+      }));
+    });
+  });
+
+  const editor = new EditorController();
+  const panel = new TerminalPanelController();
+  const terminal = new TerminalEventLoop({
+    bus,
+    editor,
+    panel,
+    sessionId
+  });
+
+  const originalExit = process.exit;
+  const existingDataListeners = process.stdin.listeners("data") as Array<(...args: any[]) => void>;
+
+  (process as typeof process & {
+    exit: (code?: number) => never;
+  }).exit = ((code?: number) => {
+    throw new Error(`EXIT:${code ?? 0}`);
+  }) as typeof process.exit;
+
+  try {
+    terminal.start();
+    const initialCompletion = waitForAssistantTaskCompletion(bus, sessionId);
+    const stageSummaryPromise = waitForAssistantDeltaContaining(
+      bus,
+      sessionId,
+      /I updated node-todo\/app\.js and will continue with node-todo\/views\/index\.ejs next\./
+    );
+
+    process.stdin.emit("data", Buffer.from("看看项目，然后直接优化 node-todo：把 node-todo/app.js 的端口改成 process.env.PORT，再给 node-todo/views/index.ejs 的 title input 加上 maxlength 100。\r"));
+
+    await stageSummaryPromise;
+    const pendingApproval = await secondApprovalPromise;
+    assert.equal(pendingApproval.payload.toolName, "edit");
+    assert.match(JSON.stringify(pendingApproval.payload.input), /maxlength="100"/);
+    process.stdin.emit("data", "\u0003");
+
+    const cancelledTask = await initialCompletion;
+    assert.equal(cancelledTask.payload.state, "cancelled");
+
+    const interruptedEvents = await transcriptStore.readEventsBySession(sessionId);
+    assert.ok(
+      interruptedEvents.some((event) =>
+        event.type === "assistant.delta.received"
+        && /I updated node-todo\/app\.js and will continue with node-todo\/views\/index\.ejs next\./.test(event.payload.delta)
+      ),
+      "terminal-loop stage-summary approval chain should preserve the stage summary before interruption"
+    );
+    assert.ok(
+      interruptedEvents.some((event) =>
+        event.type === "tool.execution.completed" && event.payload.summary.startsWith("node-todo/views/index.ejs:1-4")
+      ),
+      "terminal-loop stage-summary approval chain should preserve the narrowed pending view read before stop"
+    );
+    assert.equal(
+      interruptedEvents.some((event) =>
+        event.type === "tool.execution.completed" && event.payload.summary.startsWith("node-todo/views/index.ejs:3-3 · updated")
+      ),
+      false,
+      "terminal-loop stage-summary approval chain should stop before the pending approved edit is applied"
+    );
+    assert.ok(
+      interruptedEvents.some((event) =>
+        event.type === "approval.resolved"
+        && event.payload.approvalId === heldApprovalId
+        && !event.payload.approved
+      ),
+      "terminal-loop stage-summary approval interruption should resolve the held approval as denied"
+    );
+
+    phaseTwo = true;
+    const resumedCompletion = waitForAssistantTaskCompletion(bus, sessionId);
+    process.stdin.emit("data", Buffer.from("还能继续吗\r"));
+    const resumedTask = await resumedCompletion;
+    const resumedEvents = await transcriptStore.readEventsBySession(sessionId);
+    const resumedAssistantText = collectAssistantText(resumedEvents, resumedTask.taskId ?? "");
+    const resumedViewContent = await readFile(join(workspace, "node-todo", "views", "index.ejs"), "utf8");
+
+    assert.equal(resumedTask.payload.state, "completed");
+    assert.equal(editor.getState().value, "", "terminal stage-summary approval resume submit should clear the editor buffer");
+    assert.match(resumedViewContent, /maxlength="100"/);
+    assert.match(resumedAssistantText, /stage-summary approval-resume chain/i);
+    assert.equal(
+      resumedEvents.some((event) =>
+        event.type === "tool.execution.completed"
+        && event.payload.summary.startsWith("node-todo/package.json:1-")
+        && event.taskId === resumedTask.taskId
+      ),
+      false,
+      "terminal-loop stage-summary approval resume should not restart from package.json"
+    );
+    assert.equal(
+      resumedEvents.some((event) =>
+        event.type === "tool.execution.completed"
+        && event.payload.summary.startsWith("node-todo/app.js:1-")
+        && event.taskId === resumedTask.taskId
+      ),
+      false,
+      "terminal-loop stage-summary approval resume should not reread app.js"
+    );
+    assert.equal(
+      resumedEvents.some((event) =>
+        event.type === "tool.execution.completed"
+        && event.payload.summary.startsWith("node-todo/views/index.ejs:1-4")
+        && event.taskId === resumedTask.taskId
+      ),
+      false,
+      "terminal-loop stage-summary approval resume should not reread the view file before retrying the pending edit"
+    );
+    assert.ok(
+      resumedEvents.some((event) =>
+        event.type === "tool.execution.completed"
+        && event.payload.summary.startsWith("node-todo/views/index.ejs:3-3 · updated")
+        && event.taskId === resumedTask.taskId
+      ),
+      "terminal-loop stage-summary approval resume should continue directly with the pending view edit"
+    );
+    assert.equal(
+      approvalCount,
+      3,
+      "terminal-loop stage-summary approval resume should need one original approval, one denied held approval, and one fresh resumed approval"
+    );
+  } finally {
+    process.exit = originalExit;
+    try {
+      bus.emit(createTerminalCommandInvokedEvent({
+        sessionId,
+        content: "/exit"
+      }));
+    } catch (error) {
+      assert.match(String(error), /EXIT:0/);
+    }
+
+    for (const listener of process.stdin.listeners("data") as Array<(...args: any[]) => void>) {
+      if (!existingDataListeners.includes(listener)) {
+        process.stdin.off("data", listener);
+      }
+    }
+  }
+}
+
+async function verifyTerminalLoopNaturalLanguageApprovalShortcut() {
+  const root = await mkdtemp(join(tmpdir(), "selfme-agent-terminal-loop-natural-approval-"));
+  const workspace = join(root, "workspace");
+  const transcriptPath = join(root, "transcript.jsonl");
+  const logsPath = join(root, "logs.jsonl");
+  const sessionId = "terminal-loop-natural-approval";
+  await mkdir(workspace, { recursive: true });
+
+  class TerminalLoopNaturalApprovalProvider implements ProviderClient {
+    readonly name = "terminal-loop-natural-approval-provider";
+
+    async *streamResponse(input: ProviderStreamInput): AsyncIterable<ProviderStreamChunk> {
+      const originalPrompt = "创建 natural-approval.txt，内容是 approved。";
+
+      if (input.content === originalPrompt) {
+        yield {
+          delta: toolCall("write", {
+            path: "natural-approval.txt",
+            content: "approved\n"
+          })
+        };
+        return;
+      }
+
+      if (input.content.startsWith(`Original user request: ${originalPrompt}`)) {
+        const toolName = extractLine(input.content, "Tool:") ?? extractLine(input.content, "Latest tool:");
+        const summary = extractLine(input.content, "Summary:") ?? extractLine(input.content, "Latest summary:") ?? "";
+
+        if (toolName === "write" && /natural-approval\.txt · created/.test(summary)) {
+          yield { delta: "Created natural-approval.txt after the natural approval reply." };
+          return;
+        }
+      }
+
+      yield { delta: "ok" };
+    }
+  }
+
+  const bus = new EventBus();
+  const transcriptStore = new TranscriptStore(transcriptPath);
+  const logStore = new LogStore(logsPath);
+  await transcriptStore.ensureInitialized();
+  await logStore.ensureInitialized();
+
+  const session = createDefaultSessionRecord(workspace, VERSION);
+  session.sessionId = sessionId;
+  session.model = "regression-stub";
+
+  const runtime = new AgentRuntime({
+    bus,
+    provider: new TerminalLoopNaturalApprovalProvider(),
+    tools: new InMemoryToolRegistry(),
+    session,
+    transcriptStore,
+    logStore
+  });
+  await runtime.start();
+
+  let approvalCount = 0;
+  const approvalRequestedPromise = new Promise<Extract<RuntimeEvent, { type: "approval.requested" }>>((resolve) => {
+    bus.on("approval.requested", (event) => {
+      approvalCount += 1;
+      resolve(event);
+    });
+  });
+  const invokedCommands: string[] = [];
+  bus.on("terminal.command.invoked", (event) => {
+    if (event.sessionId === sessionId) {
+      invokedCommands.push(event.payload.content);
+    }
+  });
+
+  const editor = new EditorController();
+  const panel = new TerminalPanelController();
+  const terminal = new TerminalEventLoop({
+    bus,
+    editor,
+    panel,
+    sessionId
+  });
+
+  const originalExit = process.exit;
+  const existingDataListeners = process.stdin.listeners("data") as Array<(...args: any[]) => void>;
+
+  (process as typeof process & {
+    exit: (code?: number) => never;
+  }).exit = ((code?: number) => {
+    throw new Error(`EXIT:${code ?? 0}`);
+  }) as typeof process.exit;
+
+  try {
+    terminal.start();
+    const completion = waitForAssistantTaskCompletion(bus, sessionId);
+    process.stdin.emit("data", Buffer.from("创建 natural-approval.txt，内容是 approved。\r"));
+
+    const approvalRequested = await approvalRequestedPromise;
+    assert.equal(approvalRequested.payload.toolName, "write");
+    process.stdin.emit("data", Buffer.from("可以\r"));
+
+    const completedTask = await completion;
+    const events = await transcriptStore.readEventsBySession(sessionId);
+    const assistantText = collectAssistantText(events, completedTask.taskId ?? "");
+    const content = await readFile(join(workspace, "natural-approval.txt"), "utf8");
+
+    assert.equal(completedTask.payload.state, "completed");
+    assert.equal(content, "approved\n");
+    assert.equal(editor.getState().value, "", "terminal natural approval submit should clear the editor buffer");
+    assert.match(assistantText, /natural approval reply|natural-approval\.txt/i);
+    assert.ok(
+      invokedCommands.includes("可以"),
+      "terminal natural approval should submit the typed affirmative reply through the command path"
+    );
+    assert.ok(
+      events.some((event) =>
+        event.type === "approval.resolved"
+        && event.payload.approvalId === approvalRequested.payload.approvalId
+        && event.payload.approved
+      ),
+      "terminal natural approval should resolve the pending approval as approved"
+    );
+    assert.ok(
+      events.some((event) =>
+        event.type === "tool.execution.completed" && event.payload.summary.startsWith("natural-approval.txt · created")
+      ),
+      "terminal natural approval should allow the pending write to complete"
+    );
+    assert.equal(
+      approvalCount,
+      1,
+      "terminal natural approval shortcut should resolve the original pending approval without reopening a second approval"
+    );
+  } finally {
+    process.exit = originalExit;
+    try {
+      bus.emit(createTerminalCommandInvokedEvent({
+        sessionId,
+        content: "/exit"
+      }));
+    } catch (error) {
+      assert.match(String(error), /EXIT:0/);
+    }
+
+    for (const listener of process.stdin.listeners("data") as Array<(...args: any[]) => void>) {
+      if (!existingDataListeners.includes(listener)) {
+        process.stdin.off("data", listener);
+      }
+    }
+  }
+}
+
+async function verifyTerminalLoopNaturalLanguageDenyShortcut() {
+  const root = await mkdtemp(join(tmpdir(), "selfme-agent-terminal-loop-natural-deny-"));
+  const workspace = join(root, "workspace");
+  const transcriptPath = join(root, "transcript.jsonl");
+  const logsPath = join(root, "logs.jsonl");
+  const sessionId = "terminal-loop-natural-deny";
+  await mkdir(workspace, { recursive: true });
+
+  class TerminalLoopNaturalDenyProvider implements ProviderClient {
+    readonly name = "terminal-loop-natural-deny-provider";
+
+    async *streamResponse(input: ProviderStreamInput): AsyncIterable<ProviderStreamChunk> {
+      const originalPrompt = "创建 natural-deny.txt，内容是 blocked。";
+
+      if (input.content === originalPrompt) {
+        yield {
+          delta: toolCall("write", {
+            path: "natural-deny.txt",
+            content: "blocked\n"
+          })
+        };
+        return;
+      }
+
+      yield { delta: "ok" };
+    }
+  }
+
+  const bus = new EventBus();
+  const transcriptStore = new TranscriptStore(transcriptPath);
+  const logStore = new LogStore(logsPath);
+  await transcriptStore.ensureInitialized();
+  await logStore.ensureInitialized();
+
+  const session = createDefaultSessionRecord(workspace, VERSION);
+  session.sessionId = sessionId;
+  session.model = "regression-stub";
+
+  const runtime = new AgentRuntime({
+    bus,
+    provider: new TerminalLoopNaturalDenyProvider(),
+    tools: new InMemoryToolRegistry(),
+    session,
+    transcriptStore,
+    logStore
+  });
+  await runtime.start();
+
+  let approvalCount = 0;
+  const approvalRequestedPromise = new Promise<Extract<RuntimeEvent, { type: "approval.requested" }>>((resolve) => {
+    bus.on("approval.requested", (event) => {
+      approvalCount += 1;
+      resolve(event);
+    });
+  });
+  const invokedCommands: string[] = [];
+  bus.on("terminal.command.invoked", (event) => {
+    if (event.sessionId === sessionId) {
+      invokedCommands.push(event.payload.content);
+    }
+  });
+
+  const editor = new EditorController();
+  const panel = new TerminalPanelController();
+  const terminal = new TerminalEventLoop({
+    bus,
+    editor,
+    panel,
+    sessionId
+  });
+
+  const originalExit = process.exit;
+  const existingDataListeners = process.stdin.listeners("data") as Array<(...args: any[]) => void>;
+
+  (process as typeof process & {
+    exit: (code?: number) => never;
+  }).exit = ((code?: number) => {
+    throw new Error(`EXIT:${code ?? 0}`);
+  }) as typeof process.exit;
+
+  try {
+    terminal.start();
+    const completion = waitForAssistantTaskCompletion(bus, sessionId);
+    process.stdin.emit("data", Buffer.from("创建 natural-deny.txt，内容是 blocked。\r"));
+
+    const approvalRequested = await approvalRequestedPromise;
+    assert.equal(approvalRequested.payload.toolName, "write");
+    process.stdin.emit("data", Buffer.from("不可以\r"));
+
+    const cancelledTask = await completion;
+    const events = await transcriptStore.readEventsBySession(sessionId);
+
+    assert.equal(cancelledTask.payload.state, "cancelled");
+    assert.equal(editor.getState().value, "", "terminal natural deny submit should clear the editor buffer");
+    assert.ok(
+      invokedCommands.includes("不可以"),
+      "terminal natural deny should submit the typed negative reply through the command path"
+    );
+    assert.ok(
+      events.some((event) =>
+        event.type === "approval.resolved"
+        && event.payload.approvalId === approvalRequested.payload.approvalId
+        && !event.payload.approved
+      ),
+      "terminal natural deny should resolve the pending approval as denied"
+    );
+    assert.equal(
+      events.some((event) =>
+        event.type === "tool.execution.completed" && event.payload.summary.startsWith("natural-deny.txt · created")
+      ),
+      false,
+      "terminal natural deny should leave the blocked write unapplied"
+    );
+    await assert.rejects(
+      readFile(join(workspace, "natural-deny.txt"), "utf8"),
+      /ENOENT/,
+      "terminal natural deny should not create the denied file"
+    );
+    assert.equal(
+      approvalCount,
+      1,
+      "terminal natural deny shortcut should resolve the original pending approval without reopening a second approval"
     );
   } finally {
     process.exit = originalExit;

@@ -82,6 +82,17 @@ export class TerminalEventLoop {
         }
 
         if (event.type === "submit") {
+          if (approvalPanelOpen && currentValue.trim()) {
+            this.input.bus.emit(createTerminalCommandInvokedEvent({
+              sessionId: this.input.sessionId ?? "local-session",
+              content: currentValue
+            }));
+            this.input.editor.setValue("");
+            this.emitEditorState();
+            this.emitUiState();
+            continue;
+          }
+
           const commandInsertion = this.input.panel.getCommandInsertion(currentValue);
 
           if (commandInsertion && commandInsertion !== currentValue) {
@@ -185,7 +196,7 @@ export class TerminalEventLoop {
         }
 
         if (event.type === "backspace") {
-          if (approvalPanelOpen) {
+          if (approvalPanelOpen && !currentValue) {
             continue;
           }
 
@@ -195,7 +206,7 @@ export class TerminalEventLoop {
         }
 
         if (event.type === "move-left") {
-          if (approvalPanelOpen || panelState.mode === "command") {
+          if (panelState.mode === "command" || (approvalPanelOpen && !currentValue)) {
             continue;
           }
 
@@ -205,7 +216,7 @@ export class TerminalEventLoop {
         }
 
         if (event.type === "move-right") {
-          if (approvalPanelOpen || panelState.mode === "command") {
+          if (panelState.mode === "command" || (approvalPanelOpen && !currentValue)) {
             continue;
           }
 
@@ -241,10 +252,6 @@ export class TerminalEventLoop {
         }
 
         if (event.type === "text") {
-          if (approvalPanelOpen) {
-            continue;
-          }
-
           this.input.editor.handlePrintable(event.value);
           this.emitEditorState();
         }
