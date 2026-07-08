@@ -4531,6 +4531,7 @@ async function main() {
   await verifyTerminalLoopAutoContinuesAcrossAssistantPassAndToolRecoveryBeforeCommandOnlyShell();
   await verifyTerminalLoopAutoContinuesAcrossAssistantPassToolRecoveryAndRepeatedStallBeforeCommandOnlyShell();
   await verifyTerminalLoopAutoContinuesAfterRepeatedStallBeforeCommandOnlyShell();
+  await verifyTerminalLoopStopAndResumeRepeatedStallCommandOnlyShell();
   await verifyTerminalLoopAutoContinuesAcrossMultipleRepeatedStallSlicesBeforeCommandOnlyShell();
   await verifyTerminalLoopContinuesAfterExplanationOnlyReply();
   await verifyTerminalLoopRecoversAfterRepeatedAssistantStall();
@@ -41177,6 +41178,321 @@ async function verifyTerminalLoopAutoContinuesAfterRepeatedStallBeforeCommandOnl
       ),
       false,
       "terminal command-only repeated-stall flow should recover within the same task"
+    );
+  } finally {
+    process.exit = originalExit;
+    try {
+      bus.emit(createTerminalCommandInvokedEvent({
+        sessionId,
+        content: "/exit"
+      }));
+    } catch (error) {
+      assert.match(String(error), /EXIT:0/);
+    }
+
+    for (const listener of process.stdin.listeners("data") as Array<(...args: any[]) => void>) {
+      if (!existingDataListeners.includes(listener)) {
+        process.stdin.off("data", listener);
+      }
+    }
+  }
+}
+
+async function verifyTerminalLoopStopAndResumeRepeatedStallCommandOnlyShell() {
+  const root = await mkdtemp(join(tmpdir(), "selfme-agent-terminal-loop-command-only-stall-resume-"));
+  const workspace = join(root, "workspace");
+  const transcriptPath = join(root, "transcript.jsonl");
+  const logsPath = join(root, "logs.jsonl");
+  const sessionId = "terminal-loop-command-only-stall-resume";
+  const originalPrompt = "Read beta-a.txt, beta-b.txt, and package.json, then run `npm test` until it prints exactly `ready`, fixing whatever is needed before finishing.";
+  await mkdir(workspace, { recursive: true });
+  await writeFile(join(workspace, "beta-a.txt"), "beta-a\n", "utf8");
+  await writeFile(join(workspace, "beta-b.txt"), "beta-b\n", "utf8");
+  await writeFile(
+    join(workspace, "package.json"),
+    '{\n  "name": "terminal-command-only-stall-resume",\n  "version": "1.0.0",\n  "scripts": {\n    "test": "node verify-terminal-commandless-stall-resume.mjs"\n  }\n}\n',
+    "utf8"
+  );
+  await writeFile(join(workspace, "verify-terminal-commandless-stall-resume.mjs"), 'console.log("pending");\n', "utf8");
+
+  class TerminalLoopCommandOnlyStallResumeProvider implements ProviderClient {
+    readonly name = "terminal-loop-command-only-stall-resume-provider";
+    private repeatedShellCount = 0;
+
+    async *streamResponse(input: ProviderStreamInput): AsyncIterable<ProviderStreamChunk> {
+      if (input.content === originalPrompt) {
+        yield {
+          delta: toolCall("files", {
+            path: "beta-a.txt",
+            startLine: 1,
+            endLine: 20
+          })
+        };
+        return;
+      }
+
+      if (input.content.startsWith(`Original user request: ${originalPrompt}`)) {
+        const toolName = extractLine(input.content, "Tool:") ?? extractLine(input.content, "Latest tool:");
+        const summary = extractLine(input.content, "Summary:") ?? extractLine(input.content, "Latest summary:") ?? "";
+
+        if (toolName === "files" && /beta-a\.txt/.test(summary)) {
+          yield {
+            delta: toolCall("files", {
+              path: "beta-b.txt",
+              startLine: 1,
+              endLine: 20
+            })
+          };
+          return;
+        }
+
+        if (toolName === "files" && /beta-b\.txt/.test(summary)) {
+          yield {
+            delta: toolCall("files", {
+              path: "package.json",
+              startLine: 1,
+              endLine: 20
+            })
+          };
+          return;
+        }
+
+        if (toolName === "files" && /package\.json/.test(summary)) {
+          yield {
+            delta: toolCall("shell", {
+              command: "npm test"
+            })
+          };
+          return;
+        }
+
+        if (toolName === "shell" && /npm test · completed/.test(summary)) {
+          this.repeatedShellCount += 1;
+
+          if (this.repeatedShellCount <= 2) {
+            yield {
+              delta: toolCall("shell", {
+                command: "npm test"
+              })
+            };
+            return;
+          }
+        }
+      }
+
+      if (
+        !input.content.startsWith("Original user request:")
+        && input.content.includes("The task stalled after repeated identical progress signals but the task context is still actionable.")
+      ) {
+        assert.match(input.content, /Pending next step target: npm test/);
+        assert.match(input.content, /Latest tool in context: shell/);
+        yield {
+          delta: "I already know npm test is looping on the same result and need to inspect the hidden verifier next."
+        };
+        await waitForProviderDelay(input.signal, 10_000);
+        yield {
+          delta: toolCall("files", {
+            path: "verify-terminal-commandless-stall-resume.mjs",
+            startLine: 1,
+            endLine: 20
+          })
+        };
+        return;
+      }
+
+      if (input.content.startsWith('The user replied "还能继续吗" and wants to continue the most recent unfinished task.')) {
+        assert.match(input.content, /Pending next step target: npm test/);
+        assert.match(input.content, /Latest tool in context: shell/);
+        yield {
+          delta: toolCall("files", {
+            path: "verify-terminal-commandless-stall-resume.mjs",
+            startLine: 1,
+            endLine: 20
+          })
+        };
+        return;
+      }
+
+      if (
+        input.content.startsWith('Original user request: The user replied "还能继续吗" and wants to continue the most recent unfinished task.')
+      ) {
+        const toolName = extractLine(input.content, "Tool:") ?? extractLine(input.content, "Latest tool:");
+        const summary = extractLine(input.content, "Summary:") ?? extractLine(input.content, "Latest summary:") ?? "";
+
+        if (toolName === "files" && /verify-terminal-commandless-stall-resume\.mjs/.test(summary)) {
+          yield {
+            delta: toolCall("edit", {
+              path: "verify-terminal-commandless-stall-resume.mjs",
+              startLine: 1,
+              endLine: 1,
+              replacement: 'console.log("ready");'
+            })
+          };
+          return;
+        }
+
+        if (toolName === "edit" && /verify-terminal-commandless-stall-resume\.mjs/.test(summary)) {
+          yield {
+            delta: toolCall("shell", {
+              command: "npm test"
+            })
+          };
+          return;
+        }
+
+        if (toolName === "shell" && /npm test · completed/.test(summary)) {
+          assert.match(input.content, /ready/);
+          yield { delta: "Completed the terminal repeated-stall command resume chain and verified npm test prints ready." };
+          return;
+        }
+      }
+
+      yield { delta: "ok" };
+    }
+  }
+
+  const bus = new EventBus();
+  const transcriptStore = new TranscriptStore(transcriptPath);
+  const logStore = new LogStore(logsPath);
+  await transcriptStore.ensureInitialized();
+  await logStore.ensureInitialized();
+
+  const session = createDefaultSessionRecord(workspace, VERSION);
+  session.sessionId = sessionId;
+  session.model = "regression-stub";
+
+  const runtime = new AgentRuntime({
+    bus,
+    provider: new TerminalLoopCommandOnlyStallResumeProvider(),
+    tools: new InMemoryToolRegistry(),
+    session,
+    transcriptStore,
+    logStore
+  });
+  await runtime.start();
+
+  const editor = new EditorController();
+  const panel = new TerminalPanelController();
+  const terminal = new TerminalEventLoop({
+    bus,
+    editor,
+    panel,
+    sessionId
+  });
+
+  const originalExit = process.exit;
+  const existingDataListeners = process.stdin.listeners("data") as Array<(...args: any[]) => void>;
+
+  (process as typeof process & {
+    exit: (code?: number) => never;
+  }).exit = ((code?: number) => {
+    throw new Error(`EXIT:${code ?? 0}`);
+  }) as typeof process.exit;
+
+  try {
+    terminal.start();
+    const initialCompletion = waitForAssistantTaskCompletion(bus, sessionId);
+    const continuationSummary = waitForAssistantDeltaContaining(
+      bus,
+      sessionId,
+      /I already know npm test is looping on the same result and need to inspect the hidden verifier next\./
+    );
+
+    process.stdin.emit("data", Buffer.from("Read beta-a.txt, beta-b.txt, and package.json, then run `npm test` until it prints exactly `ready`, fixing whatever is needed before finishing.\r"));
+
+    await continuationSummary;
+    await waitForBusyPhase(bus, sessionId, "assistant");
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    process.stdin.emit("data", "\u001b");
+
+    const cancelledTask = await initialCompletion;
+    assert.equal(cancelledTask.payload.state, "cancelled");
+
+    const interruptedEvents = await transcriptStore.readEventsBySession(sessionId);
+    assert.equal(
+      interruptedEvents.filter((event) =>
+        event.type === "tool.execution.completed"
+        && event.payload.summary.startsWith("package.json:1-6")
+      ).length,
+      1,
+      "terminal repeated-stall command resume chain should preserve the package read before stop"
+    );
+    assert.ok(
+      interruptedEvents.some((event) =>
+        event.type === "assistant.delta.received"
+        && /I already know npm test is looping on the same result and need to inspect the hidden verifier next\./.test(event.payload.delta)
+      ),
+      "terminal repeated-stall command resume chain should preserve the command-stage summary before stop"
+    );
+    assert.equal(
+      interruptedEvents.some((event) =>
+        event.type === "tool.execution.completed"
+        && event.payload.summary.startsWith("verify-terminal-commandless-stall-resume.mjs:1-1")
+      ),
+      false,
+      "terminal repeated-stall command resume chain should stop before inspecting the hidden verifier"
+    );
+
+    const resumedCompletion = waitForAssistantTaskCompletion(bus, sessionId);
+    process.stdin.emit("data", Buffer.from("还能继续吗\r"));
+    const resumedTask = await resumedCompletion;
+    const resumedEvents = await transcriptStore.readEventsBySession(sessionId);
+    const resumedAssistantText = collectAssistantText(resumedEvents, resumedTask.taskId ?? "");
+    const verifyContent = await readFile(join(workspace, "verify-terminal-commandless-stall-resume.mjs"), "utf8");
+
+    assert.equal(resumedTask.payload.state, "completed");
+    assert.equal(editor.getState().value, "", "terminal repeated-stall command resume should clear the editor buffer");
+    assert.match(resumedAssistantText, /ready|terminal repeated-stall command resume/i);
+    assert.match(verifyContent, /ready/);
+    assert.equal(
+      resumedEvents.filter((event) =>
+        event.type === "tool.execution.completed"
+        && event.payload.summary.startsWith("verify-terminal-commandless-stall-resume.mjs:1-1")
+      ).length,
+      1,
+      "terminal repeated-stall command resume should inspect the hidden verifier exactly once after resume"
+    );
+    assert.ok(
+      resumedEvents.some((event) =>
+        event.type === "tool.execution.completed"
+        && event.payload.summary.startsWith("verify-terminal-commandless-stall-resume.mjs:1-1 · updated")
+      ),
+      "terminal repeated-stall command resume should still reach the repair edit"
+    );
+    assert.equal(
+      resumedEvents.filter((event) =>
+        event.type === "tool.execution.completed"
+        && event.payload.summary.startsWith("npm test · completed")
+      ).length,
+      1,
+      "terminal repeated-stall command resume should rerun the pending verification command exactly once after the repair"
+    );
+    assert.equal(
+      resumedEvents.some((event) =>
+        event.type === "tool.execution.completed"
+        && event.payload.summary.startsWith("beta-a.txt:1-1")
+        && event.taskId === resumedTask.taskId
+      ),
+      false,
+      "terminal repeated-stall command resume should not restart from beta-a.txt"
+    );
+    assert.equal(
+      resumedEvents.some((event) =>
+        event.type === "tool.execution.completed"
+        && event.payload.summary.startsWith("beta-b.txt:1-1")
+        && event.taskId === resumedTask.taskId
+      ),
+      false,
+      "terminal repeated-stall command resume should not restart from beta-b.txt"
+    );
+    assert.equal(
+      resumedEvents.some((event) =>
+        event.type === "tool.execution.completed"
+        && event.payload.summary.startsWith("package.json:1-6")
+        && event.taskId === resumedTask.taskId
+      ),
+      false,
+      "terminal repeated-stall command resume should not reread package.json after the pending repair path is known"
     );
   } finally {
     process.exit = originalExit;
