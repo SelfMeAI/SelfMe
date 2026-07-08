@@ -4522,6 +4522,7 @@ async function main() {
   await verifyProjectCommandStageSummaryResume();
   await verifyTerminalLoopSubmitsAndContinuesMultiStepTask();
   await verifyTerminalLoopAutoContinuesAfterToolStepLimit();
+  await verifyTerminalLoopAutoContinuesAfterAssistantPassLimit();
   await verifyTerminalLoopContinuesAfterExplanationOnlyReply();
   await verifyTerminalLoopRecoversAfterRepeatedAssistantStall();
   await verifyTerminalLoopStopAndResumeCommandStageTask();
@@ -38832,6 +38833,244 @@ async function verifyTerminalLoopAutoContinuesAfterToolStepLimit() {
       ),
       false,
       "terminal step-limit auto-continue should finish without surfacing the old hard stop"
+    );
+  } finally {
+    process.exit = originalExit;
+    try {
+      bus.emit(createTerminalCommandInvokedEvent({
+        sessionId,
+        content: "/exit"
+      }));
+    } catch (error) {
+      assert.match(String(error), /EXIT:0/);
+    }
+
+    for (const listener of process.stdin.listeners("data") as Array<(...args: any[]) => void>) {
+      if (!existingDataListeners.includes(listener)) {
+        process.stdin.off("data", listener);
+      }
+    }
+  }
+}
+
+async function verifyTerminalLoopAutoContinuesAfterAssistantPassLimit() {
+  const root = await mkdtemp(join(tmpdir(), "selfme-agent-terminal-loop-assistant-pass-auto-"));
+  const workspace = join(root, "workspace");
+  const transcriptPath = join(root, "transcript.jsonl");
+  const logsPath = join(root, "logs.jsonl");
+  const sessionId = "terminal-loop-assistant-pass-auto";
+  await mkdir(workspace, { recursive: true });
+  await writeFile(join(workspace, "app.config.json"), '{\n  "name": "SelfMe",\n  "port": 3000\n}\n', "utf8");
+  await writeFile(
+    join(workspace, "terminal-assistant-pass-report.mjs"),
+    'import config from "./app.conf.json" with { type: "json" };\nconsole.log(`${config.name}:${config.port}`);\n',
+    "utf8"
+  );
+
+  class TerminalLoopAssistantPassProvider implements ProviderClient {
+    readonly name = "terminal-loop-assistant-pass-provider";
+    private loopReplyCount = 0;
+
+    async *streamResponse(input: ProviderStreamInput): AsyncIterable<ProviderStreamChunk> {
+      const originalPrompt = "Read app.config.json and fix terminal-assistant-pass-report.mjs so running `node terminal-assistant-pass-report.mjs` prints exactly `SelfMe:3000` on one line. Keep working until the output is exact.";
+
+      if (input.content === originalPrompt) {
+        yield {
+          delta: toolCall("files", {
+            path: "app.config.json",
+            startLine: 1,
+            endLine: 20
+          })
+        };
+        return;
+      }
+
+      if (input.content.startsWith(`Original user request: ${originalPrompt}`)) {
+        const toolName = extractLine(input.content, "Tool:") ?? extractLine(input.content, "Latest tool:");
+        const summary = extractLine(input.content, "Summary:") ?? extractLine(input.content, "Latest summary:") ?? "";
+
+        if (toolName === "files" && /app\.config\.json/.test(summary)) {
+          yield {
+            delta: toolCall("shell", {
+              command: "node terminal-assistant-pass-report.mjs"
+            })
+          };
+          return;
+        }
+
+        if (toolName === "shell" && /failed \(1\)/.test(summary)) {
+          assert.match(input.content, /Likely target file: terminal-assistant-pass-report\.mjs/);
+          this.loopReplyCount += 1;
+          yield {
+            delta: `Terminal assistant-pass loop marker ${this.loopReplyCount} stays focused on terminal-assistant-pass-report.mjs and the unresolved import path app.conf.json, the source location is already narrow, this intentionally verbose sentence avoids short progress classification, and there is still no user ambiguity in this branch.`
+          };
+          return;
+        }
+      }
+
+      if (
+        !input.content.startsWith("Original user request:")
+        && input.content.includes("The current task used up its assistant pass budget but still has unfinished work.")
+      ) {
+        assert.match(input.content, /Original task: Read app\.config\.json and fix terminal-assistant-pass-report\.mjs/);
+        assert.match(input.content, /Pending next step target: terminal-assistant-pass-report\.mjs/);
+        assert.match(input.content, /Latest tool in context: shell/);
+        assert.match(input.content, /Latest tool summary in context: node terminal-assistant-pass-report\.mjs · failed \(1\)/);
+        yield {
+          delta: toolCall("files", {
+            path: "terminal-assistant-pass-report.mjs",
+            startLine: 1,
+            endLine: 20
+          })
+        };
+        return;
+      }
+
+      if (
+        input.content.startsWith("Original user request: The current task used up its assistant pass budget but still has unfinished work.")
+      ) {
+        const toolName = extractLine(input.content, "Tool:") ?? extractLine(input.content, "Latest tool:");
+        const summary = extractLine(input.content, "Summary:") ?? extractLine(input.content, "Latest summary:") ?? "";
+
+        if (toolName === "files" && /terminal-assistant-pass-report\.mjs/.test(summary)) {
+          yield {
+            delta: toolCall("edit", {
+              path: "terminal-assistant-pass-report.mjs",
+              startLine: 1,
+              endLine: 1,
+              replacement: 'import config from "./app.config.json" with { type: "json" };'
+            })
+          };
+          return;
+        }
+
+        if (toolName === "edit" && /terminal-assistant-pass-report\.mjs/.test(summary)) {
+          yield {
+            delta: toolCall("shell", {
+              command: "node terminal-assistant-pass-report.mjs"
+            })
+          };
+          return;
+        }
+
+        if (toolName === "shell" && /completed/.test(summary)) {
+          yield { delta: "Repaired terminal-assistant-pass-report.mjs and verified the final output is exactly SelfMe:3000." };
+          return;
+        }
+      }
+
+      yield { delta: "ok" };
+    }
+  }
+
+  const bus = new EventBus();
+  const transcriptStore = new TranscriptStore(transcriptPath);
+  const logStore = new LogStore(logsPath);
+  await transcriptStore.ensureInitialized();
+  await logStore.ensureInitialized();
+
+  const session = createDefaultSessionRecord(workspace, VERSION);
+  session.sessionId = sessionId;
+  session.model = "regression-stub";
+
+  const runtime = new AgentRuntime({
+    bus,
+    provider: new TerminalLoopAssistantPassProvider(),
+    tools: new InMemoryToolRegistry(),
+    session,
+    transcriptStore,
+    logStore
+  });
+  await runtime.start();
+
+  bus.on("approval.requested", (event) => {
+    bus.emit(createTerminalCommandInvokedEvent({
+      sessionId: event.sessionId,
+      content: `/approve ${event.payload.approvalId}`
+    }));
+  });
+
+  const editor = new EditorController();
+  const panel = new TerminalPanelController();
+  const terminal = new TerminalEventLoop({
+    bus,
+    editor,
+    panel,
+    sessionId
+  });
+
+  const originalExit = process.exit;
+  const existingDataListeners = process.stdin.listeners("data") as Array<(...args: any[]) => void>;
+
+  (process as typeof process & {
+    exit: (code?: number) => never;
+  }).exit = ((code?: number) => {
+    throw new Error(`EXIT:${code ?? 0}`);
+  }) as typeof process.exit;
+
+  try {
+    terminal.start();
+    const completion = waitForAssistantTaskCompletion(bus, sessionId);
+    process.stdin.emit("data", Buffer.from("Read app.config.json and fix terminal-assistant-pass-report.mjs so running `node terminal-assistant-pass-report.mjs` prints exactly `SelfMe:3000` on one line. Keep working until the output is exact.\r"));
+    const task = await completion;
+    const events = await transcriptStore.readEventsBySession(sessionId);
+    const assistantText = collectAssistantText(events, task.taskId ?? "");
+    const content = await readFile(join(workspace, "terminal-assistant-pass-report.mjs"), "utf8");
+
+    assert.equal(task.payload.state, "completed");
+    assert.equal(editor.getState().value, "", "terminal assistant-pass auto-continue should clear the editor buffer");
+    assert.match(content, /app\.config\.json/);
+    assert.match(assistantText, /SelfMe:3000|terminal-assistant-pass-report\.mjs/i);
+    assert.ok(
+      events.some((event) =>
+        event.type === "assistant.delta.received"
+        && /Terminal assistant-pass loop marker/i.test(event.payload.delta)
+      ),
+      "terminal assistant-pass auto-continue should preserve the long progress-only loop before the handoff"
+    );
+    assert.equal(
+      events.some((event) =>
+        event.type === "tool.execution.completed"
+        && event.payload.summary.startsWith("app.config.json:1-4")
+      ),
+      false,
+      "terminal assistant-pass auto-continue should not reread the earlier config source after the handoff"
+    );
+    assert.ok(
+      events.some((event) =>
+        event.type === "tool.execution.completed"
+        && event.payload.summary.startsWith("terminal-assistant-pass-report.mjs:1-2")
+      ),
+      "terminal assistant-pass auto-continue should continue directly into the pending file read"
+    );
+    assert.ok(
+      events.some((event) =>
+        event.type === "tool.execution.completed"
+        && event.payload.summary.startsWith("terminal-assistant-pass-report.mjs:1-1 · updated")
+      ),
+      "terminal assistant-pass auto-continue should repair the pending file after the handoff"
+    );
+    assert.ok(
+      events.some((event) =>
+        event.type === "tool.execution.completed"
+        && event.payload.summary.startsWith("node terminal-assistant-pass-report.mjs · failed (1)")
+      ),
+      "terminal assistant-pass auto-continue should preserve the original failed verification context"
+    );
+    assert.ok(
+      events.some((event) =>
+        event.type === "tool.execution.completed"
+        && event.payload.summary.startsWith("node terminal-assistant-pass-report.mjs · completed")
+      ),
+      "terminal assistant-pass auto-continue should finish the pending verification after the repair"
+    );
+    assert.equal(
+      events.some((event) =>
+        event.type === "runtime.error.raised"
+        && /Agent stopped after 96 assistant passes/.test(event.payload.message)
+      ),
+      false,
+      "terminal assistant-pass auto-continue should finish without surfacing the old assistant-pass hard stop"
     );
   } finally {
     process.exit = originalExit;
