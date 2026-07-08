@@ -4526,6 +4526,7 @@ async function main() {
   await verifyTerminalLoopAutoContinuesAcrossMultipleAssistantPassSlices();
   await verifyTerminalLoopAutoContinuesAfterAssistantPassLimitBeforeCommandOnlyShell();
   await verifyTerminalLoopAutoContinuesAcrossAssistantPassAndToolRecoveryBeforeCommandOnlyShell();
+  await verifyTerminalLoopAutoContinuesAcrossAssistantPassToolRecoveryAndRepeatedStallBeforeCommandOnlyShell();
   await verifyTerminalLoopAutoContinuesAfterRepeatedStallBeforeCommandOnlyShell();
   await verifyTerminalLoopAutoContinuesAcrossMultipleRepeatedStallSlicesBeforeCommandOnlyShell();
   await verifyTerminalLoopContinuesAfterExplanationOnlyReply();
@@ -39853,6 +39854,357 @@ async function verifyTerminalLoopAutoContinuesAcrossAssistantPassAndToolRecovery
       ),
       false,
       "terminal assistant-pass + tool-recovery command-only flow should recover within the same task"
+    );
+  } finally {
+    process.exit = originalExit;
+    try {
+      bus.emit(createTerminalCommandInvokedEvent({
+        sessionId,
+        content: "/exit"
+      }));
+    } catch (error) {
+      assert.match(String(error), /EXIT:0/);
+    }
+
+    for (const listener of process.stdin.listeners("data") as Array<(...args: any[]) => void>) {
+      if (!existingDataListeners.includes(listener)) {
+        process.stdin.off("data", listener);
+      }
+    }
+  }
+}
+
+async function verifyTerminalLoopAutoContinuesAcrossAssistantPassToolRecoveryAndRepeatedStallBeforeCommandOnlyShell() {
+  const root = await mkdtemp(join(tmpdir(), "selfme-agent-terminal-loop-assistant-pass-tool-recovery-stall-command-shell-"));
+  const workspace = join(root, "workspace");
+  const transcriptPath = join(root, "transcript.jsonl");
+  const logsPath = join(root, "logs.jsonl");
+  const sessionId = "terminal-loop-assistant-pass-tool-recovery-stall-command-shell";
+  const originalPrompt = "Read beta-a.txt, beta-b.txt, and package.json, then run `npm test` until it prints exactly `ready`, fixing whatever is needed before finishing, even if you first burn passes on progress replies, then your edit tool input comes out invalid, and later you repeat the same verification command result.";
+  await mkdir(workspace, { recursive: true });
+  await writeFile(join(workspace, "beta-a.txt"), "beta-a\n", "utf8");
+  await writeFile(join(workspace, "beta-b.txt"), "beta-b\n", "utf8");
+  await writeFile(
+    join(workspace, "package.json"),
+    '{\n  "name": "terminal-assistant-pass-tool-recovery-stall-command-shell",\n  "version": "1.0.0",\n  "scripts": {\n    "test": "node verify-terminal-assistant-pass-tool-recovery-stall-command-only.mjs"\n  }\n}\n',
+    "utf8"
+  );
+  await writeFile(join(workspace, "verify-terminal-assistant-pass-tool-recovery-stall-command-only.mjs"), 'console.log("pending");\n', "utf8");
+
+  class TerminalLoopAssistantPassToolRecoveryAndStallCommandOnlyProvider implements ProviderClient {
+    readonly name = "terminal-loop-assistant-pass-tool-recovery-stall-command-only-provider";
+    assistantPassContinuationCount = 0;
+    toolRecoveryContinuationCount = 0;
+    stallContinuationCount = 0;
+    private loopReplyCount = 0;
+    private invalidEditAttemptCount = 0;
+    private repeatedShellCount = 0;
+
+    private buildInvalidEditToolCall() {
+      return toolCall("edit", {
+        startLine: 1,
+        endLine: 1,
+        replacement: 'console.log("ready");'
+      });
+    }
+
+    async *streamResponse(input: ProviderStreamInput): AsyncIterable<ProviderStreamChunk> {
+      if (input.content === originalPrompt) {
+        yield {
+          delta: toolCall("files", {
+            path: "beta-a.txt",
+            startLine: 1,
+            endLine: 20
+          })
+        };
+        return;
+      }
+
+      if (input.content.startsWith(`Original user request: ${originalPrompt}`)) {
+        const toolName = extractLine(input.content, "Tool:") ?? extractLine(input.content, "Latest tool:");
+        const summary = extractLine(input.content, "Summary:") ?? extractLine(input.content, "Latest summary:") ?? "";
+
+        if (toolName === "files" && /beta-a\.txt/.test(summary)) {
+          yield {
+            delta: toolCall("files", {
+              path: "beta-b.txt",
+              startLine: 1,
+              endLine: 20
+            })
+          };
+          return;
+        }
+
+        if (toolName === "files" && /beta-b\.txt/.test(summary)) {
+          yield {
+            delta: toolCall("files", {
+              path: "package.json",
+              startLine: 1,
+              endLine: 20
+            })
+          };
+          return;
+        }
+
+        if (toolName === "files" && /package\.json/.test(summary)) {
+          this.loopReplyCount += 1;
+          yield {
+            delta: `Terminal assistant-pass tool-recovery stall command-only loop marker ${this.loopReplyCount} stays focused on the pending npm test step, the package.json read is already complete, this intentionally verbose sentence avoids short progress classification, and there is still a concrete verification command left to run before the task can finish.`
+          };
+          return;
+        }
+      }
+
+      if (
+        !input.content.startsWith("Original user request:")
+        && input.content.includes("The current task used up its assistant pass budget but still has unfinished work.")
+      ) {
+        this.assistantPassContinuationCount += 1;
+        assert.match(input.content, /Pending next step target: npm test/);
+        assert.match(input.content, /Latest tool in context: files/);
+        assert.match(input.content, /Latest tool summary in context: package\.json:1-6/);
+        yield { delta: this.buildInvalidEditToolCall() };
+        return;
+      }
+
+      if (
+        input.content.startsWith("Original user request: The current task used up its assistant pass budget but still has unfinished work.")
+      ) {
+        this.invalidEditAttemptCount += 1;
+
+        if (this.invalidEditAttemptCount <= 2) {
+          yield { delta: this.buildInvalidEditToolCall() };
+          return;
+        }
+      }
+
+      if (
+        !input.content.startsWith("Original user request:")
+        && input.content.includes("The task hit repeated tool-recovery failures but the task context is still actionable.")
+      ) {
+        this.toolRecoveryContinuationCount += 1;
+        assert.match(input.content, /Pending next step target: npm test/);
+        assert.match(input.content, /Latest tool in context: files/);
+        assert.match(input.content, /Latest tool summary in context: package\.json:1-6/);
+        yield {
+          delta: toolCall("shell", {
+            command: "npm test"
+          })
+        };
+        return;
+      }
+
+      if (
+        input.content.startsWith("Original user request: The task hit repeated tool-recovery failures but the task context is still actionable.")
+      ) {
+        const toolName = extractLine(input.content, "Tool:") ?? extractLine(input.content, "Latest tool:");
+        const summary = extractLine(input.content, "Summary:") ?? extractLine(input.content, "Latest summary:") ?? "";
+
+        if (toolName === "shell" && /npm test · completed/.test(summary)) {
+          this.repeatedShellCount += 1;
+
+          if (this.repeatedShellCount <= 2) {
+            yield {
+              delta: toolCall("shell", {
+                command: "npm test"
+              })
+            };
+            return;
+          }
+        }
+      }
+
+      if (
+        !input.content.startsWith("Original user request:")
+        && input.content.includes("The task stalled after repeated identical progress signals but the task context is still actionable.")
+      ) {
+        this.stallContinuationCount += 1;
+        assert.match(input.content, /Latest stall kind: repeated identical shell results\./);
+        assert.match(input.content, /Pending next step target: npm test/);
+        assert.match(input.content, /Latest tool in context: shell/);
+        yield {
+          delta: toolCall("files", {
+            path: "verify-terminal-assistant-pass-tool-recovery-stall-command-only.mjs",
+            startLine: 1,
+            endLine: 20
+          })
+        };
+        return;
+      }
+
+      if (
+        input.content.startsWith("Original user request: The task stalled after repeated identical progress signals but the task context is still actionable.")
+      ) {
+        const toolName = extractLine(input.content, "Tool:") ?? extractLine(input.content, "Latest tool:");
+        const summary = extractLine(input.content, "Summary:") ?? extractLine(input.content, "Latest summary:") ?? "";
+
+        if (toolName === "files" && /verify-terminal-assistant-pass-tool-recovery-stall-command-only\.mjs/.test(summary)) {
+          yield {
+            delta: toolCall("edit", {
+              path: "verify-terminal-assistant-pass-tool-recovery-stall-command-only.mjs",
+              startLine: 1,
+              endLine: 1,
+              replacement: 'console.log("ready");'
+            })
+          };
+          return;
+        }
+
+        if (toolName === "edit" && /verify-terminal-assistant-pass-tool-recovery-stall-command-only\.mjs/.test(summary)) {
+          yield {
+            delta: toolCall("shell", {
+              command: "npm test"
+            })
+          };
+          return;
+        }
+
+        if (toolName === "shell" && /npm test · completed/.test(summary)) {
+          yield { delta: "npm test now prints ready after assistant-pass, tool-recovery, and repeated-stall terminal command-only continuations." };
+          return;
+        }
+      }
+
+      yield { delta: "ok" };
+    }
+  }
+
+  const provider = new TerminalLoopAssistantPassToolRecoveryAndStallCommandOnlyProvider();
+  const bus = new EventBus();
+  const transcriptStore = new TranscriptStore(transcriptPath);
+  const logStore = new LogStore(logsPath);
+  await transcriptStore.ensureInitialized();
+  await logStore.ensureInitialized();
+
+  const session = createDefaultSessionRecord(workspace, VERSION);
+  session.sessionId = sessionId;
+  session.model = "regression-stub";
+
+  const runtime = new AgentRuntime({
+    bus,
+    provider,
+    tools: new InMemoryToolRegistry(),
+    session,
+    transcriptStore,
+    logStore
+  });
+  await runtime.start();
+
+  const editor = new EditorController();
+  const panel = new TerminalPanelController();
+  const terminal = new TerminalEventLoop({
+    bus,
+    editor,
+    panel,
+    sessionId
+  });
+
+  const originalExit = process.exit;
+  const existingDataListeners = process.stdin.listeners("data") as Array<(...args: any[]) => void>;
+
+  (process as typeof process & {
+    exit: (code?: number) => never;
+  }).exit = ((code?: number) => {
+    throw new Error(`EXIT:${code ?? 0}`);
+  }) as typeof process.exit;
+
+  try {
+    terminal.start();
+    const completion = waitForAssistantTaskCompletion(bus, sessionId);
+    process.stdin.emit("data", Buffer.from("Read beta-a.txt, beta-b.txt, and package.json, then run `npm test` until it prints exactly `ready`, fixing whatever is needed before finishing, even if you first burn passes on progress replies, then your edit tool input comes out invalid, and later you repeat the same verification command result.\r"));
+    const task = await completion;
+    const events = await transcriptStore.readEventsBySession(sessionId);
+    const assistantText = collectAssistantText(events, task.taskId ?? "");
+    const verifyContent = await readFile(join(workspace, "verify-terminal-assistant-pass-tool-recovery-stall-command-only.mjs"), "utf8");
+
+    assert.equal(task.payload.state, "completed");
+    assert.equal(editor.getState().value, "", "terminal assistant-pass + tool-recovery + repeated-stall command-only flow should clear the editor buffer");
+    assert.match(verifyContent, /ready/);
+    assert.match(assistantText, /ready|npm test/i);
+    assert.equal(
+      provider.assistantPassContinuationCount,
+      1,
+      "terminal triple command-only continuation flow should bridge one assistant-pass handoff"
+    );
+    assert.equal(
+      provider.toolRecoveryContinuationCount,
+      1,
+      "terminal triple command-only continuation flow should then bridge one tool-recovery handoff"
+    );
+    assert.equal(
+      provider.stallContinuationCount,
+      1,
+      "terminal triple command-only continuation flow should then bridge one repeated-stall handoff"
+    );
+    assert.equal(
+      events.filter((event) =>
+        event.type === "tool.execution.completed"
+        && event.payload.summary.startsWith("beta-a.txt:1-1")
+      ).length,
+      1,
+      "terminal triple command-only continuation flow should preserve the original first read"
+    );
+    assert.equal(
+      events.filter((event) =>
+        event.type === "tool.execution.completed"
+        && event.payload.summary.startsWith("beta-b.txt:1-1")
+      ).length,
+      1,
+      "terminal triple command-only continuation flow should preserve the original second read"
+    );
+    assert.equal(
+      events.filter((event) =>
+        event.type === "tool.execution.completed"
+        && event.payload.summary.startsWith("package.json:1-6")
+      ).length,
+      1,
+      "terminal triple command-only continuation flow should preserve the original package read without rereading it"
+    );
+    assert.ok(
+      events.filter((event) =>
+        event.type === "tool.execution.completed"
+        && event.payload.summary.startsWith("npm test · completed")
+      ).length >= 4,
+      "terminal triple command-only continuation flow should preserve the repeated npm test loop before the stall handoff"
+    );
+    assert.equal(
+      events.filter((event) =>
+        event.type === "tool.execution.completed"
+        && event.payload.summary.startsWith("verify-terminal-assistant-pass-tool-recovery-stall-command-only.mjs:1-1")
+      ).length,
+      1,
+      "terminal triple command-only continuation flow should inspect the hidden verification file once after the stall handoff"
+    );
+    assert.ok(
+      events.some((event) =>
+        event.type === "tool.execution.completed"
+        && event.payload.summary.startsWith("verify-terminal-assistant-pass-tool-recovery-stall-command-only.mjs:1-1 · updated")
+      ),
+      "terminal triple command-only continuation flow should still reach the recovery edit"
+    );
+    assert.equal(
+      events.some((event) =>
+        event.type === "runtime.error.raised"
+        && /Agent stopped after 32 assistant passes/.test(event.payload.message)
+      ),
+      false,
+      "terminal triple command-only continuation flow should not surface the old assistant-pass hard stop"
+    );
+    assert.equal(
+      events.some((event) =>
+        event.type === "runtime.error.raised"
+        && /repeated tool-recovery failures/.test(event.payload.message)
+      ),
+      false,
+      "terminal triple command-only continuation flow should not surface the tool-recovery hard stop"
+    );
+    assert.equal(
+      events.some((event) =>
+        event.type === "runtime.error.raised"
+        && /repeated identical shell results/i.test(event.payload.message)
+      ),
+      false,
+      "terminal triple command-only continuation flow should recover within the same task"
     );
   } finally {
     process.exit = originalExit;
