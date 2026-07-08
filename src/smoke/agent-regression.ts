@@ -4537,6 +4537,7 @@ async function main() {
   await verifyTerminalLoopAutoContinuesAcrossMultipleRepeatedStallSlicesBeforeCommandOnlyShell();
   await verifyTerminalLoopContinuesAfterExplanationOnlyReply();
   await verifyTerminalLoopRecoversAfterRepeatedAssistantStall();
+  await verifyTerminalLoopStopAndResumeRepeatedAssistantStall();
   await verifyTerminalLoopRecoversAfterRepeatedAssistantStallAcrossMultipleSlices();
   await verifyTerminalLoopStopAndResumeCommandStageTask();
   await verifyTerminalLoopStopAndResumeApprovalWaitTask();
@@ -42951,6 +42952,293 @@ async function verifyTerminalLoopRecoversAfterRepeatedAssistantStall() {
         && event.payload.summary.startsWith("node terminal-assistant-stall-report.mjs · completed")
       ),
       "terminal assistant-stall flow should finish the pending verification after the repair"
+    );
+  } finally {
+    process.exit = originalExit;
+    try {
+      bus.emit(createTerminalCommandInvokedEvent({
+        sessionId,
+        content: "/exit"
+      }));
+    } catch (error) {
+      assert.match(String(error), /EXIT:0/);
+    }
+
+    for (const listener of process.stdin.listeners("data") as Array<(...args: any[]) => void>) {
+      if (!existingDataListeners.includes(listener)) {
+        process.stdin.off("data", listener);
+      }
+    }
+  }
+}
+
+async function verifyTerminalLoopStopAndResumeRepeatedAssistantStall() {
+  const root = await mkdtemp(join(tmpdir(), "selfme-agent-terminal-loop-assistant-stall-resume-"));
+  const workspace = join(root, "workspace");
+  const transcriptPath = join(root, "transcript.jsonl");
+  const logsPath = join(root, "logs.jsonl");
+  const sessionId = "terminal-loop-assistant-stall-resume";
+  const originalPrompt = "Read app.config.json and fix terminal-assistant-stall-resume-report.mjs so running `node terminal-assistant-stall-resume-report.mjs` prints exactly `SelfMe:3000` on one line. Keep working until the output is exact.";
+  await mkdir(workspace, { recursive: true });
+  await writeFile(join(workspace, "app.config.json"), '{\n  "name": "SelfMe",\n  "port": 3000\n}\n', "utf8");
+  await writeFile(
+    join(workspace, "terminal-assistant-stall-resume-report.mjs"),
+    'import config from "./app.conf.json" with { type: "json" };\nconsole.log(`${config.name}:${config.port}`);\n',
+    "utf8"
+  );
+
+  class TerminalLoopAssistantStallResumeProvider implements ProviderClient {
+    readonly name = "terminal-loop-assistant-stall-resume-provider";
+    private stallReplyCount = 0;
+
+    async *streamResponse(input: ProviderStreamInput): AsyncIterable<ProviderStreamChunk> {
+      if (input.content === originalPrompt) {
+        yield {
+          delta: toolCall("files", {
+            path: "app.config.json",
+            startLine: 1,
+            endLine: 20
+          })
+        };
+        return;
+      }
+
+      if (input.content.startsWith(`Original user request: ${originalPrompt}`)) {
+        const toolName = extractLine(input.content, "Tool:") ?? extractLine(input.content, "Latest tool:");
+        const summary = extractLine(input.content, "Summary:") ?? extractLine(input.content, "Latest summary:") ?? "";
+
+        if (toolName === "files" && /app\.config\.json/.test(summary)) {
+          yield {
+            delta: toolCall("shell", {
+              command: "node terminal-assistant-stall-resume-report.mjs"
+            })
+          };
+          return;
+        }
+
+        if (toolName === "shell" && /failed \(1\)/.test(summary)) {
+          this.stallReplyCount += 1;
+          yield {
+            delta: this.stallReplyCount % 2 === 1
+              ? "The failure is understood and the remaining repair is clear in terminal-assistant-stall-resume-report.mjs."
+              : "Okay, the remaining repair is still clear in `terminal-assistant-stall-resume-report.mjs`, and the failure is already understood."
+          };
+          return;
+        }
+      }
+
+      if (
+        !input.content.startsWith("Original user request:")
+        && input.content.includes("The task stalled after repeated identical progress signals but the task context is still actionable.")
+      ) {
+        assert.match(input.content, /Latest stall kind: repeated identical assistant replies\./);
+        assert.match(input.content, /Pending next step target: terminal-assistant-stall-resume-report\.mjs/);
+        assert.match(input.content, /Latest tool in context: shell/);
+        assert.match(input.content, /Latest tool summary in context: node terminal-assistant-stall-resume-report\.mjs · failed \(1\)/);
+        yield {
+          delta: "I already know the remaining repair is in terminal-assistant-stall-resume-report.mjs after the repeated assistant-stall handoff."
+        };
+        await waitForProviderDelay(input.signal, 10_000);
+        yield {
+          delta: toolCall("files", {
+            path: "terminal-assistant-stall-resume-report.mjs",
+            startLine: 1,
+            endLine: 20
+          })
+        };
+        return;
+      }
+
+      if (input.content.startsWith('The user replied "还能继续吗" and wants to continue the most recent unfinished task.')) {
+        assert.match(input.content, /terminal-assistant-stall-resume-report\.mjs|Pending next step target: terminal-assistant-stall-resume-report\.mjs/);
+        yield {
+          delta: toolCall("files", {
+            path: "terminal-assistant-stall-resume-report.mjs",
+            startLine: 1,
+            endLine: 20
+          })
+        };
+        return;
+      }
+
+      if (
+        input.content.startsWith('Original user request: The user replied "还能继续吗" and wants to continue the most recent unfinished task.')
+      ) {
+        const toolName = extractLine(input.content, "Tool:") ?? extractLine(input.content, "Latest tool:");
+        const summary = extractLine(input.content, "Summary:") ?? extractLine(input.content, "Latest summary:") ?? "";
+
+        if (toolName === "files" && /terminal-assistant-stall-resume-report\.mjs/.test(summary)) {
+          yield {
+            delta: toolCall("edit", {
+              path: "terminal-assistant-stall-resume-report.mjs",
+              startLine: 1,
+              endLine: 1,
+              replacement: 'import config from "./app.config.json" with { type: "json" };'
+            })
+          };
+          return;
+        }
+
+        if (toolName === "edit" && /terminal-assistant-stall-resume-report\.mjs/.test(summary)) {
+          yield {
+            delta: toolCall("shell", {
+              command: "node terminal-assistant-stall-resume-report.mjs"
+            })
+          };
+          return;
+        }
+
+        if (toolName === "shell" && /completed/.test(summary)) {
+          assert.match(input.content, /SelfMe:3000/);
+          yield { delta: "Repaired terminal-assistant-stall-resume-report.mjs and verified the final output is exactly SelfMe:3000." };
+          return;
+        }
+      }
+
+      yield { delta: "ok" };
+    }
+  }
+
+  const bus = new EventBus();
+  const transcriptStore = new TranscriptStore(transcriptPath);
+  const logStore = new LogStore(logsPath);
+  await transcriptStore.ensureInitialized();
+  await logStore.ensureInitialized();
+
+  const session = createDefaultSessionRecord(workspace, VERSION);
+  session.sessionId = sessionId;
+  session.model = "regression-stub";
+
+  const runtime = new AgentRuntime({
+    bus,
+    provider: new TerminalLoopAssistantStallResumeProvider(),
+    tools: new InMemoryToolRegistry(),
+    session,
+    transcriptStore,
+    logStore
+  });
+  await runtime.start();
+
+  bus.on("approval.requested", (event) => {
+    bus.emit(createTerminalCommandInvokedEvent({
+      sessionId: event.sessionId,
+      content: `/approve ${event.payload.approvalId}`
+    }));
+  });
+
+  const editor = new EditorController();
+  const panel = new TerminalPanelController();
+  const terminal = new TerminalEventLoop({
+    bus,
+    editor,
+    panel,
+    sessionId
+  });
+
+  const originalExit = process.exit;
+  const existingDataListeners = process.stdin.listeners("data") as Array<(...args: any[]) => void>;
+
+  (process as typeof process & {
+    exit: (code?: number) => never;
+  }).exit = ((code?: number) => {
+    throw new Error(`EXIT:${code ?? 0}`);
+  }) as typeof process.exit;
+
+  try {
+    terminal.start();
+    const initialCompletion = waitForAssistantTaskCompletion(bus, sessionId);
+    const continuationSummary = waitForAssistantDeltaContaining(
+      bus,
+      sessionId,
+      /I already know the remaining repair is in terminal-assistant-stall-resume-report\.mjs after the repeated assistant-stall handoff\./
+    );
+
+    process.stdin.emit("data", Buffer.from("Read app.config.json and fix terminal-assistant-stall-resume-report.mjs so running `node terminal-assistant-stall-resume-report.mjs` prints exactly `SelfMe:3000` on one line. Keep working until the output is exact.\r"));
+
+    await continuationSummary;
+    await waitForBusyPhase(bus, sessionId, "assistant");
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    process.stdin.emit("data", "\u001b");
+
+    const cancelledTask = await initialCompletion;
+    assert.equal(cancelledTask.payload.state, "cancelled");
+
+    const interruptedEvents = await transcriptStore.readEventsBySession(sessionId);
+    assert.equal(
+      interruptedEvents.filter((event) =>
+        event.type === "tool.execution.completed"
+        && event.payload.summary.startsWith("app.config.json:1-4")
+      ).length,
+      1,
+      "terminal assistant-stall resume should preserve the original config read before stop"
+    );
+    assert.ok(
+      interruptedEvents.some((event) =>
+        event.type === "assistant.delta.received"
+        && /remaining repair is still clear in `terminal-assistant-stall-resume-report\.mjs`/i.test(event.payload.delta)
+      ),
+      "terminal assistant-stall resume should preserve the repeated stall reply before stop"
+    );
+    assert.ok(
+      interruptedEvents.some((event) =>
+        event.type === "assistant.delta.received"
+        && /I already know the remaining repair is in terminal-assistant-stall-resume-report\.mjs after the repeated assistant-stall handoff\./.test(event.payload.delta)
+      ),
+      "terminal assistant-stall resume should preserve the narrowed repair summary before stop"
+    );
+    assert.equal(
+      interruptedEvents.some((event) =>
+        event.type === "tool.execution.completed"
+        && event.payload.summary.startsWith("terminal-assistant-stall-resume-report.mjs:1-2")
+      ),
+      false,
+      "terminal assistant-stall resume should stop before rereading the pending repair file"
+    );
+
+    const resumedCompletion = waitForAssistantTaskCompletion(bus, sessionId);
+    process.stdin.emit("data", Buffer.from("还能继续吗\r"));
+    const resumedTask = await resumedCompletion;
+    const resumedEvents = await transcriptStore.readEventsBySession(sessionId);
+    const resumedAssistantText = collectAssistantText(resumedEvents, resumedTask.taskId ?? "");
+    const content = await readFile(join(workspace, "terminal-assistant-stall-resume-report.mjs"), "utf8");
+
+    assert.equal(resumedTask.payload.state, "completed");
+    assert.equal(editor.getState().value, "", "terminal assistant-stall resume should clear the editor buffer");
+    assert.match(content, /app\.config\.json/);
+    assert.match(resumedAssistantText, /SelfMe:3000|terminal-assistant-stall-resume-report\.mjs/i);
+    assert.equal(
+      resumedEvents.filter((event) =>
+        event.type === "tool.execution.completed"
+        && event.payload.summary.startsWith("terminal-assistant-stall-resume-report.mjs:1-2")
+        && event.taskId === resumedTask.taskId
+      ).length,
+      1,
+      "terminal assistant-stall resume should inspect the pending repair file exactly once after resume"
+    );
+    assert.ok(
+      resumedEvents.some((event) =>
+        event.type === "tool.execution.completed"
+        && event.payload.summary.startsWith("terminal-assistant-stall-resume-report.mjs:1-1 · updated")
+      ),
+      "terminal assistant-stall resume should reach the pending repair edit after resume"
+    );
+    assert.equal(
+      resumedEvents.filter((event) =>
+        event.type === "tool.execution.completed"
+        && event.payload.summary.startsWith("node terminal-assistant-stall-resume-report.mjs · completed")
+        && event.taskId === resumedTask.taskId
+      ).length,
+      1,
+      "terminal assistant-stall resume should rerun verification exactly once after the resumed edit"
+    );
+    assert.equal(
+      resumedEvents.some((event) =>
+        event.type === "tool.execution.completed"
+        && event.payload.summary.startsWith("app.config.json:1-4")
+        && event.taskId === resumedTask.taskId
+      ),
+      false,
+      "terminal assistant-stall resume should not reread app.config.json after the pending repair path is known"
     );
   } finally {
     process.exit = originalExit;
