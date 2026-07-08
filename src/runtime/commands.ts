@@ -33,7 +33,7 @@ const commandPaletteItems: CommandPaletteItem[] = [
     display: "/exit",
     summary: "Exit SelfMe",
     usage: "/exit",
-    hint: "Runs immediately."
+    hint: "Stops any running task first, then exits."
   },
   {
     key: "read",
@@ -112,7 +112,7 @@ export function renderHelpLines() {
     "",
     "Control",
     "Esc, Ctrl+C, or /stop stops the current response",
-    "/exit exits SelfMe immediately"
+    "/exit exits SelfMe, stopping any running task first"
   ];
 }
 

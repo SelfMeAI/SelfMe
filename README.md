@@ -195,6 +195,7 @@ The goal is simple: keys and runtime artifacts should not leak into the reposito
 
 - `/help`
 - `/stop`
+- `/exit`
 - `/read <path[:start-end]> [--max-bytes N]`
 - `/write <path>`
 - `/edit <path[:start-end]>`
@@ -204,6 +205,7 @@ Interaction notes:
 
 - type `/` to open the command menu
 - use `Esc`, `Ctrl+C`, or `/stop` to stop the current task
+- use `/exit` to leave SelfMe; if a task is still running, it is stopped first
 - `/write` and `/edit` take their body on the next line
 
 ## Development Workflow

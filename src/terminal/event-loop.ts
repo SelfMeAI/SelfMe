@@ -20,6 +20,7 @@ export class TerminalEventLoop {
   private inputListener?: (chunk: Buffer | string) => void;
   private processExitListener?: () => void;
   private cleanedUp = false;
+  private exitRequested = false;
 
   constructor(
     private readonly input: {
@@ -33,7 +34,15 @@ export class TerminalEventLoop {
 
   start() {
     this.input.bus.on("runtime.busy.changed", (event) => {
+      if (event.sessionId !== (this.input.sessionId ?? "local-session")) {
+        return;
+      }
+
       this.isBusy = event.payload.active;
+
+      if (!event.payload.active) {
+        this.maybeShutdownAfterExitRequest();
+      }
     });
 
     if (process.stdin.isTTY) {
@@ -48,6 +57,15 @@ export class TerminalEventLoop {
       }
 
       if (event.payload.content.trim() === "/exit") {
+        if (this.hasInterruptibleTask()) {
+          this.exitRequested = true;
+          this.input.bus.emit(createRuntimeInterruptRequestedEvent({
+            sessionId: this.input.sessionId ?? "local-session",
+            reason: "quit"
+          }));
+          return;
+        }
+
         this.shutdown(0);
       }
     });
@@ -288,6 +306,18 @@ export class TerminalEventLoop {
 
   private hasInterruptibleTask() {
     return this.isBusy || this.input.renderer?.hasInterruptibleVisualState() === true;
+  }
+
+  private maybeShutdownAfterExitRequest() {
+    if (!this.exitRequested) {
+      return;
+    }
+
+    if (this.hasInterruptibleTask()) {
+      return;
+    }
+
+    this.shutdown(0);
   }
 
   private shutdown(code: number) {

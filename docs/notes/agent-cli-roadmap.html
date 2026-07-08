@@ -225,7 +225,7 @@
           </article>
           <article class="card">
             <h3>Commands</h3>
-            <p>当前保留最小命令面：<code>/help</code>、<code>/stop</code>、<code>/read</code>、<code>/write</code>、<code>/edit</code>、<code>/shell</code>。</p>
+            <p>当前保留最小命令面：<code>/help</code>、<code>/stop</code>、<code>/exit</code>、<code>/read</code>、<code>/write</code>、<code>/edit</code>、<code>/shell</code>。</p>
           </article>
           <article class="card">
             <h3>Approvals</h3>
@@ -237,7 +237,7 @@
           </article>
           <article class="card">
             <h3>Runtime Control</h3>
-            <p>已具备单活跃任务模型、忙时拦截新消息、<code>Esc</code> / <code>Ctrl+C</code> / <code>/stop</code> 中断当前任务，以及 provider / shell abort 贯通；同时对可执行请求加入了 action-first 约束，并能把简短确认词解析为“执行上一条已获批准的提议”或“继续最近未完成任务”；像 improve / optimize / 优化 / 重构 这类动作型请求，也会进入同一条执行收敛链，而不是停在建议语句；即便用户没显式写 <code>verify</code>，这类真正的修改任务在读完文件后如果模型只给分析、说明或多余确认问题，runtime 也会继续把它拉回到具体 edit / write；如果用户明确要求同一轮里改多个具体目标，runtime 也不会在第一处成功 edit / write 后，或者在只覆盖了第一处改动的完成口吻后，就提早收尾；这条收敛现在也覆盖“第一处 edit 成功后反问要不要继续改第二个文件”这种低价值停顿；超过三处显式文件目标的项目级改造现在也会自动拿到扩展 tool-step 预算，不再只能靠 <code>verify</code> / exact-output 关键词触发长链执行额度。</p>
+            <p>已具备单活跃任务模型、忙时拦截新消息、<code>Esc</code> / <code>Ctrl+C</code> / <code>/stop</code> 中断当前任务，以及 provider / shell abort 贯通；<code>/exit</code> 现在也不再是忙时硬退，而是会先收掉正在运行或待审批的任务，再退出终端；同时对可执行请求加入了 action-first 约束，并能把简短确认词解析为“执行上一条已获批准的提议”或“继续最近未完成任务”；像 improve / optimize / 优化 / 重构 这类动作型请求，也会进入同一条执行收敛链，而不是停在建议语句；即便用户没显式写 <code>verify</code>，这类真正的修改任务在读完文件后如果模型只给分析、说明或多余确认问题，runtime 也会继续把它拉回到具体 edit / write；如果用户明确要求同一轮里改多个具体目标，runtime 也不会在第一处成功 edit / write 后，或者在只覆盖了第一处改动的完成口吻后，就提早收尾；这条收敛现在也覆盖“第一处 edit 成功后反问要不要继续改第二个文件”这种低价值停顿；超过三处显式文件目标的项目级改造现在也会自动拿到扩展 tool-step 预算，不再只能靠 <code>verify</code> / exact-output 关键词触发长链执行额度。</p>
           </article>
           <article class="card">
             <h3>Turn Feedback</h3>

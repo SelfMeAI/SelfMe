@@ -4537,6 +4537,8 @@ async function main() {
   await verifyTerminalLoopStageSummaryApprovalWaitResumeTask();
   await verifyTerminalLoopNaturalLanguageApprovalShortcut();
   await verifyTerminalLoopNaturalLanguageDenyShortcut();
+  await verifyExitCommandStopsRunningTaskBeforeShutdown();
+  await verifyExitCommandDeniesPendingApprovalBeforeShutdown();
   verifyInterruptFallbackWhenWorkingUiLingers();
   verifyExitCommandShutsDownTerminalLoop();
   console.log("task: verify context compaction");
@@ -42745,6 +42747,267 @@ async function verifyTerminalLoopNaturalLanguageDenyShortcut() {
   }
 }
 
+async function verifyExitCommandStopsRunningTaskBeforeShutdown() {
+  const root = await mkdtemp(join(tmpdir(), "selfme-agent-terminal-exit-running-"));
+  const workspace = join(root, "workspace");
+  const transcriptPath = join(root, "transcript.jsonl");
+  const logsPath = join(root, "logs.jsonl");
+  const sessionId = "terminal-exit-running";
+  const originalPrompt = "Wait briefly, then create exit-running.txt with the text done.";
+  await mkdir(workspace, { recursive: true });
+
+  class ExitRunningProvider implements ProviderClient {
+    readonly name = "terminal-exit-running-provider";
+
+    async *streamResponse(input: ProviderStreamInput): AsyncIterable<ProviderStreamChunk> {
+      if (input.content === originalPrompt) {
+        await waitForProviderDelay(input.signal, 10_000);
+        yield {
+          delta: toolCall("write", {
+            path: "exit-running.txt",
+            content: "done\n"
+          })
+        };
+        return;
+      }
+
+      yield { delta: "ok" };
+    }
+  }
+
+  const bus = new EventBus();
+  const transcriptStore = new TranscriptStore(transcriptPath);
+  const logStore = new LogStore(logsPath);
+  await transcriptStore.ensureInitialized();
+  await logStore.ensureInitialized();
+
+  const session = createDefaultSessionRecord(workspace, VERSION);
+  session.sessionId = sessionId;
+  session.model = "regression-stub";
+
+  const runtime = new AgentRuntime({
+    bus,
+    provider: new ExitRunningProvider(),
+    tools: new InMemoryToolRegistry(),
+    session,
+    transcriptStore,
+    logStore
+  });
+  await runtime.start();
+
+  const editor = new EditorController();
+  const panel = new TerminalPanelController();
+  const terminal = new TerminalEventLoop({
+    bus,
+    editor,
+    panel,
+    sessionId
+  });
+
+  const originalExit = process.exit;
+  const existingDataListeners = process.stdin.listeners("data") as Array<(...args: any[]) => void>;
+  const eventOrder: string[] = [];
+  let exitCode: number | undefined;
+
+  (process as typeof process & {
+    exit: (code?: number) => never;
+  }).exit = ((code?: number) => {
+    exitCode = code ?? 0;
+    eventOrder.push("exit");
+    return undefined as never;
+  }) as typeof process.exit;
+
+  const offTaskState = bus.on("task.state.changed", (event) => {
+    if (event.sessionId !== sessionId || event.payload.title !== "Respond to user input") {
+      return;
+    }
+
+    if (event.payload.state === "cancelled") {
+      eventOrder.push("cancelled");
+    }
+  });
+
+  try {
+    terminal.start();
+    const completion = waitForAssistantTaskCompletion(bus, sessionId);
+    process.stdin.emit("data", Buffer.from("Wait briefly, then create exit-running.txt with the text done.\r"));
+    await waitForBusyPhase(bus, sessionId, "assistant");
+    process.stdin.emit("data", Buffer.from("/exit\r"));
+
+    const cancelledTask = await completion;
+    await new Promise((resolve) => setImmediate(resolve));
+
+    assert.equal(cancelledTask.payload.state, "cancelled");
+    assert.equal(exitCode, 0, "exit command should eventually shut down after cancelling the running task");
+    assert.ok(
+      eventOrder.indexOf("cancelled") !== -1 && eventOrder.indexOf("exit") > eventOrder.indexOf("cancelled"),
+      "exit command should wait for the running task to cancel before shutting down"
+    );
+    assert.equal(editor.getState().value, "", "exit command during a running task should clear the editor buffer");
+    await assert.rejects(
+      readFile(join(workspace, "exit-running.txt"), "utf8"),
+      /ENOENT/,
+      "exit command during a running task should prevent the pending write from landing"
+    );
+    assert.equal(
+      (process.stdin.listeners("data") as Array<(...args: any[]) => void>).filter((listener) => !existingDataListeners.includes(listener)).length,
+      0,
+      "exit command should detach terminal stdin listeners after the running task shuts down"
+    );
+  } finally {
+    offTaskState();
+    process.exit = originalExit;
+
+    for (const listener of process.stdin.listeners("data") as Array<(...args: any[]) => void>) {
+      if (!existingDataListeners.includes(listener)) {
+        process.stdin.off("data", listener);
+      }
+    }
+  }
+}
+
+async function verifyExitCommandDeniesPendingApprovalBeforeShutdown() {
+  const root = await mkdtemp(join(tmpdir(), "selfme-agent-terminal-exit-approval-"));
+  const workspace = join(root, "workspace");
+  const transcriptPath = join(root, "transcript.jsonl");
+  const logsPath = join(root, "logs.jsonl");
+  const sessionId = "terminal-exit-approval";
+  const originalPrompt = "Create exit-approval.txt with the text approved.";
+  await mkdir(workspace, { recursive: true });
+
+  class ExitApprovalProvider implements ProviderClient {
+    readonly name = "terminal-exit-approval-provider";
+
+    async *streamResponse(input: ProviderStreamInput): AsyncIterable<ProviderStreamChunk> {
+      if (input.content === originalPrompt) {
+        yield {
+          delta: toolCall("write", {
+            path: "exit-approval.txt",
+            content: "approved\n"
+          })
+        };
+        return;
+      }
+
+      yield { delta: "ok" };
+    }
+  }
+
+  const bus = new EventBus();
+  const transcriptStore = new TranscriptStore(transcriptPath);
+  const logStore = new LogStore(logsPath);
+  await transcriptStore.ensureInitialized();
+  await logStore.ensureInitialized();
+
+  const session = createDefaultSessionRecord(workspace, VERSION);
+  session.sessionId = sessionId;
+  session.model = "regression-stub";
+
+  const runtime = new AgentRuntime({
+    bus,
+    provider: new ExitApprovalProvider(),
+    tools: new InMemoryToolRegistry(),
+    session,
+    transcriptStore,
+    logStore
+  });
+  await runtime.start();
+
+  const editor = new EditorController();
+  const panel = new TerminalPanelController();
+  const terminal = new TerminalEventLoop({
+    bus,
+    editor,
+    panel,
+    sessionId
+  });
+
+  const originalExit = process.exit;
+  const existingDataListeners = process.stdin.listeners("data") as Array<(...args: any[]) => void>;
+  const eventOrder: string[] = [];
+  let exitCode: number | undefined;
+
+  (process as typeof process & {
+    exit: (code?: number) => never;
+  }).exit = ((code?: number) => {
+    exitCode = code ?? 0;
+    eventOrder.push("exit");
+    return undefined as never;
+  }) as typeof process.exit;
+
+  const offTaskState = bus.on("task.state.changed", (event) => {
+    if (event.sessionId !== sessionId || event.payload.title !== "Respond to user input") {
+      return;
+    }
+
+    if (event.payload.state === "cancelled") {
+      eventOrder.push("cancelled");
+    }
+  });
+
+  const offApprovalResolved = bus.on("approval.resolved", (event) => {
+    if (event.sessionId !== sessionId) {
+      return;
+    }
+
+    if (!event.payload.approved) {
+      eventOrder.push("approval-denied");
+    }
+  });
+
+  try {
+    terminal.start();
+    const completion = waitForAssistantTaskCompletion(bus, sessionId);
+    const approvalRequested = waitForApprovalRequest(bus, sessionId);
+    process.stdin.emit("data", Buffer.from("Create exit-approval.txt with the text approved.\r"));
+    const approvalEvent = await approvalRequested;
+    process.stdin.emit("data", Buffer.from("/exit\r"));
+
+    const cancelledTask = await completion;
+    await new Promise((resolve) => setImmediate(resolve));
+    const events = await transcriptStore.readEventsBySession(sessionId);
+
+    assert.equal(cancelledTask.payload.state, "cancelled");
+    assert.equal(exitCode, 0, "exit command should eventually shut down after denying the pending approval");
+    assert.ok(
+      eventOrder.indexOf("approval-denied") !== -1 && eventOrder.indexOf("exit") > eventOrder.indexOf("approval-denied"),
+      "exit command should deny the pending approval before shutting down"
+    );
+    assert.ok(
+      eventOrder.indexOf("cancelled") !== -1 && eventOrder.indexOf("exit") > eventOrder.indexOf("cancelled"),
+      "exit command should wait for the approval-blocked task to cancel before shutting down"
+    );
+    assert.ok(
+      events.some((event) =>
+        event.type === "approval.resolved"
+        && event.payload.approvalId === approvalEvent.payload.approvalId
+        && !event.payload.approved
+      ),
+      "exit command should resolve the blocked approval as denied"
+    );
+    await assert.rejects(
+      readFile(join(workspace, "exit-approval.txt"), "utf8"),
+      /ENOENT/,
+      "exit command should prevent the blocked approved write from landing"
+    );
+    assert.equal(
+      (process.stdin.listeners("data") as Array<(...args: any[]) => void>).filter((listener) => !existingDataListeners.includes(listener)).length,
+      0,
+      "exit command should detach terminal stdin listeners after the approval-blocked task shuts down"
+    );
+  } finally {
+    offTaskState();
+    offApprovalResolved();
+    process.exit = originalExit;
+
+    for (const listener of process.stdin.listeners("data") as Array<(...args: any[]) => void>) {
+      if (!existingDataListeners.includes(listener)) {
+        process.stdin.off("data", listener);
+      }
+    }
+  }
+}
+
 function verifyExitCommandShutsDownTerminalLoop() {
   const bus = new EventBus();
   const editor = new EditorController();
@@ -43020,7 +43283,7 @@ function verifyCommandPaletteIncludesExit() {
   assert.ok(exitItem, "command palette should expose /exit");
   assert.equal(exitItem?.command, "/exit");
   assert.equal(exitItem?.requiresInput, undefined);
-  assert.match(helpText, /\/exit exits SelfMe immediately/);
+  assert.match(helpText, /\/exit exits SelfMe, stopping any running task first/);
 }
 
 function verifyContextCompaction() {
