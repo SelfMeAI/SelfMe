@@ -4523,8 +4523,10 @@ async function main() {
   await verifyTerminalLoopSubmitsAndContinuesMultiStepTask();
   await verifyTerminalLoopAutoContinuesAfterToolStepLimit();
   await verifyTerminalLoopAutoContinuesAfterAssistantPassLimit();
+  await verifyTerminalLoopAutoContinuesAfterAssistantPassLimitBeforeCommandOnlyShell();
   await verifyTerminalLoopContinuesAfterExplanationOnlyReply();
   await verifyTerminalLoopRecoversAfterRepeatedAssistantStall();
+  await verifyTerminalLoopRecoversAfterRepeatedAssistantStallAcrossMultipleSlices();
   await verifyTerminalLoopStopAndResumeCommandStageTask();
   await verifyTerminalLoopStopAndResumeApprovalWaitTask();
   await verifyTerminalLoopStageSummaryApprovalWaitResumeTask();
@@ -39091,6 +39093,221 @@ async function verifyTerminalLoopAutoContinuesAfterAssistantPassLimit() {
   }
 }
 
+async function verifyTerminalLoopAutoContinuesAfterAssistantPassLimitBeforeCommandOnlyShell() {
+  const root = await mkdtemp(join(tmpdir(), "selfme-agent-terminal-loop-assistant-pass-command-shell-"));
+  const workspace = join(root, "workspace");
+  const transcriptPath = join(root, "transcript.jsonl");
+  const logsPath = join(root, "logs.jsonl");
+  const sessionId = "terminal-loop-assistant-pass-command-shell";
+  const originalPrompt = "Read beta-a.txt, beta-b.txt, and package.json, then run `npm test` before finishing.";
+  await mkdir(workspace, { recursive: true });
+  await writeFile(join(workspace, "beta-a.txt"), "beta-a\n", "utf8");
+  await writeFile(join(workspace, "beta-b.txt"), "beta-b\n", "utf8");
+  await writeFile(
+    join(workspace, "package.json"),
+    '{\n  "name": "terminal-assistant-pass-command-shell",\n  "version": "1.0.0",\n  "scripts": {\n    "test": "node verify-terminal-assistant-pass-command-only.mjs"\n  }\n}\n',
+    "utf8"
+  );
+  await writeFile(join(workspace, "verify-terminal-assistant-pass-command-only.mjs"), 'console.log("ready");\n', "utf8");
+
+  class TerminalLoopAssistantPassCommandOnlyProvider implements ProviderClient {
+    readonly name = "terminal-loop-assistant-pass-command-only-provider";
+    private loopReplyCount = 0;
+
+    async *streamResponse(input: ProviderStreamInput): AsyncIterable<ProviderStreamChunk> {
+      if (input.content === originalPrompt) {
+        yield {
+          delta: toolCall("files", {
+            path: "beta-a.txt",
+            startLine: 1,
+            endLine: 20
+          })
+        };
+        return;
+      }
+
+      if (input.content.startsWith(`Original user request: ${originalPrompt}`)) {
+        const toolName = extractLine(input.content, "Tool:") ?? extractLine(input.content, "Latest tool:");
+        const summary = extractLine(input.content, "Summary:") ?? extractLine(input.content, "Latest summary:") ?? "";
+
+        if (toolName === "files" && /beta-a\.txt/.test(summary)) {
+          yield {
+            delta: toolCall("files", {
+              path: "beta-b.txt",
+              startLine: 1,
+              endLine: 20
+            })
+          };
+          return;
+        }
+
+        if (toolName === "files" && /beta-b\.txt/.test(summary)) {
+          yield {
+            delta: toolCall("files", {
+              path: "package.json",
+              startLine: 1,
+              endLine: 20
+            })
+          };
+          return;
+        }
+
+        if (toolName === "files" && /package\.json/.test(summary)) {
+          this.loopReplyCount += 1;
+          yield {
+            delta: `Terminal assistant-pass command-only loop marker ${this.loopReplyCount} stays focused on the pending npm test step, the package.json read is already complete, this intentionally verbose sentence avoids short progress classification, and a concrete verification command still has to run before the task can finish.`
+          };
+          return;
+        }
+      }
+
+      if (
+        !input.content.startsWith("Original user request:")
+        && input.content.includes("The current task used up its assistant pass budget but still has unfinished work.")
+      ) {
+        assert.match(input.content, /Original task: Read beta-a\.txt, beta-b\.txt, and package\.json, then run `npm test` before finishing\./);
+        assert.match(input.content, /Pending next step target: npm test/);
+        assert.match(input.content, /Latest tool in context: files/);
+        assert.match(input.content, /Latest tool summary in context: package\.json:1-6/);
+        yield {
+          delta: toolCall("shell", {
+            command: "npm test"
+          })
+        };
+        return;
+      }
+
+      if (
+        input.content.startsWith("Original user request: The current task used up its assistant pass budget but still has unfinished work.")
+      ) {
+        const toolName = extractLine(input.content, "Tool:") ?? extractLine(input.content, "Latest tool:");
+        const summary = extractLine(input.content, "Summary:") ?? extractLine(input.content, "Latest summary:") ?? "";
+
+        if (toolName === "shell" && /npm test/.test(summary)) {
+          yield { delta: "npm test completed and printed ready." };
+          return;
+        }
+      }
+
+      yield { delta: "ok" };
+    }
+  }
+
+  const bus = new EventBus();
+  const transcriptStore = new TranscriptStore(transcriptPath);
+  const logStore = new LogStore(logsPath);
+  await transcriptStore.ensureInitialized();
+  await logStore.ensureInitialized();
+
+  const session = createDefaultSessionRecord(workspace, VERSION);
+  session.sessionId = sessionId;
+  session.model = "regression-stub";
+
+  const runtime = new AgentRuntime({
+    bus,
+    provider: new TerminalLoopAssistantPassCommandOnlyProvider(),
+    tools: new InMemoryToolRegistry(),
+    session,
+    transcriptStore,
+    logStore
+  });
+  await runtime.start();
+
+  const editor = new EditorController();
+  const panel = new TerminalPanelController();
+  const terminal = new TerminalEventLoop({
+    bus,
+    editor,
+    panel,
+    sessionId
+  });
+
+  const originalExit = process.exit;
+  const existingDataListeners = process.stdin.listeners("data") as Array<(...args: any[]) => void>;
+
+  (process as typeof process & {
+    exit: (code?: number) => never;
+  }).exit = ((code?: number) => {
+    throw new Error(`EXIT:${code ?? 0}`);
+  }) as typeof process.exit;
+
+  try {
+    terminal.start();
+    const completion = waitForAssistantTaskCompletion(bus, sessionId);
+    process.stdin.emit("data", Buffer.from("Read beta-a.txt, beta-b.txt, and package.json, then run `npm test` before finishing.\r"));
+    const task = await completion;
+    const events = await transcriptStore.readEventsBySession(sessionId);
+    const assistantText = collectAssistantText(events, task.taskId ?? "");
+
+    assert.equal(task.payload.state, "completed");
+    assert.equal(editor.getState().value, "", "terminal assistant-pass command-only flow should clear the editor buffer");
+    assert.match(assistantText, /ready|npm test/i);
+    assert.ok(
+      events.some((event) =>
+        event.type === "assistant.delta.received"
+        && /Terminal assistant-pass command-only loop marker/i.test(event.payload.delta)
+      ),
+      "terminal assistant-pass command-only flow should preserve the long progress-only loop before the handoff"
+    );
+    assert.equal(
+      events.filter((event) =>
+        event.type === "tool.execution.completed"
+        && event.payload.summary.startsWith("beta-a.txt:1-1")
+      ).length,
+      1,
+      "terminal assistant-pass command-only flow should preserve the original first read"
+    );
+    assert.equal(
+      events.filter((event) =>
+        event.type === "tool.execution.completed"
+        && event.payload.summary.startsWith("beta-b.txt:1-1")
+      ).length,
+      1,
+      "terminal assistant-pass command-only flow should preserve the original second read"
+    );
+    assert.equal(
+      events.filter((event) =>
+        event.type === "tool.execution.completed"
+        && event.payload.summary.startsWith("package.json:1-6")
+      ).length,
+      1,
+      "terminal assistant-pass command-only flow should preserve the original package read without rereading it"
+    );
+    assert.equal(
+      events.filter((event) =>
+        event.type === "tool.execution.completed"
+        && event.payload.summary.startsWith("npm test · completed")
+      ).length,
+      1,
+      "terminal assistant-pass command-only flow should execute the pending verification command exactly once after the handoff"
+    );
+    assert.equal(
+      events.some((event) =>
+        event.type === "runtime.error.raised"
+        && /Agent stopped after 32 assistant passes/.test(event.payload.message)
+      ),
+      false,
+      "terminal assistant-pass command-only flow should not surface the standard assistant-pass hard stop"
+    );
+  } finally {
+    process.exit = originalExit;
+    try {
+      bus.emit(createTerminalCommandInvokedEvent({
+        sessionId,
+        content: "/exit"
+      }));
+    } catch (error) {
+      assert.match(String(error), /EXIT:0/);
+    }
+
+    for (const listener of process.stdin.listeners("data") as Array<(...args: any[]) => void>) {
+      if (!existingDataListeners.includes(listener)) {
+        process.stdin.off("data", listener);
+      }
+    }
+  }
+}
+
 async function verifyTerminalLoopContinuesAfterExplanationOnlyReply() {
   const root = await mkdtemp(join(tmpdir(), "selfme-agent-terminal-loop-explanation-continue-"));
   const workspace = join(root, "workspace");
@@ -39506,6 +39723,259 @@ async function verifyTerminalLoopRecoversAfterRepeatedAssistantStall() {
         && event.payload.summary.startsWith("node terminal-assistant-stall-report.mjs · completed")
       ),
       "terminal assistant-stall flow should finish the pending verification after the repair"
+    );
+  } finally {
+    process.exit = originalExit;
+    try {
+      bus.emit(createTerminalCommandInvokedEvent({
+        sessionId,
+        content: "/exit"
+      }));
+    } catch (error) {
+      assert.match(String(error), /EXIT:0/);
+    }
+
+    for (const listener of process.stdin.listeners("data") as Array<(...args: any[]) => void>) {
+      if (!existingDataListeners.includes(listener)) {
+        process.stdin.off("data", listener);
+      }
+    }
+  }
+}
+
+async function verifyTerminalLoopRecoversAfterRepeatedAssistantStallAcrossMultipleSlices() {
+  const root = await mkdtemp(join(tmpdir(), "selfme-agent-terminal-loop-assistant-stall-multi-"));
+  const workspace = join(root, "workspace");
+  const transcriptPath = join(root, "transcript.jsonl");
+  const logsPath = join(root, "logs.jsonl");
+  const sessionId = "terminal-loop-assistant-stall-multi";
+  await mkdir(workspace, { recursive: true });
+  await writeFile(join(workspace, "app.config.json"), '{\n  "name": "SelfMe",\n  "port": 3000\n}\n', "utf8");
+  await writeFile(
+    join(workspace, "terminal-assistant-stall-multi-report.mjs"),
+    'import config from "./app.conf.json" with { type: "json" };\nconsole.log(`${config.name}:${config.port}`);\n',
+    "utf8"
+  );
+
+  class TerminalLoopAssistantStallMultiProvider implements ProviderClient {
+    readonly name = "terminal-loop-assistant-stall-multi-provider";
+    continuationPromptCount = 0;
+    private originalStallReplyCount = 0;
+    private resumedStallReplyCount = 0;
+
+    async *streamResponse(input: ProviderStreamInput): AsyncIterable<ProviderStreamChunk> {
+      const originalPrompt = "Read app.config.json and fix terminal-assistant-stall-multi-report.mjs so running `node terminal-assistant-stall-multi-report.mjs` prints exactly `SelfMe:3000` on one line. Keep working until the output is exact.";
+
+      if (input.content === originalPrompt) {
+        yield {
+          delta: toolCall("files", {
+            path: "app.config.json",
+            startLine: 1,
+            endLine: 20
+          })
+        };
+        return;
+      }
+
+      if (input.content.startsWith(`Original user request: ${originalPrompt}`)) {
+        const toolName = extractLine(input.content, "Tool:") ?? extractLine(input.content, "Latest tool:");
+        const summary = extractLine(input.content, "Summary:") ?? extractLine(input.content, "Latest summary:") ?? "";
+
+        if (toolName === "files" && /app\.config\.json/.test(summary)) {
+          yield {
+            delta: toolCall("shell", {
+              command: "node terminal-assistant-stall-multi-report.mjs"
+            })
+          };
+          return;
+        }
+
+        if (toolName === "shell" && /failed \(1\)/.test(summary)) {
+          this.originalStallReplyCount += 1;
+          yield {
+            delta: this.originalStallReplyCount % 2 === 1
+              ? "The failure is understood and the remaining repair is clear in terminal-assistant-stall-multi-report.mjs."
+              : "Okay, the remaining repair is still clear in `terminal-assistant-stall-multi-report.mjs`, and the failure is already understood."
+          };
+          return;
+        }
+      }
+
+      if (
+        !input.content.startsWith("Original user request:")
+        && input.content.includes("The task stalled after repeated identical progress signals but the task context is still actionable.")
+      ) {
+        this.continuationPromptCount += 1;
+        assert.match(input.content, /Pending next step target: terminal-assistant-stall-multi-report\.mjs/);
+
+        if (this.continuationPromptCount === 1) {
+          yield {
+            delta: toolCall("files", {
+              path: "terminal-assistant-stall-multi-report.mjs",
+              startLine: 1,
+              endLine: 20
+            })
+          };
+          return;
+        }
+
+        if (this.continuationPromptCount === 2) {
+          yield {
+            delta: toolCall("edit", {
+              path: "terminal-assistant-stall-multi-report.mjs",
+              startLine: 1,
+              endLine: 1,
+              replacement: 'import config from "./app.config.json" with { type: "json" };'
+            })
+          };
+          return;
+        }
+
+        assert.fail(`unexpected terminal repeated-assistant-stall continuation prompt ${this.continuationPromptCount}`);
+      }
+
+      if (
+        input.content.startsWith("Original user request: The task stalled after repeated identical progress signals but the task context is still actionable.")
+      ) {
+        const toolName = extractLine(input.content, "Tool:") ?? extractLine(input.content, "Latest tool:");
+        const summary = extractLine(input.content, "Summary:") ?? extractLine(input.content, "Latest summary:") ?? "";
+
+        if (toolName === "files" && /terminal-assistant-stall-multi-report\.mjs/.test(summary)) {
+          this.resumedStallReplyCount += 1;
+          yield {
+            delta: this.resumedStallReplyCount % 2 === 1
+              ? "The resumed repair remains clear in terminal-assistant-stall-multi-report.mjs and the target import line is already known."
+              : "Okay, the resumed repair is still clear in `terminal-assistant-stall-multi-report.mjs`, and the pending edit still has not landed."
+          };
+          return;
+        }
+
+        if (toolName === "edit" && /terminal-assistant-stall-multi-report\.mjs/.test(summary)) {
+          yield {
+            delta: toolCall("shell", {
+              command: "node terminal-assistant-stall-multi-report.mjs"
+            })
+          };
+          return;
+        }
+
+        if (toolName === "shell" && /completed/.test(summary)) {
+          yield { delta: "Repaired terminal-assistant-stall-multi-report.mjs after two repeated-assistant-stall continuation slices and verified the final output is exactly SelfMe:3000." };
+          return;
+        }
+      }
+
+      yield { delta: "ok" };
+    }
+  }
+
+  const provider = new TerminalLoopAssistantStallMultiProvider();
+  const bus = new EventBus();
+  const transcriptStore = new TranscriptStore(transcriptPath);
+  const logStore = new LogStore(logsPath);
+  await transcriptStore.ensureInitialized();
+  await logStore.ensureInitialized();
+
+  const session = createDefaultSessionRecord(workspace, VERSION);
+  session.sessionId = sessionId;
+  session.model = "regression-stub";
+
+  const runtime = new AgentRuntime({
+    bus,
+    provider,
+    tools: new InMemoryToolRegistry(),
+    session,
+    transcriptStore,
+    logStore
+  });
+  await runtime.start();
+
+  bus.on("approval.requested", (event) => {
+    bus.emit(createTerminalCommandInvokedEvent({
+      sessionId: event.sessionId,
+      content: `/approve ${event.payload.approvalId}`
+    }));
+  });
+
+  const editor = new EditorController();
+  const panel = new TerminalPanelController();
+  const terminal = new TerminalEventLoop({
+    bus,
+    editor,
+    panel,
+    sessionId
+  });
+
+  const originalExit = process.exit;
+  const existingDataListeners = process.stdin.listeners("data") as Array<(...args: any[]) => void>;
+
+  (process as typeof process & {
+    exit: (code?: number) => never;
+  }).exit = ((code?: number) => {
+    throw new Error(`EXIT:${code ?? 0}`);
+  }) as typeof process.exit;
+
+  try {
+    terminal.start();
+    const completion = waitForAssistantTaskCompletion(bus, sessionId);
+    process.stdin.emit("data", Buffer.from("Read app.config.json and fix terminal-assistant-stall-multi-report.mjs so running `node terminal-assistant-stall-multi-report.mjs` prints exactly `SelfMe:3000` on one line. Keep working until the output is exact.\r"));
+    const task = await completion;
+    const events = await transcriptStore.readEventsBySession(sessionId);
+    const assistantText = collectAssistantText(events, task.taskId ?? "");
+    const content = await readFile(join(workspace, "terminal-assistant-stall-multi-report.mjs"), "utf8");
+
+    assert.equal(task.payload.state, "completed");
+    assert.equal(editor.getState().value, "", "terminal assistant-stall multi-slice flow should clear the editor buffer");
+    assert.match(content, /app\.config\.json/);
+    assert.match(assistantText, /SelfMe:3000|terminal-assistant-stall-multi-report\.mjs/i);
+    assert.equal(
+      provider.continuationPromptCount,
+      2,
+      "terminal repeated-assistant-stall flow should bridge two stalled continuation slices before finishing"
+    );
+    assert.ok(
+      events.some((event) =>
+        event.type === "assistant.delta.received"
+        && /remaining repair is clear in terminal-assistant-stall-multi-report\.mjs/i.test(event.payload.delta)
+      ),
+      "terminal assistant-stall multi-slice flow should preserve the original stall reply"
+    );
+    assert.ok(
+      events.some((event) =>
+        event.type === "assistant.delta.received"
+        && /resumed repair remains clear in terminal-assistant-stall-multi-report\.mjs/i.test(event.payload.delta)
+      ),
+      "terminal assistant-stall multi-slice flow should preserve the resumed stall reply"
+    );
+    assert.equal(
+      events.filter((event) =>
+        event.type === "tool.execution.completed"
+        && event.payload.summary.startsWith("terminal-assistant-stall-multi-report.mjs:1-2")
+      ).length,
+      1,
+      "terminal multi-slice repeated-assistant-stall flow should preserve the single resumed file read"
+    );
+    assert.ok(
+      events.some((event) =>
+        event.type === "tool.execution.completed"
+        && event.payload.summary.startsWith("terminal-assistant-stall-multi-report.mjs:1-1 · updated")
+      ),
+      "terminal multi-slice repeated-assistant-stall flow should still reach the pending edit"
+    );
+    assert.ok(
+      events.some((event) =>
+        event.type === "tool.execution.completed"
+        && event.payload.summary.startsWith("node terminal-assistant-stall-multi-report.mjs · completed")
+      ),
+      "terminal multi-slice repeated-assistant-stall flow should finish verification after the resumed edit"
+    );
+    assert.equal(
+      events.some((event) =>
+        event.type === "runtime.error.raised"
+        && /Agent stalled after repeated identical assistant replies/.test(event.payload.message)
+      ),
+      false,
+      "terminal multi-slice repeated-assistant-stall flow should recover instead of surfacing the old assistant stall error"
     );
   } finally {
     process.exit = originalExit;
