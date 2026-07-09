@@ -685,7 +685,7 @@ export class AgentRuntime {
 
           if (
             pendingTargetPath
-            && shouldAutoContinueAfterStepLimit(originalRequest, pendingTargetPath)
+            && shouldAutoContinueCurrentTask(originalRequest, pendingTargetPath)
             && shouldConsumeAutoContinuationBudget(
               autoAssistantPassContinuationBudget,
               pendingTargetPath,
@@ -739,7 +739,7 @@ export class AgentRuntime {
 
             if (
               recoveryTargetPath
-              && shouldAutoContinueAfterStepLimit(originalRequest, recoveryTargetPath)
+              && shouldAutoContinueCurrentTask(originalRequest, recoveryTargetPath)
               && shouldConsumeAutoContinuationBudget(
                 autoToolRecoveryContinuationBudget,
                 recoveryTargetPath,
@@ -855,7 +855,7 @@ export class AgentRuntime {
 
             if (
               repeatedAssistantStallTargetPath
-              && shouldAutoContinueAfterStepLimit(originalRequest, repeatedAssistantStallTargetPath)
+              && shouldAutoContinueCurrentTask(originalRequest, repeatedAssistantStallTargetPath)
               && shouldConsumeAutoContinuationBudget(
                 autoRepeatedAssistantStallContinuationBudget,
                 repeatedAssistantStallTargetPath,
@@ -908,7 +908,7 @@ export class AgentRuntime {
 
             if (
               recoveryTargetPath
-              && shouldAutoContinueAfterStepLimit(originalRequest, recoveryTargetPath)
+              && shouldAutoContinueCurrentTask(originalRequest, recoveryTargetPath)
               && shouldConsumeAutoContinuationBudget(
                 autoToolRecoveryContinuationBudget,
                 recoveryTargetPath,
@@ -966,7 +966,7 @@ export class AgentRuntime {
 
             if (
               recoveryTargetPath
-              && shouldAutoContinueAfterStepLimit(originalRequest, recoveryTargetPath)
+              && shouldAutoContinueCurrentTask(originalRequest, recoveryTargetPath)
               && shouldConsumeAutoContinuationBudget(
                 autoToolRecoveryContinuationBudget,
                 recoveryTargetPath,
@@ -1015,7 +1015,7 @@ export class AgentRuntime {
 
           if (
             pendingTargetPath
-            && shouldAutoContinueAfterStepLimit(originalRequest, pendingTargetPath)
+            && shouldAutoContinueCurrentTask(originalRequest, pendingTargetPath)
             && shouldConsumeAutoContinuationBudget(
               autoStepLimitContinuationBudget,
               pendingTargetPath,
@@ -1091,7 +1091,7 @@ export class AgentRuntime {
 
           if (
             repeatedToolStallTargetPath
-            && shouldAutoContinueAfterStepLimit(originalRequest, repeatedToolStallTargetPath)
+            && shouldAutoContinueCurrentTask(originalRequest, repeatedToolStallTargetPath)
             && shouldConsumeAutoContinuationBudget(
                 autoRepeatedToolStallContinuationBudget,
                 repeatedToolStallTargetPath,
@@ -5659,13 +5659,19 @@ function resolveInterruptedResumeFollowUp(input: {
   followUp: RunnableFollowUp;
   previousAssistantProposal?: string;
 }) {
+  const interruptedTaskContext = extractRecentInterruptedTaskContext(
+    input.historyEvents,
+    input.previousAssistantProposal
+  );
+
   switch (input.followUp.kind) {
     case "resume":
       return buildInterruptedTaskResumeForFollowUp({
         content: input.content,
         historyEvents: input.historyEvents,
         acknowledgementMode: "discussion question",
-        requireInterruptedTask: false
+        requireInterruptedTask: false,
+        interruptedTaskContext
       });
 
     case "approve":
@@ -5675,7 +5681,7 @@ function resolveInterruptedResumeFollowUp(input: {
         acknowledgementMode: "generic acknowledgement",
         requireInterruptedTask: true,
         allowProposalResumeOnlyAfterExecution: true,
-        previousAssistantProposal: input.previousAssistantProposal
+        interruptedTaskContext
       });
 
     case "optimize":
@@ -5683,14 +5689,15 @@ function resolveInterruptedResumeFollowUp(input: {
         content: input.content,
         historyEvents: input.historyEvents,
         acknowledgementMode: "broad optimization follow-up",
-        requireInterruptedTask: true
+        requireInterruptedTask: true,
+        interruptedTaskContext
       });
 
     case "rewrite":
       {
-        const previousUserTask = extractPreviousActionableUserRequest(input.historyEvents);
         const isInterruptedDirectRewriteTask = Boolean(
-          previousUserTask && looksLikeExecutableProjectRewriteRequest(previousUserTask)
+          interruptedTaskContext?.previousUserTask
+          && looksLikeExecutableProjectRewriteRequest(interruptedTaskContext.previousUserTask)
         );
 
         return buildInterruptedTaskResumeForFollowUp({
@@ -5698,7 +5705,8 @@ function resolveInterruptedResumeFollowUp(input: {
           historyEvents: input.historyEvents,
           acknowledgementMode: "broad rewrite follow-up",
           requireInterruptedTask: true,
-          requireProposalExecution: !isInterruptedDirectRewriteTask
+          requireProposalExecution: !isInterruptedDirectRewriteTask,
+          interruptedTaskContext
         });
       }
 
@@ -5707,7 +5715,8 @@ function resolveInterruptedResumeFollowUp(input: {
         content: input.content,
         historyEvents: input.historyEvents,
         acknowledgementMode: "broad inspection follow-up",
-        requireInterruptedTask: true
+        requireInterruptedTask: true,
+        interruptedTaskContext
       });
 
     default:
@@ -5729,11 +5738,14 @@ function resolveDeniedApprovalResumeFollowUp(input: {
     return undefined;
   }
 
-  if (hasRecentInterruptedAssistantTask(input.historyEvents)) {
+  const interruptedTaskContext = extractRecentInterruptedTaskContext(input.historyEvents);
+
+  if (interruptedTaskContext?.interruptedTask) {
     return undefined;
   }
 
-  const previousUserTask = extractPreviousActionableUserRequest(input.historyEvents);
+  const previousUserTask = interruptedTaskContext?.previousUserTask
+    ?? extractPreviousActionableUserRequest(input.historyEvents);
 
   if (!previousUserTask) {
     return undefined;
@@ -5754,6 +5766,47 @@ function resolveDeniedApprovalResumeFollowUp(input: {
   ].join("\n");
 }
 
+type InterruptedTaskContext = {
+  previousUserTask: string;
+  interruptedTask: boolean;
+  previousAssistantProposal?: string;
+  interruptedProposalExecution: boolean;
+  interruptedApprovalAnchor?: {
+    toolName: string;
+    target: string;
+  };
+  originalTask: string;
+};
+
+function extractRecentInterruptedTaskContext(
+  historyEvents: Awaited<ReturnType<TranscriptStore["readEventsBySession"]>>,
+  previousAssistantProposal?: string
+): InterruptedTaskContext | undefined {
+  const previousUserTask = extractPreviousActionableUserRequest(historyEvents);
+
+  if (!previousUserTask) {
+    return undefined;
+  }
+
+  const interruptedTask = hasRecentInterruptedAssistantTask(historyEvents);
+  const resolvedAssistantProposal = previousAssistantProposal ?? extractPreviousAssistantProposal(historyEvents);
+  const interruptedProposalExecution = interruptedTask
+    && hasToolActivitySinceLatestAssistantProposal(historyEvents);
+
+  return {
+    previousUserTask,
+    interruptedTask,
+    previousAssistantProposal: resolvedAssistantProposal,
+    interruptedProposalExecution,
+    interruptedApprovalAnchor: interruptedTask
+      ? extractRecentInterruptedApprovalAnchor(historyEvents)
+      : undefined,
+    originalTask: interruptedProposalExecution && resolvedAssistantProposal
+      ? resolvedAssistantProposal
+      : previousUserTask
+  };
+}
+
 function buildInterruptedTaskResumeForFollowUp(input: {
   content: string;
   historyEvents: Awaited<ReturnType<TranscriptStore["readEventsBySession"]>>;
@@ -5766,40 +5819,38 @@ function buildInterruptedTaskResumeForFollowUp(input: {
   requireInterruptedTask: boolean;
   requireProposalExecution?: boolean;
   allowProposalResumeOnlyAfterExecution?: boolean;
-  previousAssistantProposal?: string;
+  interruptedTaskContext?: InterruptedTaskContext;
 }) {
-  const previousUserTask = extractPreviousActionableUserRequest(input.historyEvents);
+  const interruptedTaskContext = input.interruptedTaskContext
+    ?? extractRecentInterruptedTaskContext(input.historyEvents);
 
-  if (!previousUserTask) {
+  if (!interruptedTaskContext) {
     return undefined;
   }
 
-  if (input.requireInterruptedTask && !hasRecentInterruptedAssistantTask(input.historyEvents)) {
+  if (input.requireInterruptedTask && !interruptedTaskContext.interruptedTask) {
     return undefined;
   }
 
-  if (input.requireProposalExecution && !hasRecentInterruptedProposalExecution(input.historyEvents)) {
+  if (input.requireProposalExecution && !interruptedTaskContext.interruptedProposalExecution) {
     return undefined;
   }
 
   if (input.allowProposalResumeOnlyAfterExecution) {
-    const previousAssistantProposal = input.previousAssistantProposal ?? extractPreviousAssistantProposal(input.historyEvents);
-
-    if (previousAssistantProposal && !hasRecentInterruptedProposalExecution(input.historyEvents)) {
+    if (
+      interruptedTaskContext.previousAssistantProposal
+      && !interruptedTaskContext.interruptedProposalExecution
+    ) {
       return undefined;
     }
   }
 
-  const previousAssistantProposal = input.previousAssistantProposal ?? extractPreviousAssistantProposal(input.historyEvents);
-  const originalTask = hasRecentInterruptedProposalExecution(input.historyEvents) && previousAssistantProposal
-    ? previousAssistantProposal
-    : previousUserTask;
-
   return buildInterruptedTaskResumeRequest({
     content: input.content,
-    originalTask,
+    originalTask: interruptedTaskContext.originalTask,
     historyEvents: input.historyEvents,
-    acknowledgementMode: input.acknowledgementMode
+    acknowledgementMode: input.acknowledgementMode,
+    interruptedApprovalAnchor: interruptedTaskContext.interruptedApprovalAnchor
   });
 }
 
@@ -5807,6 +5858,10 @@ function buildInterruptedTaskResumeRequest(input: {
   content: string;
   originalTask: string;
   historyEvents: Awaited<ReturnType<TranscriptStore["readEventsBySession"]>>;
+  interruptedApprovalAnchor?: {
+    toolName: string;
+    target: string;
+  };
   acknowledgementMode:
     | "discussion question"
     | "generic acknowledgement"
@@ -5817,9 +5872,6 @@ function buildInterruptedTaskResumeRequest(input: {
   const recentEditableWorkingFile = extractRecentEditableWorkingFile(input.historyEvents);
   const recentPendingNextTarget = extractRecentPendingNextTarget(input.historyEvents);
   const recentToolAnchor = extractRecentToolAnchor(input.historyEvents);
-  const interruptedApprovalAnchor = hasRecentInterruptedAssistantTask(input.historyEvents)
-    ? extractRecentInterruptedApprovalAnchor(input.historyEvents)
-    : undefined;
 
   return [
     `The user replied "${input.content.trim()}" and wants to continue the most recent unfinished task.`,
@@ -5831,10 +5883,10 @@ function buildInterruptedTaskResumeRequest(input: {
     recentPendingNextTarget ? `Pending next step target: ${recentPendingNextTarget}` : "",
     recentToolAnchor ? `Latest tool in context: ${recentToolAnchor.toolName}` : "",
     recentToolAnchor ? `Latest tool summary in context: ${recentToolAnchor.summary}` : "",
-    interruptedApprovalAnchor
-      ? `Interrupted pending approval: ${interruptedApprovalAnchor.toolName} · ${interruptedApprovalAnchor.target}`
+    input.interruptedApprovalAnchor
+      ? `Interrupted pending approval: ${input.interruptedApprovalAnchor.toolName} · ${input.interruptedApprovalAnchor.target}`
       : "",
-    interruptedApprovalAnchor
+    input.interruptedApprovalAnchor
       ? "The previous run stopped while waiting for that approval. Retry that concrete action first instead of restarting broader inspection."
       : "",
     `Original task: ${input.originalTask}`
@@ -5855,13 +5907,6 @@ function hasRecentInterruptedAssistantTask(
   }
 
   return false;
-}
-
-function hasRecentInterruptedProposalExecution(
-  historyEvents: Awaited<ReturnType<TranscriptStore["readEventsBySession"]>>
-) {
-  return hasRecentInterruptedAssistantTask(historyEvents)
-    && hasToolActivitySinceLatestAssistantProposal(historyEvents);
 }
 
 function hasToolActivitySinceLatestAssistantProposal(
@@ -8078,7 +8123,7 @@ function buildRepeatedStallAutoContinuationPrompt(input: {
   ].filter(Boolean).join("\n");
 }
 
-function shouldAutoContinueAfterStepLimit(
+function shouldAutoContinueCurrentTask(
   originalRequest: string,
   targetPath: string
 ) {
@@ -8115,7 +8160,7 @@ function shouldAutoContinueAfterToolRecovery(
     return false;
   }
 
-  return shouldAutoContinueAfterStepLimit(originalRequest, pendingTargetPath);
+  return shouldAutoContinueCurrentTask(originalRequest, pendingTargetPath);
 }
 
 function shouldAutoContinueAfterRepeatedStall(
@@ -8138,7 +8183,7 @@ function shouldAutoContinueAfterRepeatedStall(
     return false;
   }
 
-  return shouldAutoContinueAfterStepLimit(originalRequest, pendingTargetPath);
+  return shouldAutoContinueCurrentTask(originalRequest, pendingTargetPath);
 }
 
 function looksLikePathScopedCompletionForMultiTargetRequest(

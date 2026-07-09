@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { existsSync } from "node:fs";
 import { mkdtemp, mkdir, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
@@ -4291,6 +4292,7 @@ async function main() {
   await verifyAutomaticContinuationAcrossToolStepLimitAndRepeatedStallSlices();
   await verifyAutomaticContinuationAfterToolStepLimitBeforeWrappedShell();
   await verifyAutomaticContinuationAfterToolStepLimitBeforeCommandOnlyShell();
+  await verifyExplicitNewTaskDoesNotResumeStepLimitCommandOnlyShell();
   await verifyAutomaticContinuationAfterToolStepLimitDuringWholeProjectInspection();
   await verifyTerseProjectMentionStartsDirectInspectionWithoutWorkspaceListing();
   await verifyExplicitProjectMentionWinsOverRicherWorkspaceDecoy();
@@ -4306,7 +4308,9 @@ async function main() {
   await verifyTerseDirectNestedProjectMentionWinsOverRicherWorkspaceDecoyDuringProjectRewrite();
   await verifyAutomaticContinuationAfterAssistantPassLimitFailure();
   await verifyAutomaticContinuationAfterAssistantPassLimitBeforeCommandOnlyShell();
+  await verifyExplicitNewTaskDoesNotResumeAssistantPassCommandOnlyShell();
   await verifyAutomaticContinuationAcrossAssistantPassAndToolRecoveryBeforeCommandOnlyShell();
+  await verifyExplicitNewTaskDoesNotResumeCommandOnlyToolRecovery();
   await verifyAutomaticContinuationAfterToolRecoveryBeforeCommandOnlyShell();
   await verifyAutomaticContinuationAfterRepeatedStallBeforeCommandOnlyShell();
   await verifyAutomaticContinuationAcrossMultipleAssistantPassSlices();
@@ -4365,7 +4369,14 @@ async function main() {
   await verifyHelpCommandAvailableWhileBusy();
   await verifyResumeFollowUpAfterStop();
   await verifyBareContinueResumesInterruptedTask();
+  await verifyRepeatedColloquialContinueResumesInterruptedTask();
   await verifyBareAffirmativeResumesInterruptedTask();
+  await verifyExplicitNewTaskDoesNotResumeInterruptedTask();
+  await verifyExplicitNewTaskDoesNotResumeInterruptedApprovedProposalExecution();
+  await verifyExplicitNewTaskDoesNotResumeInterruptedApprovalWaitTask();
+  await verifyExplicitNewTaskDoesNotResumeInterruptedVerifierShift();
+  await verifyExplicitNewTaskDoesNotResumeInterruptedVerifierApproval();
+  await verifyExplicitNewTaskDoesNotResumeInterruptedApprovedProposalVerifierApproval();
   await verifyBareAffirmativeResumesInterruptedProposalExecution();
   await verifyVagueRewriteResumesInterruptedProposalExecution("你能帮我重新写个项目吗");
   await verifyVagueRewriteResumesInterruptedProposalExecution("帮我重写项目");
@@ -4500,6 +4511,11 @@ async function main() {
   await verifyResumeFollowUpDoesNotLeakStaleInterruptedApproval();
   await verifyApproveFollowUpDoesNotLeakOldProposalIntoInterruptedTask();
   await verifyApproveFollowUpDoesNotLeakOldProposalIntoNewInspectProposal();
+  await verifyApproveFollowUpDoesNotLeakOldProposalIntoInterruptedApprovedProposalVerifierApproval();
+  await verifyApproveFollowUpDoesNotLeakOldDeniedApprovalIntoInterruptedApprovedProposalVerifierApproval();
+  await verifyApproveFollowUpDoesNotLeakMixedOldHistoryIntoInterruptedApprovedProposalVerifierApproval();
+  await verifyBroadOptimizationFollowUpDoesNotLeakMixedOldHistoryIntoInterruptedApprovedProposalVerifierApproval();
+  await verifyBroadInspectionFollowUpDoesNotLeakMixedOldHistoryIntoInterruptedApprovedProposalVerifierApproval();
   await verifyApproveFollowUpDoesNotLeakOldInterruptedApprovalIntoNewInspectProposal();
   await verifyApproveFollowUpDoesNotLeakOldDeniedApprovalIntoNewInspectProposal();
   await verifyResumeFollowUpAfterApprovalWaitInProjectChain();
@@ -4525,74 +4541,121 @@ async function main() {
   await verifyImplicitRemainingChainDoesNotEndAtHelperCompletion();
   await verifyNearMissShellCompletionToneStillRepairsRemainingHelper();
   await verifyProjectCommandStageSummaryResume();
+  await verifyExplicitNewTaskDoesNotResumeInterruptedCommandStageTask();
   await verifyTerminalLoopContinuesBroadProjectImprovementAfterProjectEntryExplanation();
   await verifyTerminalLoopStopAndResumeBroadProjectImprovementAfterProjectEntryExplanation();
+  await verifyTerminalLoopStopAndResumeBroadProjectImprovementAfterProjectEntryExplanationBroadOptimizationFollowUp();
   await verifyTerminalLoopContinuesBroadProjectImprovementAfterFirstWorkfileExplanation();
   await verifyTerminalLoopStopAndResumeBroadProjectImprovementAfterFirstWorkfileExplanation();
+  await verifyTerminalLoopStopAndResumeBroadProjectImprovementAfterFirstWorkfileExplanationBroadOptimizationFollowUp();
   await verifyTerminalLoopContinuesProjectDrivenMultiTargetOptimization();
   await verifyTerminalLoopStopAndResumeProjectDrivenMultiTargetStageSummary();
+  await verifyTerminalLoopStopAndResumeProjectDrivenMultiTargetStageSummaryBroadOptimizationFollowUp();
   await verifyTerminalLoopProjectDrivenMultiTargetStageSummaryBroadOptimizationFollowUp();
   await verifyTerminalLoopProjectDrivenMultiTargetStageSummaryBroadInspectionFollowUp();
   await verifyTerminalLoopSubmitsAndContinuesMultiStepTask();
   await verifyTerminalLoopApprovedProposalExecutesMultiStepTask();
   await verifyTerminalLoopStopAndResumeApprovedProposalExecution();
+  await verifyTerminalLoopStopAndResumeApprovedProposalExecutionBroadOptimizationFollowUp();
+  await verifyTerminalLoopExplicitNewTaskDoesNotResumeApprovedProposalExecution();
   await verifyTerminalLoopStopAndResumeApprovedProposalApprovalWait();
+  await verifyTerminalLoopStopAndResumeApprovedProposalApprovalWaitBroadOptimizationFollowUp();
+  await verifyTerminalLoopExplicitNewTaskDoesNotResumeApprovedProposalApprovalWait();
   await verifyTerminalLoopStopAndResumeApprovedProposalVerifierShift();
+  await verifyTerminalLoopStopAndResumeApprovedProposalVerifierShiftBroadOptimizationFollowUp();
+  await verifyTerminalLoopExplicitNewTaskDoesNotResumeApprovedProposalVerifierShift();
+  await verifyTerminalLoopExplicitNewTaskDoesNotResumeApprovedProposalVerifierApproval();
+  await verifyTerminalLoopApprovedProposalVerifierShiftApprovalWaitResumeFollowUp();
+  await verifyTerminalLoopApprovedProposalVerifierShiftApprovalWaitBareAffirmativeFollowUp();
+  await verifyTerminalLoopApprovedProposalVerifierShiftApprovalWaitBroadOptimizationFollowUp();
+  await verifyTerminalLoopApprovedProposalVerifierShiftApprovalWaitBroadInspectionFollowUp();
   await verifyTerminalLoopVerifierShiftBroadOptimizationFollowUp();
   await verifyTerminalLoopVerifierShiftBroadInspectionFollowUp();
+  await verifyTerminalLoopExplicitNewTaskDoesNotResumeVerifierShift();
   await verifyTerminalLoopVerifierShiftApprovalWaitBroadOptimizationFollowUp();
   await verifyTerminalLoopVerifierShiftApprovalWaitBroadInspectionFollowUp();
+  await verifyTerminalLoopExplicitNewTaskDoesNotResumeVerifierApproval();
   await verifyTerminalLoopApprovedProposalContinuesThroughVerificationRepair();
   verifyRendererCommitsLiveAssistantTextWhenBusyEndsBeforeAssistantCompleted();
   verifyWorkspaceRootResolutionPrefersPositionalArgument();
   await verifyTerminalLoopAutoContinuesAfterToolStepLimit();
   await verifyTerminalLoopStopAndResumeStepLimitPendingFile();
+  await verifyTerminalLoopStopAndResumeStepLimitPendingFileAffirmativeContinueFollowUp();
+  await verifyTerminalLoopStopAndResumeStepLimitPendingFileBroadInspectionFollowUp();
   await verifyTerminalLoopAutoContinuesAcrossAdvancingToolStepSlices();
   await verifyTerminalLoopAutoContinuesAcrossVeryLongAdvancingToolStepSlices();
   await verifyTerminalLoopStopAndResumeAcrossVeryLongAdvancingToolStepSlices();
+  await verifyTerminalLoopStopAndResumeAcrossVeryLongAdvancingToolStepSlicesBroadOptimizationFollowUp();
   await verifyTerminalLoopStopAndResumeAcrossAdvancingToolStepSlices();
+  await verifyTerminalLoopStopAndResumeAcrossAdvancingToolStepSlicesBroadOptimizationFollowUp();
   await verifyTerminalLoopAutoContinuesAfterToolStepLimitBeforeCommandOnlyShell();
   await verifyTerminalLoopStopAndResumeStepLimitCommandOnlyShell();
+  await verifyTerminalLoopStopAndResumeStepLimitCommandOnlyShellBroadOptimizationFollowUp();
+  await verifyTerminalLoopExplicitNewTaskDoesNotResumeStepLimitCommandOnlyShell();
   await verifyTerminalLoopAutoContinuesAfterAssistantPassLimit();
   await verifyTerminalLoopStopAndResumeAssistantPassPendingFile();
+  await verifyTerminalLoopStopAndResumeAssistantPassPendingFileBroadOptimizationFollowUp();
   await verifyTerminalLoopStopAndResumeAssistantPassCommandOnlyShell();
+  await verifyTerminalLoopStopAndResumeAssistantPassCommandOnlyShellBroadOptimizationFollowUp();
+  await verifyTerminalLoopExplicitNewTaskDoesNotResumeAssistantPassCommandOnlyShell();
   await verifyTerminalLoopAutoContinuesAcrossMultipleAssistantPassSlices();
   await verifyTerminalLoopStopAndResumeAcrossMultipleAssistantPassSlices();
+  await verifyTerminalLoopStopAndResumeAcrossMultipleAssistantPassSlicesBroadOptimizationFollowUp();
   await verifyTerminalLoopAutoContinuesAfterAssistantPassLimitBeforeCommandOnlyShell();
   await verifyTerminalLoopAutoContinuesAcrossToolRecoveryPendingFile();
   await verifyTerminalLoopStopAndResumeToolRecoveryPendingFile();
+  await verifyTerminalLoopStopAndResumeToolRecoveryPendingFileBroadOptimizationFollowUp();
   await verifyTerminalLoopAutoContinuesAcrossMultipleToolRecoverySlices();
   await verifyTerminalLoopStopAndResumeAcrossMultipleToolRecoverySlices();
+  await verifyTerminalLoopStopAndResumeAcrossMultipleToolRecoverySlicesBroadOptimizationFollowUp();
   await verifyTerminalLoopAutoContinuesAcrossToolRecoveryAndRepeatedStallPendingFile();
   await verifyTerminalLoopStopAndResumeToolRecoveryAndRepeatedStallPendingFile();
+  await verifyTerminalLoopStopAndResumeToolRecoveryAndRepeatedStallPendingFileBroadOptimizationFollowUp();
   await verifyTerminalLoopAutoContinuesAcrossMultipleRepeatedStallSlicesPendingFile();
   await verifyTerminalLoopStopAndResumeAcrossMultipleRepeatedStallSlicesPendingFile();
+  await verifyTerminalLoopStopAndResumeAcrossMultipleRepeatedStallSlicesPendingFileBroadOptimizationFollowUp();
   await verifyTerminalLoopAutoContinuesAcrossAssistantPassAndToolRecoveryPendingFile();
   await verifyTerminalLoopStopAndResumeAssistantPassToolRecoveryPendingFile();
+  await verifyTerminalLoopStopAndResumeAssistantPassToolRecoveryPendingFileBroadOptimizationFollowUp();
   await verifyTerminalLoopAutoContinuesAcrossAssistantPassAndMultipleToolRecoverySlicesPendingFile();
   await verifyTerminalLoopStopAndResumeAssistantPassMultipleToolRecoveryPendingFile();
+  await verifyTerminalLoopStopAndResumeAssistantPassMultipleToolRecoveryPendingFileBroadOptimizationFollowUp();
   await verifyTerminalLoopAutoContinuesAcrossAssistantPassAndToolRecoveryBeforeCommandOnlyShell();
   await verifyTerminalLoopStopAndResumeAssistantPassToolRecoveryCommandOnlyShell();
+  await verifyTerminalLoopStopAndResumeAssistantPassToolRecoveryCommandOnlyShellBroadOptimizationFollowUp();
+  await verifyTerminalLoopExplicitNewTaskDoesNotResumeAssistantPassToolRecoveryCommandOnlyShell();
   await verifyTerminalLoopAutoContinuesAcrossAssistantPassAndMultipleToolRecoverySlicesBeforeCommandOnlyShell();
   await verifyTerminalLoopStopAndResumeAssistantPassMultipleToolRecoveryCommandOnlyShell();
+  await verifyTerminalLoopStopAndResumeAssistantPassMultipleToolRecoveryCommandOnlyShellBroadOptimizationFollowUp();
   await verifyTerminalLoopAutoContinuesAcrossAssistantPassToolRecoveryAndRepeatedStallBeforeCommandOnlyShell();
   await verifyTerminalLoopStopAndResumeAssistantPassToolRecoveryRepeatedStallCommandOnlyShell();
+  await verifyTerminalLoopStopAndResumeAssistantPassToolRecoveryRepeatedStallCommandOnlyShellBroadOptimizationFollowUp();
   await verifyTerminalLoopAutoContinuesAcrossAssistantPassToolRecoveryAndMultipleRepeatedStallSlicesBeforeCommandOnlyShell();
   await verifyTerminalLoopStopAndResumeAssistantPassToolRecoveryMultipleRepeatedStallCommandOnlyShell();
+  await verifyTerminalLoopStopAndResumeAssistantPassToolRecoveryMultipleRepeatedStallCommandOnlyShellBroadOptimizationFollowUp();
   await verifyTerminalLoopAutoContinuesAfterRepeatedStallBeforeCommandOnlyShell();
   await verifyTerminalLoopStopAndResumeRepeatedStallCommandOnlyShell();
+  await verifyTerminalLoopStopAndResumeRepeatedStallCommandOnlyShellBroadOptimizationFollowUp();
   await verifyTerminalLoopAutoContinuesAcrossMultipleRepeatedStallSlicesBeforeCommandOnlyShell();
   await verifyTerminalLoopStopAndResumeRepeatedStallAcrossMultipleSlicesBeforeCommandOnlyShell();
   await verifyTerminalLoopContinuesAfterExplanationOnlyReply();
   await verifyTerminalLoopStopAndResumeExplanationOnlyReply();
+  await verifyTerminalLoopStopAndResumeExplanationOnlyReplyBroadOptimizationFollowUp();
   await verifyTerminalLoopRecoversAfterRepeatedAssistantStall();
   await verifyTerminalLoopStopAndResumeRepeatedAssistantStall();
+  await verifyTerminalLoopStopAndResumeRepeatedAssistantStallBroadOptimizationFollowUp();
   await verifyTerminalLoopRecoversAfterRepeatedAssistantStallAcrossMultipleSlices();
   await verifyTerminalLoopStopAndResumeRepeatedAssistantStallAcrossMultipleSlices();
+  await verifyTerminalLoopStopAndResumeRepeatedStallAcrossMultipleSlicesBeforeCommandOnlyShellBroadOptimizationFollowUp();
+  await verifyTerminalLoopStopAndResumeRepeatedAssistantStallAcrossMultipleSlicesBroadOptimizationFollowUp();
   await verifyTerminalLoopStopAndResumeCommandStageTask();
+  await verifyTerminalLoopStopAndResumeCommandStageTaskBroadOptimizationFollowUp();
   await verifyTerminalLoopCommandStageBroadOptimizationFollowUp();
   await verifyTerminalLoopCommandStageBroadInspectionFollowUp();
+  await verifyTerminalLoopExplicitNewTaskDoesNotResumeCommandStageTask();
   await verifyTerminalLoopStopAndResumeApprovalWaitTask();
+  await verifyTerminalLoopStopAndResumeApprovalWaitTaskBroadOptimizationFollowUp();
+  await verifyTerminalLoopExplicitNewTaskDoesNotResumeApprovalWaitTask();
   await verifyTerminalLoopStageSummaryApprovalWaitResumeTask();
   await verifyTerminalLoopNaturalLanguageApprovalShortcut();
   await verifyTerminalLoopNaturalLanguageDenyShortcut();
@@ -4610,14 +4673,28 @@ async function main() {
   verifyContextCompactionPreservesPendingNextStep();
   verifyContextCompactionPreservesHiddenPendingNextStepCheckpoint();
   verifyContextCompactionDropsOlderPendingNextStepAfterNewRequest();
+  verifyContextCompactionDropsInterruptedUnderlyingTaskAfterExplicitNewRequest();
+  verifyContextCompactionDropsInterruptedPendingApprovalAfterExplicitNewRequest();
+  verifyContextCompactionDropsVerifierShiftAfterExplicitNewRequest();
+  verifyContextCompactionDropsVerifierApprovalAfterExplicitNewRequest();
+  verifyContextCompactionDropsApprovedProposalExecutionAfterExplicitNewRequest();
+  verifyContextCompactionDropsApprovedProposalApprovalWaitAfterExplicitNewRequest();
+  verifyContextCompactionDropsApprovedProposalVerifierShiftAfterExplicitNewRequest();
+  verifyContextCompactionDropsApprovedProposalVerifierApprovalAfterExplicitNewRequest();
   verifyContextCompactionCarriesUnderlyingTaskThroughResumeFollowUp();
+  verifyContextCompactionCarriesRepeatedColloquialContinueThroughResumeFollowUp();
   verifyContextCompactionCarriesPendingApprovalThroughResumeFollowUp();
   verifyContextCompactionCarriesPendingNextStepThroughResumeFollowUp();
   verifyContextCompactionCarriesVerifierApprovalThroughBroadFollowUp();
   verifyContextCompactionCarriesApprovedProposalThroughAffirmativeFollowUp();
   verifyContextCompactionCarriesApprovedProposalVerifierShiftThroughResumeFollowUp();
+  verifyContextCompactionCarriesApprovedProposalVerifierApprovalThroughResumeFollowUp();
+  verifyContextCompactionCarriesApprovedProposalVerifierApprovalThroughAffirmativeResume();
+  verifyContextCompactionCarriesApprovedProposalVerifierApprovalThroughBroadFollowUp();
+  verifyContextCompactionCarriesApprovedProposalVerifierApprovalThroughInspectionFollowUp();
   verifyContextCompactionCarriesHiddenPendingNextStepCheckpointThroughResumeFollowUp();
   verifyContextCompactionPreservesHiddenCommandPendingNextStepCheckpoint();
+  verifyContextCompactionDropsCommandPendingNextStepAfterExplicitNewRequest();
   verifyContextCompactionCarriesHiddenCommandPendingNextStepCheckpointThroughResumeFollowUp();
   verifyContextCompactionPreservesNestedProjectPendingNextStep();
   verifyContextCompactionCarriesNestedProjectResumeAnchorThroughFollowUp();
@@ -10782,6 +10859,210 @@ async function verifyAutomaticContinuationAfterToolStepLimitBeforeCommandOnlyShe
   );
 }
 
+async function verifyExplicitNewTaskDoesNotResumeStepLimitCommandOnlyShell() {
+  const root = await mkdtemp(join(tmpdir(), "selfme-agent-explicit-new-task-step-limit-command-only-shell-"));
+  const workspace = join(root, "workspace");
+  const transcriptPath = join(root, "transcript.jsonl");
+  const logsPath = join(root, "logs.jsonl");
+  const originalPrompt = "Read beta-1.txt, beta-2.txt, beta-3.txt, beta-4.txt, beta-5.txt, beta-6.txt, beta-7.txt, and package.json, then run `npm test` before finishing.";
+  await mkdir(workspace, { recursive: true });
+
+  for (let index = 1; index <= 7; index += 1) {
+    await writeFile(join(workspace, `beta-${index}.txt`), `beta-${index}\n`, "utf8");
+  }
+
+  await writeFile(
+    join(workspace, "package.json"),
+    '{\n  "name": "step-limit-command-shell-new-task",\n  "version": "1.0.0",\n  "scripts": {\n    "test": "node verify-commandless-step-limit-new-task.mjs"\n  }\n}\n',
+    "utf8"
+  );
+  await writeFile(join(workspace, "verify-commandless-step-limit-new-task.mjs"), 'console.log("ready");\n', "utf8");
+
+  class ExplicitNewTaskAfterStepLimitCommandOnlyShellProvider implements ProviderClient {
+    readonly name = "explicit-new-task-after-step-limit-command-only-shell-provider";
+
+    async *streamResponse(input: ProviderStreamInput): AsyncIterable<ProviderStreamChunk> {
+      if (input.content === originalPrompt) {
+        yield {
+          delta: toolCall("files", {
+            path: "beta-1.txt",
+            startLine: 1,
+            endLine: 20
+          })
+        };
+        return;
+      }
+
+      if (input.content === "Create new.txt with the content new-task.") {
+        yield {
+          delta: toolCall("write", {
+            path: "new.txt",
+            content: "new-task\n"
+          })
+        };
+        return;
+      }
+
+      if (input.content.startsWith("The user replied ") && input.content.includes("wants to continue the most recent unfinished task.")) {
+        assert.fail("explicit new task should not be rewritten into a step-limit command-only resume follow-up");
+      }
+
+      if (input.content.startsWith("Original user request: Create new.txt with the content new-task.")) {
+        yield { delta: "Created new.txt instead of resuming the interrupted step-limit command-only chain." };
+        return;
+      }
+
+      if (input.content.startsWith(`Original user request: ${originalPrompt}`)) {
+        const toolName = extractLine(input.content, "Tool:") ?? extractLine(input.content, "Latest tool:");
+        const summary = extractLine(input.content, "Summary:") ?? extractLine(input.content, "Latest summary:") ?? "";
+
+        for (let index = 1; index <= 6; index += 1) {
+          if (toolName === "files" && new RegExp(`beta-${index}\\.txt`).test(summary)) {
+            yield {
+              delta: toolCall("files", {
+                path: `beta-${index + 1}.txt`,
+                startLine: 1,
+                endLine: 20
+              })
+            };
+            return;
+          }
+        }
+
+        if (toolName === "files" && /beta-7\.txt/.test(summary)) {
+          yield {
+            delta: toolCall("files", {
+              path: "package.json",
+              startLine: 1,
+              endLine: 20
+            })
+          };
+          return;
+        }
+
+        if (toolName === "shell" && /npm test/.test(summary)) {
+          yield { delta: "npm test completed and printed ready." };
+          return;
+        }
+      }
+
+      if (
+        !input.content.startsWith("Original user request:")
+        && input.content.includes("The current task hit the per-slice tool budget but still has unfinished work.")
+      ) {
+        assert.match(input.content, /Pending next step target: npm test/);
+        assert.match(input.content, /Latest tool in context: files/);
+        assert.match(input.content, /Latest tool summary in context: package\.json:1-6/);
+        yield { delta: "I already have package.json and will run npm test next." };
+        await waitForProviderDelay(input.signal, 10_000);
+        yield {
+          delta: toolCall("shell", {
+            command: "npm test"
+          })
+        };
+        return;
+      }
+
+      if (
+        input.content.startsWith("Original user request: The current task hit the per-slice tool budget but still has unfinished work.")
+      ) {
+        const toolName = extractLine(input.content, "Tool:") ?? extractLine(input.content, "Latest tool:");
+
+        if (toolName === "shell") {
+          yield { delta: "npm test completed and printed ready." };
+          return;
+        }
+      }
+
+      yield { delta: "ok" };
+    }
+  }
+
+  const bus = new EventBus();
+  const transcriptStore = new TranscriptStore(transcriptPath);
+  const logStore = new LogStore(logsPath);
+  await transcriptStore.ensureInitialized();
+  await logStore.ensureInitialized();
+
+  const session = createDefaultSessionRecord(workspace, VERSION);
+  session.model = "regression-stub";
+
+  const runtime = new AgentRuntime({
+    bus,
+    provider: new ExplicitNewTaskAfterStepLimitCommandOnlyShellProvider(),
+    tools: new InMemoryToolRegistry(),
+    session,
+    transcriptStore,
+    logStore
+  });
+  await runtime.start();
+
+  const initialCompletion = waitForAssistantTaskCompletion(bus, session.sessionId);
+  const continuationSummary = waitForAssistantDeltaContaining(
+    bus,
+    session.sessionId,
+    /I already have package\.json and will run npm test next\./
+  );
+  bus.emit(createUserMessageSubmittedEvent({
+    sessionId: session.sessionId,
+    content: originalPrompt
+  }));
+
+  await continuationSummary;
+  bus.emit(createRuntimeInterruptRequestedEvent({
+    sessionId: session.sessionId,
+    reason: "cancel"
+  }));
+
+  const cancelledTask = await initialCompletion;
+  assert.equal(cancelledTask.payload.state, "cancelled");
+
+  const interruptedEvents = await transcriptStore.readEventsBySession(session.sessionId);
+  assert.equal(
+    interruptedEvents.filter((event) =>
+      event.type === "tool.execution.completed"
+      && event.payload.summary.startsWith("package.json:1-6")
+    ).length,
+    1,
+    "interrupted step-limit command-only task should preserve the package read before the explicit new task"
+  );
+  assert.ok(
+    interruptedEvents.some((event) =>
+      event.type === "assistant.delta.received"
+      && /I already have package\.json and will run npm test next\./.test(event.payload.delta)
+    ),
+    "interrupted step-limit command-only task should preserve the narrowed npm test handoff before the explicit new task"
+  );
+  assert.equal(
+    interruptedEvents.some((event) =>
+      event.type === "tool.execution.completed"
+      && event.payload.summary.startsWith("npm test · completed")
+    ),
+    false,
+    "interrupted step-limit command-only task should stop before rerunning npm test"
+  );
+
+  const newTaskResult = await runAgentTask({
+    bus,
+    transcriptStore,
+    sessionId: session.sessionId,
+    prompt: "Create new.txt with the content new-task."
+  });
+
+  const newContent = await readFile(join(workspace, "new.txt"), "utf8");
+  assert.equal(newContent, "new-task\n");
+  assert.match(newTaskResult.assistantText, /Created new\.txt|new task|已处理 `new\.txt`|已完成/u);
+  assert.ok(
+    newTaskResult.toolSummaries.some((summary) => summary.startsWith("new.txt · created")),
+    "explicit new task should create new.txt instead of resuming the interrupted step-limit command-only chain"
+  );
+  assert.equal(
+    newTaskResult.toolSummaries.some((summary) => summary.startsWith("npm test · completed")),
+    false,
+    "explicit new task should not continue the interrupted step-limit command-only verification command"
+  );
+}
+
 async function verifyAutomaticContinuationAfterToolStepLimitDuringWholeProjectInspection() {
   const root = await mkdtemp(join(tmpdir(), "selfme-agent-whole-project-step-limit-auto-"));
   const workspace = join(root, "workspace");
@@ -12666,6 +12947,212 @@ async function verifyAutomaticContinuationAfterAssistantPassLimitBeforeCommandOn
   );
 }
 
+async function verifyExplicitNewTaskDoesNotResumeAssistantPassCommandOnlyShell() {
+  const root = await mkdtemp(join(tmpdir(), "selfme-agent-explicit-new-task-assistant-pass-command-only-shell-"));
+  const workspace = join(root, "workspace");
+  const transcriptPath = join(root, "transcript.jsonl");
+  const logsPath = join(root, "logs.jsonl");
+  const originalPrompt = "Read beta-a.txt, beta-b.txt, and package.json, then run `npm test` before finishing.";
+  await mkdir(workspace, { recursive: true });
+  await writeFile(join(workspace, "beta-a.txt"), "beta-a\n", "utf8");
+  await writeFile(join(workspace, "beta-b.txt"), "beta-b\n", "utf8");
+  await writeFile(
+    join(workspace, "package.json"),
+    '{\n  "name": "assistant-pass-command-shell-new-task",\n  "version": "1.0.0",\n  "scripts": {\n    "test": "node verify-assistant-pass-command-only-new-task.mjs"\n  }\n}\n',
+    "utf8"
+  );
+  await writeFile(join(workspace, "verify-assistant-pass-command-only-new-task.mjs"), 'console.log("ready");\n', "utf8");
+
+  class ExplicitNewTaskAfterAssistantPassCommandOnlyShellProvider implements ProviderClient {
+    readonly name = "explicit-new-task-after-assistant-pass-command-only-shell-provider";
+    private loopReplyCount = 0;
+
+    async *streamResponse(input: ProviderStreamInput): AsyncIterable<ProviderStreamChunk> {
+      if (input.content === originalPrompt) {
+        yield {
+          delta: toolCall("files", {
+            path: "beta-a.txt",
+            startLine: 1,
+            endLine: 20
+          })
+        };
+        return;
+      }
+
+      if (input.content === "Create new.txt with the content new-task.") {
+        yield {
+          delta: toolCall("write", {
+            path: "new.txt",
+            content: "new-task\n"
+          })
+        };
+        return;
+      }
+
+      if (input.content.startsWith("The user replied ") && input.content.includes("wants to continue the most recent unfinished task.")) {
+        assert.fail("explicit new task should not be rewritten into an assistant-pass command-only resume follow-up");
+      }
+
+      if (input.content.startsWith("Original user request: Create new.txt with the content new-task.")) {
+        yield { delta: "Created new.txt instead of resuming the interrupted assistant-pass command-only chain." };
+        return;
+      }
+
+      if (input.content.startsWith(`Original user request: ${originalPrompt}`)) {
+        const toolName = extractLine(input.content, "Tool:") ?? extractLine(input.content, "Latest tool:");
+        const summary = extractLine(input.content, "Summary:") ?? extractLine(input.content, "Latest summary:") ?? "";
+
+        if (toolName === "files" && /beta-a\.txt/.test(summary)) {
+          yield {
+            delta: toolCall("files", {
+              path: "beta-b.txt",
+              startLine: 1,
+              endLine: 20
+            })
+          };
+          return;
+        }
+
+        if (toolName === "files" && /beta-b\.txt/.test(summary)) {
+          yield {
+            delta: toolCall("files", {
+              path: "package.json",
+              startLine: 1,
+              endLine: 20
+            })
+          };
+          return;
+        }
+
+        if (toolName === "files" && /package\.json/.test(summary)) {
+          this.loopReplyCount += 1;
+          yield {
+            delta: `Assistant-pass command-only loop marker ${this.loopReplyCount} stays focused on the pending npm test step, the package.json read is already complete, this intentionally verbose sentence avoids short progress classification, and there is still a concrete verification command left to run before the task can finish.`
+          };
+          return;
+        }
+
+        if (toolName === "shell" && /npm test/.test(summary)) {
+          yield { delta: "npm test completed and printed ready." };
+          return;
+        }
+      }
+
+      if (
+        !input.content.startsWith("Original user request:")
+        && input.content.includes("The current task used up its assistant pass budget but still has unfinished work.")
+      ) {
+        assert.match(input.content, /Pending next step target: npm test/);
+        assert.match(input.content, /Latest tool in context: files/);
+        assert.match(input.content, /Latest tool summary in context: package\.json:1-6/);
+        yield {
+          delta: toolCall("shell", {
+            command: "npm test"
+          })
+        };
+        return;
+      }
+
+      if (
+        input.content.startsWith("Original user request: The current task used up its assistant pass budget but still has unfinished work.")
+      ) {
+        const toolName = extractLine(input.content, "Tool:") ?? extractLine(input.content, "Latest tool:");
+
+        if (toolName === "shell") {
+          yield { delta: "npm test completed and printed ready." };
+          return;
+        }
+      }
+
+      yield { delta: "ok" };
+    }
+  }
+
+  const bus = new EventBus();
+  const transcriptStore = new TranscriptStore(transcriptPath);
+  const logStore = new LogStore(logsPath);
+  await transcriptStore.ensureInitialized();
+  await logStore.ensureInitialized();
+
+  const session = createDefaultSessionRecord(workspace, VERSION);
+  session.model = "regression-stub";
+
+  const runtime = new AgentRuntime({
+    bus,
+    provider: new ExplicitNewTaskAfterAssistantPassCommandOnlyShellProvider(),
+    tools: new InMemoryToolRegistry(),
+    session,
+    transcriptStore,
+    logStore
+  });
+  await runtime.start();
+
+  const initialCompletion = waitForAssistantTaskCompletion(bus, session.sessionId);
+  const continuationSummary = waitForAssistantDeltaContaining(
+    bus,
+    session.sessionId,
+    /Assistant-pass command-only loop marker \d+ stays focused on the pending npm test step/i
+  );
+  bus.emit(createUserMessageSubmittedEvent({
+    sessionId: session.sessionId,
+    content: originalPrompt
+  }));
+
+  await continuationSummary;
+  bus.emit(createRuntimeInterruptRequestedEvent({
+    sessionId: session.sessionId,
+    reason: "cancel"
+  }));
+
+  const cancelledTask = await initialCompletion;
+  assert.equal(cancelledTask.payload.state, "cancelled");
+
+  const interruptedEvents = await transcriptStore.readEventsBySession(session.sessionId);
+  assert.equal(
+    interruptedEvents.filter((event) =>
+      event.type === "tool.execution.completed"
+      && event.payload.summary.startsWith("package.json:1-6")
+    ).length,
+    1,
+    "interrupted assistant-pass command-only task should preserve the package read before the explicit new task"
+  );
+  assert.ok(
+    interruptedEvents.some((event) =>
+      event.type === "assistant.delta.received"
+      && /Assistant-pass command-only loop marker \d+ stays focused on the pending npm test step/i.test(event.payload.delta)
+    ),
+    "interrupted assistant-pass command-only task should preserve the narrowed npm test handoff before the explicit new task"
+  );
+  assert.equal(
+    interruptedEvents.some((event) =>
+      event.type === "tool.execution.completed"
+      && event.payload.summary.startsWith("npm test · completed")
+    ),
+    false,
+    "interrupted assistant-pass command-only task should stop before rerunning npm test"
+  );
+
+  const newTaskResult = await runAgentTask({
+    bus,
+    transcriptStore,
+    sessionId: session.sessionId,
+    prompt: "Create new.txt with the content new-task."
+  });
+
+  const newContent = await readFile(join(workspace, "new.txt"), "utf8");
+  assert.equal(newContent, "new-task\n");
+  assert.match(newTaskResult.assistantText, /Created new\.txt|new task|已处理 `new\.txt`|已完成/u);
+  assert.ok(
+    newTaskResult.toolSummaries.some((summary) => summary.startsWith("new.txt · created")),
+    "explicit new task should create new.txt instead of resuming the interrupted assistant-pass command-only chain"
+  );
+  assert.equal(
+    newTaskResult.toolSummaries.some((summary) => summary.startsWith("npm test · completed")),
+    false,
+    "explicit new task should not continue the interrupted assistant-pass command-only verification command"
+  );
+}
+
 async function verifyAutomaticContinuationAfterToolRecoveryBeforeCommandOnlyShell() {
   const root = await mkdtemp(join(tmpdir(), "selfme-agent-resume-command-only-tool-recovery-"));
   const workspace = join(root, "workspace");
@@ -12877,6 +13364,263 @@ async function verifyAutomaticContinuationAfterToolRecoveryBeforeCommandOnlyShel
     0,
     "command-only tool-recovery continuation should recover within the same task"
   );
+}
+
+async function verifyExplicitNewTaskDoesNotResumeCommandOnlyToolRecovery() {
+  const root = await mkdtemp(join(tmpdir(), "selfme-agent-explicit-new-task-command-only-tool-recovery-"));
+  const workspace = join(root, "workspace");
+  const transcriptPath = join(root, "transcript.jsonl");
+  const logsPath = join(root, "logs.jsonl");
+  const originalPrompt = "Read beta-a.txt, beta-b.txt, and package.json, then run `npm test` until it prints exactly `ready`, fixing whatever is needed before finishing, even if your edit tool input first comes out invalid.";
+  await mkdir(workspace, { recursive: true });
+  await writeFile(join(workspace, "beta-a.txt"), "beta-a\n", "utf8");
+  await writeFile(join(workspace, "beta-b.txt"), "beta-b\n", "utf8");
+  await writeFile(
+    join(workspace, "package.json"),
+    '{\n  "name": "command-only-tool-recovery-new-task",\n  "version": "1.0.0",\n  "scripts": {\n    "test": "node verify-commandless-tool-recovery-new-task.mjs"\n  }\n}\n',
+    "utf8"
+  );
+  await writeFile(join(workspace, "verify-commandless-tool-recovery-new-task.mjs"), 'console.log("pending");\n', "utf8");
+
+  class ExplicitNewTaskAfterCommandOnlyToolRecoveryProvider implements ProviderClient {
+    readonly name = "explicit-new-task-after-command-only-tool-recovery-provider";
+    private invalidEditAttemptCount = 0;
+    private toolRecoveryContinuationCount = 0;
+    private recoveredShellCount = 0;
+
+    private buildInvalidEditToolCall() {
+      return toolCall("edit", {
+        startLine: 1,
+        endLine: 1,
+        replacement: 'console.log("ready");'
+      });
+    }
+
+    async *streamResponse(input: ProviderStreamInput): AsyncIterable<ProviderStreamChunk> {
+      if (input.content === originalPrompt) {
+        yield {
+          delta: toolCall("files", {
+            path: "beta-a.txt",
+            startLine: 1,
+            endLine: 20
+          })
+        };
+        return;
+      }
+
+      if (input.content === "Create new.txt with the content new-task.") {
+        yield {
+          delta: toolCall("write", {
+            path: "new.txt",
+            content: "new-task\n"
+          })
+        };
+        return;
+      }
+
+      if (input.content.startsWith("The user replied ") && input.content.includes("wants to continue the most recent unfinished task.")) {
+        assert.fail("explicit new task should not be rewritten into a command-only tool-recovery resume follow-up");
+      }
+
+      if (input.content.startsWith("Original user request: Create new.txt with the content new-task.")) {
+        yield { delta: "Created new.txt instead of resuming the interrupted command-only tool-recovery chain." };
+        return;
+      }
+
+      if (input.content.startsWith(`Original user request: ${originalPrompt}`)) {
+        const toolName = extractLine(input.content, "Tool:") ?? extractLine(input.content, "Latest tool:");
+        const summary = extractLine(input.content, "Summary:") ?? extractLine(input.content, "Latest summary:") ?? "";
+
+        if (toolName === "files" && /beta-a\.txt/.test(summary)) {
+          yield {
+            delta: toolCall("files", {
+              path: "beta-b.txt",
+              startLine: 1,
+              endLine: 20
+            })
+          };
+          return;
+        }
+
+        if (toolName === "files" && /beta-b\.txt/.test(summary)) {
+          yield {
+            delta: toolCall("files", {
+              path: "package.json",
+              startLine: 1,
+              endLine: 20
+            })
+          };
+          return;
+        }
+
+        if (toolName === "files" && /package\.json/.test(summary) && this.invalidEditAttemptCount < 2) {
+          this.invalidEditAttemptCount += 1;
+          yield { delta: this.buildInvalidEditToolCall() };
+          return;
+        }
+      }
+
+      if (
+        !input.content.startsWith("Original user request:")
+        && input.content.includes("The task hit repeated tool-recovery failures but the task context is still actionable.")
+      ) {
+        this.toolRecoveryContinuationCount += 1;
+        assert.match(input.content, /Pending next step target: npm test/);
+        assert.match(input.content, /Latest tool in context: files/);
+        assert.match(input.content, /Latest tool summary in context: package\.json:1-6/);
+        yield {
+          delta: toolCall("shell", {
+            command: "npm test"
+          })
+        };
+        return;
+      }
+
+      if (
+        input.content.startsWith("Original user request: The task hit repeated tool-recovery failures but the task context is still actionable.")
+      ) {
+        const toolName = extractLine(input.content, "Tool:") ?? extractLine(input.content, "Latest tool:");
+        const summary = extractLine(input.content, "Summary:") ?? extractLine(input.content, "Latest summary:") ?? "";
+
+        if (toolName === "shell" && /npm test/.test(summary) && this.recoveredShellCount === 0) {
+          this.recoveredShellCount += 1;
+          yield {
+            delta: toolCall("files", {
+              path: "verify-commandless-tool-recovery-new-task.mjs",
+              startLine: 1,
+              endLine: 20
+            })
+          };
+          return;
+        }
+
+        if (toolName === "files" && /verify-commandless-tool-recovery-new-task\.mjs/.test(summary)) {
+          yield {
+            delta: toolCall("edit", {
+              path: "verify-commandless-tool-recovery-new-task.mjs",
+              startLine: 1,
+              endLine: 1,
+              replacement: 'console.log("ready");'
+            })
+          };
+          return;
+        }
+
+        if (toolName === "edit" && /verify-commandless-tool-recovery-new-task\.mjs/.test(summary)) {
+          yield {
+            delta: toolCall("shell", {
+              command: "npm test"
+            })
+          };
+          return;
+        }
+
+        if (toolName === "shell" && /npm test/.test(summary) && this.recoveredShellCount === 1) {
+          this.recoveredShellCount += 1;
+          yield { delta: "npm test now prints ready after the command-only tool-recovery continuation." };
+          return;
+        }
+      }
+
+      yield { delta: "ok" };
+    }
+  }
+
+  const bus = new EventBus();
+  const transcriptStore = new TranscriptStore(transcriptPath);
+  const logStore = new LogStore(logsPath);
+  await transcriptStore.ensureInitialized();
+  await logStore.ensureInitialized();
+
+  const session = createDefaultSessionRecord(workspace, VERSION);
+  session.model = "regression-stub";
+
+  const runtime = new AgentRuntime({
+    bus,
+    provider: new ExplicitNewTaskAfterCommandOnlyToolRecoveryProvider(),
+    tools: new InMemoryToolRegistry(),
+    session,
+    transcriptStore,
+    logStore
+  });
+  await runtime.start();
+
+  bus.on("approval.requested", (event) => {
+    bus.emit(createTerminalCommandInvokedEvent({
+      sessionId: event.sessionId,
+      content: `/approve ${event.payload.approvalId}`
+    }));
+  });
+
+  const initialCompletion = waitForAssistantTaskCompletion(bus, session.sessionId);
+  const continuationSummary = waitForToolExecutionCompleted(
+    bus,
+    session.sessionId,
+    (summary) => summary.startsWith("verify-commandless-tool-recovery-new-task.mjs:1-1")
+  );
+  bus.emit(createUserMessageSubmittedEvent({
+    sessionId: session.sessionId,
+    content: originalPrompt
+  }));
+
+  await continuationSummary;
+  bus.emit(createRuntimeInterruptRequestedEvent({
+    sessionId: session.sessionId,
+    reason: "cancel"
+  }));
+
+  const cancelledTask = await initialCompletion;
+  assert.equal(cancelledTask.payload.state, "cancelled");
+
+  const interruptedEvents = await transcriptStore.readEventsBySession(session.sessionId);
+  assert.equal(
+    interruptedEvents.filter((event) =>
+      event.type === "tool.execution.completed"
+      && event.payload.summary.startsWith("package.json:1-6")
+    ).length,
+    1,
+    "interrupted command-only tool-recovery task should preserve the package read before the explicit new task"
+  );
+  assert.ok(
+    interruptedEvents.some((event) =>
+      event.type === "tool.execution.completed"
+      && event.payload.summary.startsWith("verify-commandless-tool-recovery-new-task.mjs:1-1")
+    ),
+    "interrupted command-only tool-recovery task should preserve the narrowed hidden verifier handoff before the explicit new task"
+  );
+  assert.equal(
+    interruptedEvents.some((event) =>
+      event.type === "tool.execution.completed"
+      && event.payload.summary.startsWith("verify-commandless-tool-recovery-new-task.mjs:1-1 · updated")
+    ),
+    false,
+    "interrupted command-only tool-recovery task should stop before applying the hidden verifier repair"
+  );
+
+  const newTaskResult = await runAgentTask({
+    bus,
+    transcriptStore,
+    sessionId: session.sessionId,
+    prompt: "Create new.txt with the content new-task."
+  });
+
+  const newContent = await readFile(join(workspace, "new.txt"), "utf8");
+  const verifyContent = await readFile(join(workspace, "verify-commandless-tool-recovery-new-task.mjs"), "utf8");
+  assert.equal(newContent, "new-task\n");
+  assert.match(newTaskResult.assistantText, /Created new\.txt|new task|已处理 `new\.txt`|已完成/u);
+  assert.ok(
+    newTaskResult.toolSummaries.some((summary) => summary.startsWith("new.txt · created")),
+    "explicit new task should create new.txt instead of resuming the interrupted command-only tool-recovery chain"
+  );
+  assert.equal(
+    newTaskResult.toolSummaries.some((summary) =>
+      summary.startsWith("verify-commandless-tool-recovery-new-task.mjs:1-1 · updated")
+      || summary.startsWith("npm test · completed")
+    ),
+    false,
+    "explicit new task should not continue the interrupted command-only tool-recovery repair chain"
+  );
+  assert.doesNotMatch(verifyContent, /ready/);
 }
 
 async function verifyAutomaticContinuationAcrossAssistantPassAndToolRecoveryBeforeCommandOnlyShell() {
@@ -16996,6 +17740,116 @@ async function verifyBareContinueResumesInterruptedTask() {
   );
 }
 
+async function verifyRepeatedColloquialContinueResumesInterruptedTask() {
+  const root = await mkdtemp(join(tmpdir(), "selfme-agent-repeated-colloquial-continue-stop-"));
+  const workspace = join(root, "workspace");
+  const transcriptPath = join(root, "transcript.jsonl");
+  const logsPath = join(root, "logs.jsonl");
+  await mkdir(workspace, { recursive: true });
+
+  class RepeatedColloquialContinueResumeProvider implements ProviderClient {
+    readonly name = "repeated-colloquial-continue-resume-provider";
+
+    async *streamResponse(input: ProviderStreamInput): AsyncIterable<ProviderStreamChunk> {
+      if (input.content === "Create repeated-continue.txt with the content resumed-twice.") {
+        await waitForProviderDelay(input.signal, 120);
+        yield {
+          delta: toolCall("write", {
+            path: "repeated-continue.txt",
+            content: "resumed-twice\n"
+          })
+        };
+        return;
+      }
+
+      if (input.content.startsWith('The user replied "继续 继续 干" and wants to continue the most recent unfinished task.')) {
+        yield {
+          delta: toolCall("write", {
+            path: "repeated-continue.txt",
+            content: "resumed-twice\n"
+          })
+        };
+        return;
+      }
+
+      if (input.content.startsWith('Original user request: The user replied "继续 继续 干" and wants to continue the most recent unfinished task.')) {
+        yield { delta: "Created repeated-continue.txt and resumed the interrupted task from the repeated colloquial continue follow-up." };
+        return;
+      }
+
+      yield { delta: "ok" };
+    }
+  }
+
+  const bus = new EventBus();
+  const transcriptStore = new TranscriptStore(transcriptPath);
+  const logStore = new LogStore(logsPath);
+  await transcriptStore.ensureInitialized();
+  await logStore.ensureInitialized();
+
+  const session = createDefaultSessionRecord(workspace, VERSION);
+  session.model = "regression-stub";
+
+  const runtime = new AgentRuntime({
+    bus,
+    provider: new RepeatedColloquialContinueResumeProvider(),
+    tools: new InMemoryToolRegistry(),
+    session,
+    transcriptStore,
+    logStore
+  });
+  await runtime.start();
+
+  const approvalDecisions: Array<"approve" | "deny"> = [];
+  bus.on("approval.requested", (event) => {
+    const decision = approvalDecisions.shift() ?? "approve";
+    bus.emit(createTerminalCommandInvokedEvent({
+      sessionId: event.sessionId,
+      content: `/${decision} ${event.payload.approvalId}`
+    }));
+  });
+
+  const busyPromise = waitForBusyPhase(bus, session.sessionId, "assistant");
+  bus.emit(createUserMessageSubmittedEvent({
+    sessionId: session.sessionId,
+    content: "Create repeated-continue.txt with the content resumed-twice."
+  }));
+
+  await busyPromise;
+  bus.emit(createRuntimeInterruptRequestedEvent({
+    sessionId: session.sessionId,
+    reason: "cancel"
+  }));
+
+  const cancelledTask = await waitForAssistantTaskCompletion(bus, session.sessionId);
+  assert.equal(cancelledTask.payload.state, "cancelled");
+
+  const interruptedEvents = await transcriptStore.readEventsBySession(session.sessionId);
+  assert.equal(
+    interruptedEvents.some((event) =>
+      event.type === "tool.execution.completed" && event.payload.summary.startsWith("repeated-continue.txt")
+    ),
+    false,
+    "repeated colloquial continue interruption should stop before creating the file"
+  );
+
+  const resumedResult = await runAgentTask({
+    bus,
+    transcriptStore,
+    sessionId: session.sessionId,
+    prompt: "继续 继续 干"
+  });
+
+  const resumedContent = await readFile(join(workspace, "repeated-continue.txt"), "utf8");
+  assert.equal(resumedContent, "resumed-twice\n");
+  assert.match(resumedResult.assistantText, /resumed the interrupted task|repeated colloquial continue|已处理 `repeated-continue\.txt`|已完成/u);
+  assert.doesNotMatch(resumedResult.assistantText, /^(可以|可以继续|好的|sure|okay)\b/i);
+  assert.ok(
+    resumedResult.toolSummaries.some((summary) => summary.startsWith("repeated-continue.txt · created")),
+    "repeated colloquial continue should resume the interrupted task instead of falling back to acknowledgement handling"
+  );
+}
+
 async function verifyBareAffirmativeResumesInterruptedTask() {
   const root = await mkdtemp(join(tmpdir(), "selfme-agent-bare-affirmative-stop-"));
   const workspace = join(root, "workspace");
@@ -17103,6 +17957,1469 @@ async function verifyBareAffirmativeResumesInterruptedTask() {
   assert.ok(
     resumedResult.toolSummaries.some((summary) => summary.startsWith("affirmative.txt · created")),
     "bare affirmative should resume the interrupted task when no assistant proposal is pending"
+  );
+}
+
+async function verifyExplicitNewTaskDoesNotResumeInterruptedTask() {
+  const root = await mkdtemp(join(tmpdir(), "selfme-agent-explicit-new-task-after-interrupt-"));
+  const workspace = join(root, "workspace");
+  const transcriptPath = join(root, "transcript.jsonl");
+  const logsPath = join(root, "logs.jsonl");
+  await mkdir(workspace, { recursive: true });
+
+  class ExplicitNewTaskAfterInterruptProvider implements ProviderClient {
+    readonly name = "explicit-new-task-after-interrupt-provider";
+
+    async *streamResponse(input: ProviderStreamInput): AsyncIterable<ProviderStreamChunk> {
+      if (input.content === "Create old.txt with the content old-task.") {
+        await waitForProviderDelay(input.signal, 120);
+        yield {
+          delta: toolCall("write", {
+            path: "old.txt",
+            content: "old-task\n"
+          })
+        };
+        return;
+      }
+
+      if (input.content === "Create new.txt with the content new-task.") {
+        yield {
+          delta: toolCall("write", {
+            path: "new.txt",
+            content: "new-task\n"
+          })
+        };
+        return;
+      }
+
+      if (input.content.startsWith("The user replied ") && input.content.includes("wants to continue the most recent unfinished task.")) {
+        assert.fail("explicit new task should not be rewritten into an interrupted-task resume follow-up");
+      }
+
+      if (input.content.startsWith("Original user request: Create new.txt with the content new-task.")) {
+        yield { delta: "Created new.txt for the new task without resuming the interrupted old task." };
+        return;
+      }
+
+      yield { delta: "ok" };
+    }
+  }
+
+  const bus = new EventBus();
+  const transcriptStore = new TranscriptStore(transcriptPath);
+  const logStore = new LogStore(logsPath);
+  await transcriptStore.ensureInitialized();
+  await logStore.ensureInitialized();
+
+  const session = createDefaultSessionRecord(workspace, VERSION);
+  session.model = "regression-stub";
+
+  const runtime = new AgentRuntime({
+    bus,
+    provider: new ExplicitNewTaskAfterInterruptProvider(),
+    tools: new InMemoryToolRegistry(),
+    session,
+    transcriptStore,
+    logStore
+  });
+  await runtime.start();
+
+  const approvalDecisions: Array<"approve" | "deny"> = [];
+  bus.on("approval.requested", (event) => {
+    const decision = approvalDecisions.shift() ?? "approve";
+    bus.emit(createTerminalCommandInvokedEvent({
+      sessionId: event.sessionId,
+      content: `/${decision} ${event.payload.approvalId}`
+    }));
+  });
+
+  const busyPromise = waitForBusyPhase(bus, session.sessionId, "assistant");
+  bus.emit(createUserMessageSubmittedEvent({
+    sessionId: session.sessionId,
+    content: "Create old.txt with the content old-task."
+  }));
+
+  await busyPromise;
+  bus.emit(createRuntimeInterruptRequestedEvent({
+    sessionId: session.sessionId,
+    reason: "cancel"
+  }));
+
+  const cancelledTask = await waitForAssistantTaskCompletion(bus, session.sessionId);
+  assert.equal(cancelledTask.payload.state, "cancelled");
+
+  const interruptedEvents = await transcriptStore.readEventsBySession(session.sessionId);
+  assert.equal(
+    interruptedEvents.some((event) =>
+      event.type === "tool.execution.completed" && event.payload.summary.startsWith("old.txt")
+    ),
+    false,
+    "interrupted old task should stop before creating old.txt"
+  );
+
+  const newTaskResult = await runAgentTask({
+    bus,
+    transcriptStore,
+    sessionId: session.sessionId,
+    prompt: "Create new.txt with the content new-task."
+  });
+
+  const newContent = await readFile(join(workspace, "new.txt"), "utf8");
+  assert.equal(newContent, "new-task\n");
+  assert.equal(existsSync(join(workspace, "old.txt")), false);
+  assert.match(newTaskResult.assistantText, /Created new\.txt|new task|已处理 `new\.txt`|已完成/u);
+  assert.ok(
+    newTaskResult.toolSummaries.some((summary) => summary.startsWith("new.txt · created")),
+    "explicit new task should execute the new write instead of resuming the interrupted old task"
+  );
+  assert.equal(
+    newTaskResult.toolSummaries.some((summary) => summary.startsWith("old.txt · created")),
+    false,
+    "explicit new task should not create the interrupted old target"
+  );
+}
+
+async function verifyExplicitNewTaskDoesNotResumeInterruptedApprovedProposalExecution() {
+  const root = await mkdtemp(join(tmpdir(), "selfme-agent-explicit-new-task-approved-proposal-execution-"));
+  const workspace = join(root, "workspace");
+  const transcriptPath = join(root, "transcript.jsonl");
+  const logsPath = join(root, "logs.jsonl");
+  await mkdir(join(workspace, "node-todo", "views"), { recursive: true });
+
+  await writeFile(
+    join(workspace, "node-todo", "app.js"),
+    'const PORT = 3000;\nconsole.log(PORT);\n',
+    "utf8"
+  );
+  await writeFile(
+    join(workspace, "node-todo", "views", "index.ejs"),
+    '<input name="title" />\n',
+    "utf8"
+  );
+
+  class ExplicitNewTaskAfterApprovedProposalExecutionProvider implements ProviderClient {
+    readonly name = "explicit-new-task-after-approved-proposal-execution-provider";
+
+    async *streamResponse(input: ProviderStreamInput): AsyncIterable<ProviderStreamChunk> {
+      const proposalPrompt = "先看看 node-todo，但先别改。";
+      const executeProposalPrompt = 'The user replied "可以" to approve the immediately previous proposal.';
+
+      if (input.content === proposalPrompt) {
+        yield {
+          delta: "我先看了 node-todo；如果你愿意，我下一步可以直接优化 node-todo/app.js 和 node-todo/views/index.ejs。"
+        };
+        return;
+      }
+
+      if (input.content === "Create new.txt with the content new-task.") {
+        yield {
+          delta: toolCall("write", {
+            path: "new.txt",
+            content: "new-task\n"
+          })
+        };
+        return;
+      }
+
+      if (input.content.startsWith("The user replied ") && input.content.includes("wants to continue the most recent unfinished task.")) {
+        assert.fail("explicit new task should not be rewritten into an interrupted approved-proposal execution resume");
+      }
+
+      if (input.content.startsWith("Original user request: Create new.txt with the content new-task.")) {
+        yield { delta: "Created new.txt for the new task without resuming the interrupted approved proposal execution." };
+        return;
+      }
+
+      if (input.content.startsWith(executeProposalPrompt)) {
+        yield {
+          delta: toolCall("files", {
+            path: "node-todo/app.js",
+            startLine: 1,
+            endLine: 5
+          })
+        };
+        return;
+      }
+
+      if (input.content.startsWith(`Original user request: ${executeProposalPrompt}`)) {
+        const toolName = extractLine(input.content, "Tool:") ?? extractLine(input.content, "Latest tool:");
+        const summary = extractLine(input.content, "Summary:") ?? extractLine(input.content, "Latest summary:") ?? "";
+
+        if (toolName === "files" && /node-todo\/app\.js/.test(summary)) {
+          yield {
+            delta: toolCall("edit", {
+              path: "node-todo/app.js",
+              startLine: 1,
+              endLine: 1,
+              replacement: "const PORT = Number(process.env.PORT || 3000);"
+            })
+          };
+          return;
+        }
+
+        if (toolName === "edit" && /node-todo\/app\.js/.test(summary)) {
+          await waitForProviderDelay(input.signal, 300);
+          yield {
+            delta: toolCall("files", {
+              path: "node-todo/views/index.ejs",
+              startLine: 1,
+              endLine: 1
+            })
+          };
+          return;
+        }
+      }
+
+      yield { delta: "ok" };
+    }
+  }
+
+  const bus = new EventBus();
+  const transcriptStore = new TranscriptStore(transcriptPath);
+  const logStore = new LogStore(logsPath);
+  await transcriptStore.ensureInitialized();
+  await logStore.ensureInitialized();
+
+  const session = createDefaultSessionRecord(workspace, VERSION);
+  session.model = "regression-stub";
+
+  const runtime = new AgentRuntime({
+    bus,
+    provider: new ExplicitNewTaskAfterApprovedProposalExecutionProvider(),
+    tools: new InMemoryToolRegistry(),
+    session,
+    transcriptStore,
+    logStore
+  });
+  await runtime.start();
+
+  const proposalResult = await runAgentTask({
+    bus,
+    transcriptStore,
+    sessionId: session.sessionId,
+    prompt: "先看看 node-todo，但先别改。"
+  });
+  assert.match(proposalResult.assistantText, /node-todo\/app\.js/i);
+  assert.match(proposalResult.assistantText, /node-todo\/views\/index\.ejs/i);
+
+  const firstRunCompletion = waitForAssistantTaskCompletion(bus, session.sessionId);
+  const firstEditCompleted = new Promise<void>((resolve) => {
+    const off = bus.on("tool.execution.completed", (event) => {
+      if (event.sessionId !== session.sessionId || !event.payload.summary.startsWith("node-todo/app.js:1-1 · updated")) {
+        return;
+      }
+
+      off();
+      resolve();
+    });
+  });
+
+  bus.emit(createUserMessageSubmittedEvent({
+    sessionId: session.sessionId,
+    content: "可以"
+  }));
+
+  await firstEditCompleted;
+  bus.emit(createRuntimeInterruptRequestedEvent({
+    sessionId: session.sessionId,
+    reason: "cancel"
+  }));
+
+  const cancelledTask = await firstRunCompletion;
+  assert.equal(cancelledTask.payload.state, "cancelled");
+
+  const interruptedEvents = await transcriptStore.readEventsBySession(session.sessionId);
+  assert.ok(
+    interruptedEvents.some((event) =>
+      event.type === "tool.execution.completed"
+      && event.payload.summary.startsWith("node-todo/app.js:1-1 · updated")
+    ),
+    "interrupted approved proposal execution should preserve the app.js edit before the explicit new task"
+  );
+  assert.equal(
+    interruptedEvents.some((event) =>
+      event.type === "tool.execution.completed"
+      && event.payload.summary.startsWith("node-todo/views/index.ejs:1-")
+    ),
+    false,
+    "interrupted approved proposal execution should stop before the pending view read lands"
+  );
+
+  const newTaskResult = await runAgentTask({
+    bus,
+    transcriptStore,
+    sessionId: session.sessionId,
+    prompt: "Create new.txt with the content new-task."
+  });
+
+  const newContent = await readFile(join(workspace, "new.txt"), "utf8");
+  const appContent = await readFile(join(workspace, "node-todo", "app.js"), "utf8");
+  const viewContent = await readFile(join(workspace, "node-todo", "views", "index.ejs"), "utf8");
+  assert.equal(newContent, "new-task\n");
+  assert.match(appContent, /process\.env\.PORT/);
+  assert.doesNotMatch(viewContent, /maxlength="100"/);
+  assert.match(newTaskResult.assistantText, /Created new\.txt|new task|已处理 `new\.txt`|已完成/u);
+  assert.ok(
+    newTaskResult.toolSummaries.some((summary) => summary.startsWith("new.txt · created")),
+    "explicit new task should execute the new write instead of resuming the interrupted approved proposal execution"
+  );
+  assert.equal(
+    newTaskResult.toolSummaries.some((summary) =>
+      summary.startsWith("node-todo/views/index.ejs:1-")
+      || summary.startsWith("node-todo/views/index.ejs:1-1 · updated")
+    ),
+    false,
+    "explicit new task should not continue the interrupted approved proposal execution"
+  );
+}
+
+async function verifyExplicitNewTaskDoesNotResumeInterruptedApprovalWaitTask() {
+  const root = await mkdtemp(join(tmpdir(), "selfme-agent-explicit-new-task-approval-wait-"));
+  const workspace = join(root, "workspace");
+  const transcriptPath = join(root, "transcript.jsonl");
+  const logsPath = join(root, "logs.jsonl");
+  await mkdir(workspace, { recursive: true });
+  await mkdir(join(workspace, "node-todo"), { recursive: true });
+  await mkdir(join(workspace, "node-todo", "views"), { recursive: true });
+
+  await writeFile(
+    join(workspace, "node-todo", "package.json"),
+    '{\n  "name": "node-todo",\n  "version": "1.0.0",\n  "scripts": {\n    "start": "node app.js"\n  }\n}\n',
+    "utf8"
+  );
+  await writeFile(
+    join(workspace, "node-todo", "app.js"),
+    'const express = require("express");\nconst app = express();\nconst PORT = 3000;\napp.listen(PORT, () => {\n  console.log(`Todo app is running at http://localhost:${PORT}`);\n});\n',
+    "utf8"
+  );
+  await writeFile(
+    join(workspace, "node-todo", "views", "index.ejs"),
+    '<!DOCTYPE html>\n<form action="/add" method="post">\n  <input name="title" />\n</form>\n',
+    "utf8"
+  );
+  await writeFile(
+    join(workspace, "node-todo", "verify-setup.mjs"),
+    [
+      'import { readFileSync } from "node:fs";',
+      'const app = readFileSync(new URL("./app.js", import.meta.url), "utf8");',
+      'const view = readFileSync(new URL("./views/index.ejs", import.meta.url), "utf8");',
+      'const appReady = /process\\.env\\.PORT/.test(app);',
+      'const viewReady = /maxlength="100"/.test(view);',
+      'if (appReady && viewReady) {',
+      '  console.log("ready");',
+      '} else if (appReady) {',
+      '  console.log("app-only");',
+      '} else if (viewReady) {',
+      '  console.log("view-only");',
+      '} else {',
+      '  console.log("not-ready");',
+      '}'
+    ].join("\n") + "\n",
+    "utf8"
+  );
+
+  class ExplicitNewTaskAfterApprovalWaitProvider implements ProviderClient {
+    readonly name = "explicit-new-task-after-approval-wait-provider";
+
+    async *streamResponse(input: ProviderStreamInput): AsyncIterable<ProviderStreamChunk> {
+      const originalPrompt = "看看项目，然后直接优化 node-todo：把 node-todo/app.js 的端口改成 process.env.PORT，再给 node-todo/views/index.ejs 的 title input 加上 maxlength 100，并运行 `node node-todo/verify-setup.mjs` 验证，直到输出 exactly `ready`。";
+
+      if (input.content === originalPrompt) {
+        yield {
+          delta: toolCall("shell", {
+            command: "pwd && ls -la && find . -maxdepth 2 -type f | sed 's#^./##' | sort | head -200"
+          })
+        };
+        return;
+      }
+
+      if (input.content === "Create new.txt with the content new-task.") {
+        yield {
+          delta: toolCall("write", {
+            path: "new.txt",
+            content: "new-task\n"
+          })
+        };
+        return;
+      }
+
+      if (input.content.startsWith("The user replied ") && input.content.includes("wants to continue the most recent unfinished task.")) {
+        assert.fail("explicit new task should not be rewritten into an approval-wait resume follow-up");
+      }
+
+      if (input.content.startsWith("Original user request: Create new.txt with the content new-task.")) {
+        yield { delta: "Created new.txt for the new task without resuming the interrupted approval-wait chain." };
+        return;
+      }
+
+      if (input.content.startsWith(`Original user request: ${originalPrompt}`)) {
+        const toolName = extractLine(input.content, "Tool:") ?? extractLine(input.content, "Latest tool:");
+        const summary = extractLine(input.content, "Summary:") ?? extractLine(input.content, "Latest summary:") ?? "";
+
+        if (toolName === "shell") {
+          if (/You are in the middle of a concrete project inspection request\./.test(input.content)) {
+            yield {
+              delta: toolCall("files", {
+                path: "node-todo/package.json",
+                startLine: 1,
+                endLine: 20
+              })
+            };
+            return;
+          }
+
+          if (/app-only/.test(input.content)) {
+            yield {
+              delta: toolCall("files", {
+                path: "node-todo/views/index.ejs",
+                startLine: 1,
+                endLine: 4
+              })
+            };
+            return;
+          }
+
+          assert.match(input.content, /ready/);
+          yield { delta: "Completed the approval-wait chain." };
+          return;
+        }
+
+        if (toolName === "files" && /node-todo\/package\.json/.test(summary)) {
+          yield {
+            delta: toolCall("files", {
+              path: "node-todo/app.js",
+              startLine: 1,
+              endLine: 20
+            })
+          };
+          return;
+        }
+
+        if (toolName === "files" && /node-todo\/app\.js/.test(summary)) {
+          yield {
+            delta: toolCall("edit", {
+              path: "node-todo/app.js",
+              startLine: 3,
+              endLine: 3,
+              replacement: "const PORT = Number(process.env.PORT || 3000);"
+            })
+          };
+          return;
+        }
+
+        if (toolName === "edit" && /node-todo\/app\.js/.test(summary)) {
+          yield {
+            delta: toolCall("shell", {
+              command: "node node-todo/verify-setup.mjs"
+            })
+          };
+          return;
+        }
+
+        if (toolName === "files" && /node-todo\/views\/index\.ejs/.test(summary)) {
+          yield {
+            delta: toolCall("edit", {
+              path: "node-todo/views/index.ejs",
+              startLine: 3,
+              endLine: 3,
+              replacement: '  <input name="title" maxlength="100" />'
+            })
+          };
+          return;
+        }
+      }
+
+      yield { delta: "ok" };
+    }
+  }
+
+  const bus = new EventBus();
+  const transcriptStore = new TranscriptStore(transcriptPath);
+  const logStore = new LogStore(logsPath);
+  await transcriptStore.ensureInitialized();
+  await logStore.ensureInitialized();
+
+  const session = createDefaultSessionRecord(workspace, VERSION);
+  session.model = "regression-stub";
+
+  const runtime = new AgentRuntime({
+    bus,
+    provider: new ExplicitNewTaskAfterApprovalWaitProvider(),
+    tools: new InMemoryToolRegistry(),
+    session,
+    transcriptStore,
+    logStore
+  });
+  await runtime.start();
+
+  let approvalCount = 0;
+  let heldApprovalId: string | undefined;
+  const pendingApprovalPromise = new Promise<Extract<RuntimeEvent, { type: "approval.requested" }>>((resolve) => {
+    bus.on("approval.requested", (event) => {
+      approvalCount += 1;
+
+      if (approvalCount === 1) {
+        bus.emit(createTerminalCommandInvokedEvent({
+          sessionId: event.sessionId,
+          content: `/approve ${event.payload.approvalId}`
+        }));
+        return;
+      }
+
+      heldApprovalId = event.payload.approvalId;
+      resolve(event);
+    });
+  });
+
+  const initialCompletion = waitForAssistantTaskCompletion(bus, session.sessionId);
+  bus.emit(createUserMessageSubmittedEvent({
+    sessionId: session.sessionId,
+    content: "看看项目，然后直接优化 node-todo：把 node-todo/app.js 的端口改成 process.env.PORT，再给 node-todo/views/index.ejs 的 title input 加上 maxlength 100，并运行 `node node-todo/verify-setup.mjs` 验证，直到输出 exactly `ready`。"
+  }));
+
+  const pendingApproval = await pendingApprovalPromise;
+  assert.equal(pendingApproval.payload.toolName, "edit");
+  assert.match(JSON.stringify(pendingApproval.payload.input), /maxlength="100"/);
+  bus.emit(createRuntimeInterruptRequestedEvent({
+    sessionId: session.sessionId,
+    reason: "cancel"
+  }));
+
+  const cancelledTask = await initialCompletion;
+  assert.equal(cancelledTask.payload.state, "cancelled");
+
+  const interruptedEvents = await transcriptStore.readEventsBySession(session.sessionId);
+  assert.ok(
+    interruptedEvents.some((event) =>
+      event.type === "tool.execution.completed" && event.payload.summary.startsWith("node-todo/views/index.ejs:1-4")
+    ),
+    "interrupted approval-wait task should preserve the narrowed pending view file before the explicit new task"
+  );
+  assert.equal(
+    interruptedEvents.some((event) =>
+      event.type === "tool.execution.completed" && event.payload.summary.startsWith("node-todo/views/index.ejs:3-3 · updated")
+    ),
+    false,
+    "interrupted approval-wait task should stop before the pending approved edit is applied"
+  );
+  assert.ok(
+    interruptedEvents.some((event) =>
+      event.type === "approval.resolved"
+      && event.payload.approvalId === heldApprovalId
+      && !event.payload.approved
+    ),
+    "cancelling the approval-wait chain should deny the held approval"
+  );
+
+  const newTaskResult = await runAgentTask({
+    bus,
+    transcriptStore,
+    sessionId: session.sessionId,
+    prompt: "Create new.txt with the content new-task."
+  });
+
+  const newContent = await readFile(join(workspace, "new.txt"), "utf8");
+  const viewContent = await readFile(join(workspace, "node-todo", "views", "index.ejs"), "utf8");
+  assert.equal(newContent, "new-task\n");
+  assert.doesNotMatch(viewContent, /maxlength="100"/);
+  assert.match(newTaskResult.assistantText, /Created new\.txt|new task|已处理 `new\.txt`|已完成/u);
+  assert.ok(
+    newTaskResult.toolSummaries.some((summary) => summary.startsWith("new.txt · created")),
+    "explicit new task should create new.txt instead of resuming the interrupted approval-wait chain"
+  );
+  assert.equal(
+    newTaskResult.toolSummaries.some((summary) =>
+      summary.startsWith("node-todo/views/index.ejs:1-4")
+      || summary.startsWith("node-todo/views/index.ejs:3-3 · updated")
+      || summary.startsWith("node node-todo/verify-setup.mjs · completed")
+    ),
+    false,
+    "explicit new task should not continue the interrupted approval-wait chain"
+  );
+}
+
+async function verifyExplicitNewTaskDoesNotResumeInterruptedVerifierShift() {
+  const root = await mkdtemp(join(tmpdir(), "selfme-agent-explicit-new-task-verifier-shift-"));
+  const workspace = join(root, "workspace");
+  const transcriptPath = join(root, "transcript.jsonl");
+  const logsPath = join(root, "logs.jsonl");
+  await mkdir(join(workspace, "node-todo", "views"), { recursive: true });
+
+  await writeFile(join(workspace, "node-todo", "package.json"), '{\n  "name": "node-todo",\n  "version": "1.0.0"\n}\n', "utf8");
+  await writeFile(join(workspace, "node-todo", "app.js"), 'const PORT = 3000;\nconsole.log(PORT);\n', "utf8");
+  await writeFile(join(workspace, "node-todo", "views", "index.ejs"), '<input name="title" />\n', "utf8");
+  await writeFile(
+    join(workspace, "node-todo", "verify-exact.mjs"),
+    [
+      'import { readFileSync } from "node:fs";',
+      'const app = readFileSync(new URL("./app.js", import.meta.url), "utf8");',
+      'const view = readFileSync(new URL("./views/index.ejs", import.meta.url), "utf8");',
+      'const appReady = /process\\.env\\.PORT/.test(app);',
+      'const viewReady = /maxlength="100"/.test(view);',
+      'if (appReady && viewReady) {',
+      '  console.log("ready!");',
+      '} else if (appReady) {',
+      '  console.log("app-only");',
+      '} else if (viewReady) {',
+      '  console.log("view-only");',
+      '} else {',
+      '  console.log("not-ready");',
+      '}'
+    ].join("\n") + "\n",
+    "utf8"
+  );
+
+  class ExplicitNewTaskAfterVerifierShiftProvider implements ProviderClient {
+    readonly name = "explicit-new-task-after-verifier-shift-provider";
+
+    async *streamResponse(input: ProviderStreamInput): AsyncIterable<ProviderStreamChunk> {
+      const originalPrompt = "看看项目，然后直接优化 node-todo：把 node-todo/app.js 的端口改成 process.env.PORT，再给 node-todo/views/index.ejs 的 title input 加上 maxlength 100，并运行 `node node-todo/verify-exact.mjs` 验证，直到输出 exactly `ready`。";
+
+      if (input.content === originalPrompt) {
+        yield {
+          delta: toolCall("shell", {
+            command: "pwd && ls -la && find . -maxdepth 2 -type f | sed 's#^./##' | sort | head -200"
+          })
+        };
+        return;
+      }
+
+      if (input.content === "Create new.txt with the content new-task.") {
+        yield {
+          delta: toolCall("write", {
+            path: "new.txt",
+            content: "new-task\n"
+          })
+        };
+        return;
+      }
+
+      if (input.content.startsWith("The user replied ") && input.content.includes("wants to continue the most recent unfinished task.")) {
+        assert.fail("explicit new task should not be rewritten into a verifier-shift resume follow-up");
+      }
+
+      if (input.content.startsWith("Original user request: Create new.txt with the content new-task.")) {
+        yield { delta: "Created new.txt for the new task without resuming the interrupted verifier-shift chain." };
+        return;
+      }
+
+      if (input.content.startsWith(`Original user request: ${originalPrompt}`)) {
+        const toolName = extractLine(input.content, "Tool:") ?? extractLine(input.content, "Latest tool:");
+        const summary = extractLine(input.content, "Summary:") ?? extractLine(input.content, "Latest summary:") ?? "";
+
+        if (toolName === "shell") {
+          if (/You are in the middle of a concrete project inspection request\./.test(input.content)) {
+            yield {
+              delta: toolCall("files", {
+                path: "node-todo/package.json",
+                startLine: 1,
+                endLine: 20
+              })
+            };
+            return;
+          }
+
+          if (/app-only/.test(input.content)) {
+            yield {
+              delta: toolCall("files", {
+                path: "node-todo/views/index.ejs",
+                startLine: 1,
+                endLine: 3
+              })
+            };
+            return;
+          }
+
+          if (/ready!/.test(input.content)) {
+            yield {
+              delta: "I already finished the app and view work; the only remaining exact-output gap is in node-todo/verify-exact.mjs."
+            };
+            await waitForProviderDelay(input.signal, 10_000);
+            yield {
+              delta: toolCall("files", {
+                path: "node-todo/verify-exact.mjs",
+                startLine: 1,
+                endLine: 20
+              })
+            };
+            return;
+          }
+
+          assert.match(input.content, /\bready\b/);
+          yield { delta: "Completed the verifier-shift chain from the latest failure point." };
+          return;
+        }
+
+        if (toolName === "files" && /node-todo\/package\.json/.test(summary)) {
+          yield {
+            delta: toolCall("files", {
+              path: "node-todo/app.js",
+              startLine: 1,
+              endLine: 5
+            })
+          };
+          return;
+        }
+
+        if (toolName === "files" && /node-todo\/app\.js/.test(summary)) {
+          yield {
+            delta: toolCall("edit", {
+              path: "node-todo/app.js",
+              startLine: 1,
+              endLine: 1,
+              replacement: "const PORT = Number(process.env.PORT || 3000);"
+            })
+          };
+          return;
+        }
+
+        if (toolName === "edit" && /node-todo\/app\.js/.test(summary)) {
+          yield {
+            delta: toolCall("shell", {
+              command: "node node-todo/verify-exact.mjs"
+            })
+          };
+          return;
+        }
+
+        if (toolName === "files" && /node-todo\/views\/index\.ejs/.test(summary)) {
+          yield {
+            delta: toolCall("edit", {
+              path: "node-todo/views/index.ejs",
+              startLine: 1,
+              endLine: 1,
+              replacement: '<input name="title" maxlength="100" />'
+            })
+          };
+          return;
+        }
+
+        if (toolName === "edit" && /node-todo\/views\/index\.ejs/.test(summary)) {
+          yield {
+            delta: toolCall("shell", {
+              command: "node node-todo/verify-exact.mjs"
+            })
+          };
+          return;
+        }
+      }
+
+      yield { delta: "ok" };
+    }
+  }
+
+  const bus = new EventBus();
+  const transcriptStore = new TranscriptStore(transcriptPath);
+  const logStore = new LogStore(logsPath);
+  await transcriptStore.ensureInitialized();
+  await logStore.ensureInitialized();
+
+  const session = createDefaultSessionRecord(workspace, VERSION);
+  session.model = "regression-stub";
+
+  const runtime = new AgentRuntime({
+    bus,
+    provider: new ExplicitNewTaskAfterVerifierShiftProvider(),
+    tools: new InMemoryToolRegistry(),
+    session,
+    transcriptStore,
+    logStore
+  });
+  await runtime.start();
+
+  bus.on("approval.requested", (event) => {
+    bus.emit(createTerminalCommandInvokedEvent({
+      sessionId: event.sessionId,
+      content: `/approve ${event.payload.approvalId}`
+    }));
+  });
+
+  const initialCompletion = waitForAssistantTaskCompletion(bus, session.sessionId);
+  const continuationSummary = waitForAssistantDeltaContaining(
+    bus,
+    session.sessionId,
+    /I already finished the app and view work; the only remaining exact-output gap is in node-todo\/verify-exact\.mjs\./
+  );
+  bus.emit(createUserMessageSubmittedEvent({
+    sessionId: session.sessionId,
+    content: "看看项目，然后直接优化 node-todo：把 node-todo/app.js 的端口改成 process.env.PORT，再给 node-todo/views/index.ejs 的 title input 加上 maxlength 100，并运行 `node node-todo/verify-exact.mjs` 验证，直到输出 exactly `ready`。"
+  }));
+
+  await continuationSummary;
+  bus.emit(createRuntimeInterruptRequestedEvent({
+    sessionId: session.sessionId,
+    reason: "cancel"
+  }));
+
+  const cancelledTask = await initialCompletion;
+  assert.equal(cancelledTask.payload.state, "cancelled");
+
+  const interruptedEvents = await transcriptStore.readEventsBySession(session.sessionId);
+  assert.ok(
+    interruptedEvents.some((event) =>
+      event.type === "tool.execution.completed" && event.payload.summary.startsWith("node-todo/app.js:1-1 · updated")
+    ),
+    "interrupted verifier-shift task should preserve the app.js edit before the explicit new task"
+  );
+  assert.ok(
+    interruptedEvents.some((event) =>
+      event.type === "tool.execution.completed" && event.payload.summary.startsWith("node-todo/views/index.ejs:1-1 · updated")
+    ),
+    "interrupted verifier-shift task should preserve the view edit before the explicit new task"
+  );
+  assert.ok(
+    interruptedEvents.some((event) =>
+      event.type === "assistant.delta.received"
+      && /remaining exact-output gap is now in node-todo\/verify-exact\.mjs/.test(event.payload.delta)
+    ),
+    "interrupted verifier-shift task should preserve the narrowed verifier handoff before the explicit new task"
+  );
+  assert.equal(
+    interruptedEvents.some((event) =>
+      event.type === "tool.execution.completed" && event.payload.summary.startsWith("node-todo/verify-exact.mjs:1-")
+    ),
+    false,
+    "interrupted verifier-shift task should stop before reading the verifier file"
+  );
+
+  const newTaskResult = await runAgentTask({
+    bus,
+    transcriptStore,
+    sessionId: session.sessionId,
+    prompt: "Create new.txt with the content new-task."
+  });
+
+  const newContent = await readFile(join(workspace, "new.txt"), "utf8");
+  const verifierContent = await readFile(join(workspace, "node-todo", "verify-exact.mjs"), "utf8");
+  assert.equal(newContent, "new-task\n");
+  assert.match(verifierContent, /console\.log\("ready!"\)/);
+  assert.match(newTaskResult.assistantText, /Created new\.txt|new task|已处理 `new\.txt`|已完成/u);
+  assert.ok(
+    newTaskResult.toolSummaries.some((summary) => summary.startsWith("new.txt · created")),
+    "explicit new task should create new.txt instead of resuming the interrupted verifier-shift chain"
+  );
+  assert.equal(
+    newTaskResult.toolSummaries.some((summary) =>
+      summary.startsWith("node-todo/verify-exact.mjs:1-")
+      || summary.startsWith("node-todo/verify-exact.mjs:7-7 · updated")
+      || summary.startsWith("node node-todo/verify-exact.mjs · completed")
+    ),
+    false,
+    "explicit new task should not continue the interrupted verifier-shift chain"
+  );
+}
+
+async function verifyExplicitNewTaskDoesNotResumeInterruptedVerifierApproval() {
+  const root = await mkdtemp(join(tmpdir(), "selfme-agent-explicit-new-task-verifier-approval-"));
+  const workspace = join(root, "workspace");
+  const transcriptPath = join(root, "transcript.jsonl");
+  const logsPath = join(root, "logs.jsonl");
+  await mkdir(join(workspace, "node-todo", "views"), { recursive: true });
+
+  await writeFile(
+    join(workspace, "node-todo", "app.js"),
+    'const PORT = 3000;\nconsole.log(PORT);\n',
+    "utf8"
+  );
+  await writeFile(
+    join(workspace, "node-todo", "views", "index.ejs"),
+    '<input name="title" />\n',
+    "utf8"
+  );
+  await writeFile(
+    join(workspace, "node-todo", "verify-exact.mjs"),
+    [
+      'import { readFileSync } from "node:fs";',
+      'const app = readFileSync(new URL("./app.js", import.meta.url), "utf8");',
+      'const view = readFileSync(new URL("./views/index.ejs", import.meta.url), "utf8");',
+      'const appReady = /process\\.env\\.PORT/.test(app);',
+      'const viewReady = /maxlength="100"/.test(view);',
+      'if (appReady && viewReady) {',
+      '  console.log("ready!");',
+      '} else if (appReady) {',
+      '  console.log("app-only");',
+      '} else if (viewReady) {',
+      '  console.log("view-only");',
+      '} else {',
+      '  console.log("not-ready");',
+      '}'
+    ].join("\n") + "\n",
+    "utf8"
+  );
+
+  class ExplicitNewTaskAfterVerifierApprovalProvider implements ProviderClient {
+    readonly name = "explicit-new-task-after-verifier-approval-provider";
+
+    async *streamResponse(input: ProviderStreamInput): AsyncIterable<ProviderStreamChunk> {
+      const originalPrompt = "看看项目，然后直接优化 node-todo：把 node-todo/app.js 的端口改成 process.env.PORT，再给 node-todo/views/index.ejs 的 title input 加上 maxlength 100，并运行 `node node-todo/verify-exact.mjs` 验证，直到输出 exactly `ready`。";
+
+      if (input.content === originalPrompt) {
+        yield {
+          delta: toolCall("shell", {
+            command: "pwd && ls -la && find . -maxdepth 2 -type f | sed 's#^./##' | sort | head -200"
+          })
+        };
+        return;
+      }
+
+      if (input.content === "Create new.txt with the content new-task.") {
+        yield {
+          delta: toolCall("write", {
+            path: "new.txt",
+            content: "new-task\n"
+          })
+        };
+        return;
+      }
+
+      if (input.content.startsWith("The user replied ") && input.content.includes("wants to continue the most recent unfinished task.")) {
+        assert.fail("explicit new task should not be rewritten into an interrupted verifier-approval resume follow-up");
+      }
+
+      if (input.content.startsWith("Original user request: Create new.txt with the content new-task.")) {
+        yield { delta: "Created new.txt for the new task without resuming the interrupted verifier approval repair." };
+        return;
+      }
+
+      if (input.content.startsWith(`Original user request: ${originalPrompt}`)) {
+        const toolName = extractLine(input.content, "Tool:") ?? extractLine(input.content, "Latest tool:");
+        const summary = extractLine(input.content, "Summary:") ?? extractLine(input.content, "Latest summary:") ?? "";
+
+        if (toolName === "shell") {
+          if (/You are in the middle of a concrete project inspection request\./.test(input.content)) {
+            yield {
+              delta: toolCall("files", {
+                path: "node-todo/package.json",
+                startLine: 1,
+                endLine: 20
+              })
+            };
+            return;
+          }
+
+          if (/app-only/.test(input.content)) {
+            yield {
+              delta: toolCall("files", {
+                path: "node-todo/views/index.ejs",
+                startLine: 1,
+                endLine: 3
+              })
+            };
+            return;
+          }
+
+          if (/ready!/.test(input.content)) {
+            yield {
+              delta: toolCall("files", {
+                path: "node-todo/verify-exact.mjs",
+                startLine: 1,
+                endLine: 20
+              })
+            };
+            return;
+          }
+
+          assert.match(input.content, /\bready\b/);
+          yield { delta: "Completed the verifier approval chain." };
+          return;
+        }
+
+        if (toolName === "files" && /node-todo\/package\.json/.test(summary)) {
+          yield {
+            delta: toolCall("files", {
+              path: "node-todo/app.js",
+              startLine: 1,
+              endLine: 5
+            })
+          };
+          return;
+        }
+
+        if (toolName === "files" && /node-todo\/app\.js/.test(summary)) {
+          yield {
+            delta: toolCall("edit", {
+              path: "node-todo/app.js",
+              startLine: 1,
+              endLine: 1,
+              replacement: "const PORT = Number(process.env.PORT || 3000);"
+            })
+          };
+          return;
+        }
+
+        if (toolName === "edit" && /node-todo\/app\.js/.test(summary)) {
+          yield {
+            delta: toolCall("shell", {
+              command: "node node-todo/verify-exact.mjs"
+            })
+          };
+          return;
+        }
+
+        if (toolName === "files" && /node-todo\/views\/index\.ejs/.test(summary)) {
+          yield {
+            delta: toolCall("edit", {
+              path: "node-todo/views/index.ejs",
+              startLine: 1,
+              endLine: 1,
+              replacement: '<input name="title" maxlength="100" />'
+            })
+          };
+          return;
+        }
+
+        if (toolName === "edit" && /node-todo\/views\/index\.ejs/.test(summary)) {
+          yield {
+            delta: toolCall("shell", {
+              command: "node node-todo/verify-exact.mjs"
+            })
+          };
+          return;
+        }
+
+        if (toolName === "files" && /node-todo\/verify-exact\.mjs/.test(summary)) {
+          yield {
+            delta: toolCall("edit", {
+              path: "node-todo/verify-exact.mjs",
+              startLine: 7,
+              endLine: 7,
+              replacement: '  console.log("ready");'
+            })
+          };
+          return;
+        }
+
+        if (toolName === "edit" && /node-todo\/verify-exact\.mjs/.test(summary)) {
+          yield {
+            delta: toolCall("shell", {
+              command: "node node-todo/verify-exact.mjs"
+            })
+          };
+          return;
+        }
+      }
+
+      yield { delta: "ok" };
+    }
+  }
+
+  const bus = new EventBus();
+  const transcriptStore = new TranscriptStore(transcriptPath);
+  const logStore = new LogStore(logsPath);
+  await transcriptStore.ensureInitialized();
+  await logStore.ensureInitialized();
+
+  const session = createDefaultSessionRecord(workspace, VERSION);
+  session.model = "regression-stub";
+
+  const runtime = new AgentRuntime({
+    bus,
+    provider: new ExplicitNewTaskAfterVerifierApprovalProvider(),
+    tools: new InMemoryToolRegistry(),
+    session,
+    transcriptStore,
+    logStore
+  });
+  await runtime.start();
+
+  let approvalCount = 0;
+  let heldApprovalId: string | undefined;
+  const pendingVerifierApprovalPromise = new Promise<Extract<RuntimeEvent, { type: "approval.requested" }>>((resolve) => {
+    bus.on("approval.requested", (event) => {
+      approvalCount += 1;
+
+      if (approvalCount < 3) {
+        bus.emit(createTerminalCommandInvokedEvent({
+          sessionId: event.sessionId,
+          content: `/approve ${event.payload.approvalId}`
+        }));
+        return;
+      }
+
+      heldApprovalId = event.payload.approvalId;
+      resolve(event);
+    });
+  });
+
+  const initialCompletion = waitForAssistantTaskCompletion(bus, session.sessionId);
+  bus.emit(createUserMessageSubmittedEvent({
+    sessionId: session.sessionId,
+    content: "看看项目，然后直接优化 node-todo：把 node-todo/app.js 的端口改成 process.env.PORT，再给 node-todo/views/index.ejs 的 title input 加上 maxlength 100，并运行 `node node-todo/verify-exact.mjs` 验证，直到输出 exactly `ready`。"
+  }));
+
+  const pendingVerifierApproval = await pendingVerifierApprovalPromise;
+  assert.equal(pendingVerifierApproval.payload.toolName, "edit");
+  assert.match(JSON.stringify(pendingVerifierApproval.payload.input), /console\.log\("ready"\)/);
+  bus.emit(createRuntimeInterruptRequestedEvent({
+    sessionId: session.sessionId,
+    reason: "cancel"
+  }));
+
+  const cancelledTask = await initialCompletion;
+  assert.equal(cancelledTask.payload.state, "cancelled");
+
+  const interruptedEvents = await transcriptStore.readEventsBySession(session.sessionId);
+  assert.ok(
+    interruptedEvents.some((event) =>
+      event.type === "tool.execution.completed" && event.payload.summary.startsWith("node-todo/verify-exact.mjs:1-20")
+    ),
+    "interrupted verifier-approval task should preserve the narrowed verifier file before the explicit new task"
+  );
+  assert.equal(
+    interruptedEvents.some((event) =>
+      event.type === "tool.execution.completed" && event.payload.summary.startsWith("node-todo/verify-exact.mjs:7-7 · updated")
+    ),
+    false,
+    "interrupted verifier-approval task should stop before the pending verifier edit is applied"
+  );
+  assert.ok(
+    interruptedEvents.some((event) =>
+      event.type === "approval.resolved"
+      && event.payload.approvalId === heldApprovalId
+      && !event.payload.approved
+    ),
+    "cancelling the verifier-approval chain should deny the held verifier approval"
+  );
+
+  const newTaskResult = await runAgentTask({
+    bus,
+    transcriptStore,
+    sessionId: session.sessionId,
+    prompt: "Create new.txt with the content new-task."
+  });
+
+  const newContent = await readFile(join(workspace, "new.txt"), "utf8");
+  const verifierContent = await readFile(join(workspace, "node-todo", "verify-exact.mjs"), "utf8");
+  assert.equal(newContent, "new-task\n");
+  assert.match(verifierContent, /console\.log\("ready!"\)/);
+  assert.match(newTaskResult.assistantText, /Created new\.txt|new task|已处理 `new\.txt`|已完成/u);
+  assert.ok(
+    newTaskResult.toolSummaries.some((summary) => summary.startsWith("new.txt · created")),
+    "explicit new task should create new.txt instead of resuming the interrupted verifier approval repair"
+  );
+  assert.equal(
+    newTaskResult.toolSummaries.some((summary) =>
+      summary.startsWith("node-todo/verify-exact.mjs:1-20")
+      || summary.startsWith("node-todo/verify-exact.mjs:7-7 · updated")
+      || summary.startsWith("node node-todo/verify-exact.mjs · completed")
+    ),
+    false,
+    "explicit new task should not continue the interrupted verifier approval repair"
+  );
+}
+
+async function verifyExplicitNewTaskDoesNotResumeInterruptedApprovedProposalVerifierApproval() {
+  const root = await mkdtemp(join(tmpdir(), "selfme-agent-explicit-new-task-approved-proposal-verifier-approval-"));
+  const workspace = join(root, "workspace");
+  const transcriptPath = join(root, "transcript.jsonl");
+  const logsPath = join(root, "logs.jsonl");
+  await mkdir(join(workspace, "node-todo", "views"), { recursive: true });
+
+  await writeFile(
+    join(workspace, "node-todo", "app.js"),
+    'const PORT = 3000;\nconsole.log(PORT);\n',
+    "utf8"
+  );
+  await writeFile(
+    join(workspace, "node-todo", "views", "index.ejs"),
+    '<input name="title" />\n',
+    "utf8"
+  );
+  await writeFile(
+    join(workspace, "node-todo", "verify-exact.mjs"),
+    [
+      'import { readFileSync } from "node:fs";',
+      'const app = readFileSync(new URL("./app.js", import.meta.url), "utf8");',
+      'const view = readFileSync(new URL("./views/index.ejs", import.meta.url), "utf8");',
+      'const appReady = /process\\.env\\.PORT/.test(app);',
+      'const viewReady = /maxlength="100"/.test(view);',
+      'if (appReady && viewReady) {',
+      '  console.log("ready!");',
+      '} else if (appReady) {',
+      '  console.log("app-only");',
+      '} else if (viewReady) {',
+      '  console.log("view-only");',
+      '} else {',
+      '  console.log("not-ready");',
+      '}'
+    ].join("\n") + "\n",
+    "utf8"
+  );
+
+  class ExplicitNewTaskAfterApprovedProposalVerifierApprovalProvider implements ProviderClient {
+    readonly name = "explicit-new-task-after-approved-proposal-verifier-approval-provider";
+
+    async *streamResponse(input: ProviderStreamInput): AsyncIterable<ProviderStreamChunk> {
+      const proposalPrompt = "先看看 node-todo，但先别改。";
+      const executeProposalPrompt = 'The user replied "可以" to approve the immediately previous proposal.';
+
+      if (input.content === proposalPrompt) {
+        yield {
+          delta: "我先看了 node-todo；如果你愿意，我下一步可以直接优化 node-todo/app.js 和 node-todo/views/index.ejs，并运行 node-todo/verify-exact.mjs 验证直到输出 exactly `ready`。"
+        };
+        return;
+      }
+
+      if (input.content === "Create new.txt with the content new-task.") {
+        yield {
+          delta: toolCall("write", {
+            path: "new.txt",
+            content: "new-task\n"
+          })
+        };
+        return;
+      }
+
+      if (input.content.startsWith("The user replied ") && input.content.includes("wants to continue the most recent unfinished task.")) {
+        assert.fail("explicit new task should not be rewritten into an interrupted-task resume follow-up after approved proposal verifier approval");
+      }
+
+      if (input.content.startsWith("Original user request: Create new.txt with the content new-task.")) {
+        yield { delta: "Created new.txt for the new task without resuming the interrupted verifier approval repair." };
+        return;
+      }
+
+      if (input.content.startsWith(executeProposalPrompt)) {
+        yield {
+          delta: toolCall("files", {
+            path: "node-todo/app.js",
+            startLine: 1,
+            endLine: 5
+          })
+        };
+        return;
+      }
+
+      if (input.content.startsWith(`Original user request: ${executeProposalPrompt}`)) {
+        const toolName = extractLine(input.content, "Tool:") ?? extractLine(input.content, "Latest tool:");
+        const summary = extractLine(input.content, "Summary:") ?? extractLine(input.content, "Latest summary:") ?? "";
+
+        if (toolName === "files" && /node-todo\/app\.js/.test(summary)) {
+          yield {
+            delta: toolCall("edit", {
+              path: "node-todo/app.js",
+              startLine: 1,
+              endLine: 1,
+              replacement: "const PORT = Number(process.env.PORT || 3000);"
+            })
+          };
+          return;
+        }
+
+        if (toolName === "edit" && /node-todo\/app\.js/.test(summary)) {
+          yield {
+            delta: toolCall("shell", {
+              command: "node node-todo/verify-exact.mjs"
+            })
+          };
+          return;
+        }
+
+        if (toolName === "shell" && /node node-todo\/verify-exact\.mjs/.test(summary)) {
+          if (/app-only/.test(input.content)) {
+            yield {
+              delta: toolCall("files", {
+                path: "node-todo/views/index.ejs",
+                startLine: 1,
+                endLine: 3
+              })
+            };
+            return;
+          }
+
+          if (/ready!/.test(input.content)) {
+            yield {
+              delta: toolCall("files", {
+                path: "node-todo/verify-exact.mjs",
+                startLine: 1,
+                endLine: 20
+              })
+            };
+            return;
+          }
+
+          assert.match(input.content, /\bready\b/);
+          yield { delta: "Completed the verifier approval chain." };
+          return;
+        }
+
+        if (toolName === "files" && /node-todo\/views\/index\.ejs/.test(summary)) {
+          yield {
+            delta: toolCall("edit", {
+              path: "node-todo/views/index.ejs",
+              startLine: 1,
+              endLine: 1,
+              replacement: '<input name="title" maxlength="100" />'
+            })
+          };
+          return;
+        }
+
+        if (toolName === "edit" && /node-todo\/views\/index\.ejs/.test(summary)) {
+          yield {
+            delta: toolCall("shell", {
+              command: "node node-todo/verify-exact.mjs"
+            })
+          };
+          return;
+        }
+
+        if (toolName === "files" && /node-todo\/verify-exact\.mjs/.test(summary)) {
+          yield {
+            delta: toolCall("edit", {
+              path: "node-todo/verify-exact.mjs",
+              startLine: 7,
+              endLine: 7,
+              replacement: '  console.log("ready");'
+            })
+          };
+          return;
+        }
+
+        if (toolName === "edit" && /node-todo\/verify-exact\.mjs/.test(summary)) {
+          yield {
+            delta: toolCall("shell", {
+              command: "node node-todo/verify-exact.mjs"
+            })
+          };
+          return;
+        }
+      }
+
+      yield { delta: "ok" };
+    }
+  }
+
+  const bus = new EventBus();
+  const transcriptStore = new TranscriptStore(transcriptPath);
+  const logStore = new LogStore(logsPath);
+  await transcriptStore.ensureInitialized();
+  await logStore.ensureInitialized();
+
+  const session = createDefaultSessionRecord(workspace, VERSION);
+  session.model = "regression-stub";
+
+  const runtime = new AgentRuntime({
+    bus,
+    provider: new ExplicitNewTaskAfterApprovedProposalVerifierApprovalProvider(),
+    tools: new InMemoryToolRegistry(),
+    session,
+    transcriptStore,
+    logStore
+  });
+  await runtime.start();
+
+  let heldApprovalId: string | undefined;
+  const verifierApprovalRequested = new Promise<void>((resolve) => {
+    let resolved = false;
+
+    bus.on("approval.requested", (event) => {
+      if (resolved || event.sessionId !== session.sessionId) {
+        return;
+      }
+
+      if (!/verify-exact\.mjs/.test(JSON.stringify(event.payload.input))) {
+        return;
+      }
+
+      resolved = true;
+      heldApprovalId = event.payload.approvalId;
+      resolve();
+    });
+  });
+
+  bus.on("approval.requested", (event) => {
+    if (event.sessionId !== session.sessionId) {
+      return;
+    }
+
+    if (/verify-exact\.mjs/.test(JSON.stringify(event.payload.input)) && !heldApprovalId) {
+      return;
+    }
+
+    if (event.payload.approvalId === heldApprovalId) {
+      return;
+    }
+
+    bus.emit(createTerminalCommandInvokedEvent({
+      sessionId: event.sessionId,
+      content: `/approve ${event.payload.approvalId}`
+    }));
+  });
+
+  const proposalResult = await runAgentTask({
+    bus,
+    transcriptStore,
+    sessionId: session.sessionId,
+    prompt: "先看看 node-todo，但先别改。"
+  });
+  assert.match(proposalResult.assistantText, /node-todo\/app\.js/i);
+  assert.match(proposalResult.assistantText, /node-todo\/views\/index\.ejs/i);
+
+  const firstRunCompletion = waitForAssistantTaskCompletion(bus, session.sessionId);
+  bus.emit(createUserMessageSubmittedEvent({
+    sessionId: session.sessionId,
+    content: "可以"
+  }));
+
+  await verifierApprovalRequested;
+  bus.emit(createRuntimeInterruptRequestedEvent({
+    sessionId: session.sessionId,
+    reason: "cancel"
+  }));
+
+  const cancelledTask = await firstRunCompletion;
+  assert.equal(cancelledTask.payload.state, "cancelled");
+
+  const interruptedEvents = await transcriptStore.readEventsBySession(session.sessionId);
+  assert.ok(
+    interruptedEvents.some((event) =>
+      event.type === "tool.execution.completed"
+      && event.payload.summary.startsWith("node-todo/verify-exact.mjs:1-20")
+    ),
+    "approved proposal verifier approval interruption should preserve the narrowed verifier file before the explicit new task"
+  );
+  assert.equal(
+    interruptedEvents.some((event) =>
+      event.type === "tool.execution.completed"
+      && event.payload.summary.startsWith("node-todo/verify-exact.mjs:7-7 · updated")
+    ),
+    false,
+    "approved proposal verifier approval interruption should stop before the verifier edit is applied"
+  );
+  assert.ok(
+    interruptedEvents.some((event) =>
+      event.type === "approval.resolved"
+      && event.payload.approvalId === heldApprovalId
+      && !event.payload.approved
+    ),
+    "interrupting the approved proposal verifier approval task should deny the held verifier approval"
+  );
+
+  const newTaskResult = await runAgentTask({
+    bus,
+    transcriptStore,
+    sessionId: session.sessionId,
+    prompt: "Create new.txt with the content new-task."
+  });
+
+  const newContent = await readFile(join(workspace, "new.txt"), "utf8");
+  const verifierContent = await readFile(join(workspace, "node-todo", "verify-exact.mjs"), "utf8");
+  assert.equal(newContent, "new-task\n");
+  assert.doesNotMatch(verifierContent, /console\.log\("ready"\)/);
+  assert.match(newTaskResult.assistantText, /Created new\.txt|new task|已处理 `new\.txt`|已完成/u);
+  assert.ok(
+    newTaskResult.toolSummaries.some((summary) => summary.startsWith("new.txt · created")),
+    "explicit new task should create new.txt instead of resuming the interrupted verifier approval repair"
+  );
+  assert.equal(
+    newTaskResult.toolSummaries.some((summary) =>
+      summary.startsWith("node-todo/verify-exact.mjs:1-20")
+      || summary.startsWith("node-todo/verify-exact.mjs:7-7 · updated")
+      || summary.startsWith("node node-todo/verify-exact.mjs · completed")
+    ),
+    false,
+    "explicit new task should not continue any verifier approval repair steps"
   );
 }
 
@@ -31694,6 +34011,227 @@ async function verifyProjectCommandStageSummaryResume() {
   );
 }
 
+async function verifyExplicitNewTaskDoesNotResumeInterruptedCommandStageTask() {
+  const root = await mkdtemp(join(tmpdir(), "selfme-agent-explicit-new-task-command-stage-"));
+  const workspace = join(root, "workspace");
+  const transcriptPath = join(root, "transcript.jsonl");
+  const logsPath = join(root, "logs.jsonl");
+  await mkdir(workspace, { recursive: true });
+  await mkdir(join(workspace, "node-todo"), { recursive: true });
+
+  await writeFile(
+    join(workspace, "node-todo", "package.json"),
+    '{\n  "name": "node-todo",\n  "version": "1.0.0",\n  "scripts": {\n    "start": "node app.js"\n  }\n}\n',
+    "utf8"
+  );
+  await writeFile(
+    join(workspace, "node-todo", "app.js"),
+    'const express = require("express");\nconst app = express();\nconst PORT = 3000;\napp.listen(PORT, () => {\n  console.log(`Todo app is running at http://localhost:${PORT}`);\n});\n',
+    "utf8"
+  );
+  await writeFile(
+    join(workspace, "node-todo", "verify-setup.mjs"),
+    [
+      'import { readFileSync } from "node:fs";',
+      'const app = readFileSync(new URL("./app.js", import.meta.url), "utf8");',
+      'console.log(/process\\.env\\.PORT/.test(app) ? "ready" : "pending");'
+    ].join("\n") + "\n",
+    "utf8"
+  );
+
+  class ExplicitNewTaskAfterCommandStageProvider implements ProviderClient {
+    readonly name = "explicit-new-task-after-command-stage-provider";
+
+    async *streamResponse(input: ProviderStreamInput): AsyncIterable<ProviderStreamChunk> {
+      const originalPrompt = "看看项目，然后直接优化 node-todo：把 node-todo/app.js 的端口改成 process.env.PORT，并运行 `node node-todo/verify-setup.mjs` 验证，直到输出 exactly `ready`。";
+
+      if (input.content === originalPrompt) {
+        yield {
+          delta: toolCall("shell", {
+            command: "pwd && ls -la && find . -maxdepth 2 -type f | sed 's#^./##' | sort | head -200"
+          })
+        };
+        return;
+      }
+
+      if (input.content === "Create new.txt with the content new-task.") {
+        yield {
+          delta: toolCall("write", {
+            path: "new.txt",
+            content: "new-task\n"
+          })
+        };
+        return;
+      }
+
+      if (input.content.startsWith("The user replied ") && input.content.includes("wants to continue the most recent unfinished task.")) {
+        assert.fail("explicit new task should not be rewritten into a command-stage resume follow-up");
+      }
+
+      if (input.content.startsWith("Original user request: Create new.txt with the content new-task.")) {
+        yield { delta: "Created new.txt for the new task without resuming the interrupted command-stage chain." };
+        return;
+      }
+
+      if (input.content.startsWith(`Original user request: ${originalPrompt}`)) {
+        const toolName = extractLine(input.content, "Tool:") ?? extractLine(input.content, "Latest tool:");
+        const summary = extractLine(input.content, "Summary:") ?? extractLine(input.content, "Latest summary:") ?? "";
+
+        if (toolName === "shell") {
+          if (/You are in the middle of a concrete project inspection request\./.test(input.content)) {
+            yield {
+              delta: toolCall("files", {
+                path: "node-todo/package.json",
+                startLine: 1,
+                endLine: 20
+              })
+            };
+            return;
+          }
+
+          assert.match(input.content, /ready/);
+          yield { delta: "Completed the command-stage chain and verified the final output is ready." };
+          return;
+        }
+
+        if (toolName === "files" && /node-todo\/package\.json/.test(summary)) {
+          yield {
+            delta: toolCall("files", {
+              path: "node-todo/app.js",
+              startLine: 1,
+              endLine: 20
+            })
+          };
+          return;
+        }
+
+        if (toolName === "files" && /node-todo\/app\.js/.test(summary)) {
+          yield {
+            delta: toolCall("edit", {
+              path: "node-todo/app.js",
+              startLine: 3,
+              endLine: 3,
+              replacement: "const PORT = Number(process.env.PORT || 3000);"
+            })
+          };
+          return;
+        }
+
+        if (toolName === "edit" && /node-todo\/app\.js/.test(summary)) {
+          if (
+            /You are already inside the execution phase of a concrete task\./.test(input.content)
+            || /You are still inside the same multi-step task\./.test(input.content)
+          ) {
+            yield {
+              delta: toolCall("shell", {
+                command: "node node-todo/verify-setup.mjs"
+              })
+            };
+            return;
+          }
+
+          yield {
+            delta: "I updated node-todo/app.js and will rerun node node-todo/verify-setup.mjs next."
+          };
+          return;
+        }
+      }
+
+      yield { delta: "ok" };
+    }
+  }
+
+  const bus = new EventBus();
+  const transcriptStore = new TranscriptStore(transcriptPath);
+  const logStore = new LogStore(logsPath);
+  await transcriptStore.ensureInitialized();
+  await logStore.ensureInitialized();
+
+  const session = createDefaultSessionRecord(workspace, VERSION);
+  session.model = "regression-stub";
+
+  const runtime = new AgentRuntime({
+    bus,
+    provider: new ExplicitNewTaskAfterCommandStageProvider(),
+    tools: new InMemoryToolRegistry(),
+    session,
+    transcriptStore,
+    logStore
+  });
+  await runtime.start();
+
+  bus.on("approval.requested", (event) => {
+    bus.emit(createTerminalCommandInvokedEvent({
+      sessionId: event.sessionId,
+      content: `/approve ${event.payload.approvalId}`
+    }));
+  });
+
+  const initialCompletion = waitForAssistantTaskCompletion(bus, session.sessionId);
+  const stageSummaryPromise = waitForAssistantDeltaContaining(
+    bus,
+    session.sessionId,
+    /I updated node-todo\/app\.js and will rerun node node-todo\/verify-setup\.mjs next\./
+  );
+  bus.emit(createUserMessageSubmittedEvent({
+    sessionId: session.sessionId,
+    content: "看看项目，然后直接优化 node-todo：把 node-todo/app.js 的端口改成 process.env.PORT，并运行 `node node-todo/verify-setup.mjs` 验证，直到输出 exactly `ready`。"
+  }));
+
+  await stageSummaryPromise;
+  bus.emit(createRuntimeInterruptRequestedEvent({
+    sessionId: session.sessionId,
+    reason: "cancel"
+  }));
+
+  const cancelledTask = await initialCompletion;
+  assert.equal(cancelledTask.payload.state, "cancelled");
+
+  const interruptedEvents = await transcriptStore.readEventsBySession(session.sessionId);
+  assert.ok(
+    interruptedEvents.some((event) =>
+      event.type === "tool.execution.completed" && event.payload.summary.startsWith("node-todo/app.js:3-3 · updated")
+    ),
+    "interrupted command-stage task should preserve the app.js edit before the explicit new task"
+  );
+  assert.ok(
+    interruptedEvents.some((event) =>
+      event.type === "assistant.delta.received"
+      && /I updated node-todo\/app\.js and will rerun node node-todo\/verify-setup\.mjs next\./.test(event.payload.delta)
+    ),
+    "interrupted command-stage task should preserve the command-stage summary before the explicit new task"
+  );
+  assert.equal(
+    interruptedEvents.some((event) =>
+      event.type === "tool.execution.completed" && event.payload.summary.startsWith("node node-todo/verify-setup.mjs · completed")
+    ),
+    false,
+    "interrupted command-stage task should stop before rerunning the verification command"
+  );
+
+  const newTaskResult = await runAgentTask({
+    bus,
+    transcriptStore,
+    sessionId: session.sessionId,
+    prompt: "Create new.txt with the content new-task."
+  });
+
+  const newContent = await readFile(join(workspace, "new.txt"), "utf8");
+  const appContent = await readFile(join(workspace, "node-todo", "app.js"), "utf8");
+  assert.equal(newContent, "new-task\n");
+  assert.match(appContent, /process\.env\.PORT/);
+  assert.match(newTaskResult.assistantText, /Created new\.txt|new task|已处理 `new\.txt`|已完成/u);
+  assert.ok(
+    newTaskResult.toolSummaries.some((summary) => summary.startsWith("new.txt · created")),
+    "explicit new task should create new.txt instead of resuming the interrupted command-stage chain"
+  );
+  assert.equal(
+    newTaskResult.toolSummaries.some((summary) => summary.startsWith("node node-todo/verify-setup.mjs · completed")),
+    false,
+    "explicit new task should not continue the interrupted command-stage verification command"
+  );
+}
+
 async function verifyResumeFollowUpInImplicitProjectStageSummaryChain() {
   await verifyImplicitProjectStageSummaryResume("还能继续吗");
 }
@@ -36191,6 +38729,1128 @@ async function verifyApproveFollowUpDoesNotLeakOldProposalIntoNewInspectProposal
   );
 }
 
+async function verifyApproveFollowUpDoesNotLeakOldProposalIntoInterruptedApprovedProposalVerifierApproval() {
+  const root = await mkdtemp(join(tmpdir(), "selfme-agent-no-stale-proposal-approved-verifier-approval-"));
+  const workspace = join(root, "workspace");
+  const transcriptPath = join(root, "transcript.jsonl");
+  const logsPath = join(root, "logs.jsonl");
+  await mkdir(join(workspace, "node-todo", "views"), { recursive: true });
+
+  await writeFile(
+    join(workspace, "node-todo", "app.js"),
+    'const PORT = 3000;\nconsole.log(PORT);\n',
+    "utf8"
+  );
+  await writeFile(
+    join(workspace, "node-todo", "views", "index.ejs"),
+    '<input name="title" />\n',
+    "utf8"
+  );
+  await writeFile(
+    join(workspace, "node-todo", "verify-exact.mjs"),
+    [
+      'import { readFileSync } from "node:fs";',
+      'const app = readFileSync(new URL("./app.js", import.meta.url), "utf8");',
+      'const view = readFileSync(new URL("./views/index.ejs", import.meta.url), "utf8");',
+      'const appReady = /process\\.env\\.PORT/.test(app);',
+      'const viewReady = /maxlength="100"/.test(view);',
+      'if (appReady && viewReady) {',
+      '  console.log("ready!");',
+      '} else if (appReady) {',
+      '  console.log("app-only");',
+      '} else if (viewReady) {',
+      '  console.log("view-only");',
+      '} else {',
+      '  console.log("not-ready");',
+      '}'
+    ].join("\n") + "\n",
+    "utf8"
+  );
+
+  class NoStaleProposalIntoInterruptedApprovedVerifierApprovalProvider implements ProviderClient {
+    readonly name = "no-stale-proposal-into-interrupted-approved-verifier-approval-provider";
+
+    async *streamResponse(input: ProviderStreamInput): AsyncIterable<ProviderStreamChunk> {
+      const olderPrompt = "帮我优化下 old-demo";
+      const proposalPrompt = "先看看 node-todo，但先别改。";
+      const executeProposalPrompt = 'The user replied "可以" to approve the immediately previous proposal.';
+      const resumePrompt = 'The user replied "可以" and wants to continue the most recent unfinished task.';
+
+      if (input.content === olderPrompt) {
+        yield {
+          delta: "我先看了一下 old-demo；如果你愿意，我下一步可以直接改 old-demo/app.js。"
+        };
+        return;
+      }
+
+      if (input.content === proposalPrompt) {
+        yield {
+          delta: "我先看了 node-todo；如果你愿意，我下一步可以直接优化 node-todo/app.js 和 node-todo/views/index.ejs，并运行 `node node-todo/verify-exact.mjs` 验证直到输出 exactly `ready`。"
+        };
+        return;
+      }
+
+      if (input.content.startsWith(executeProposalPrompt)) {
+        assert.match(input.content, /Approved proposal: .*node-todo\/app\.js.*node-todo\/views\/index\.ejs.*verify-exact\.mjs/u);
+        assert.doesNotMatch(input.content, /old-demo\/app\.js/u);
+        yield {
+          delta: toolCall("files", {
+            path: "node-todo/app.js",
+            startLine: 1,
+            endLine: 5
+          })
+        };
+        return;
+      }
+
+      if (input.content.startsWith(`Original user request: ${executeProposalPrompt}`)) {
+        const toolName = extractLine(input.content, "Tool:") ?? extractLine(input.content, "Latest tool:");
+        const summary = extractLine(input.content, "Summary:") ?? extractLine(input.content, "Latest summary:") ?? "";
+
+        if (toolName === "files" && /node-todo\/app\.js/.test(summary)) {
+          yield {
+            delta: toolCall("edit", {
+              path: "node-todo/app.js",
+              startLine: 1,
+              endLine: 1,
+              replacement: "const PORT = Number(process.env.PORT || 3000);"
+            })
+          };
+          return;
+        }
+
+        if (toolName === "edit" && /node-todo\/app\.js/.test(summary)) {
+          yield {
+            delta: toolCall("shell", {
+              command: "node node-todo/verify-exact.mjs"
+            })
+          };
+          return;
+        }
+
+        if (toolName === "shell" && /node node-todo\/verify-exact\.mjs/.test(summary)) {
+          if (/app-only/.test(input.content)) {
+            yield {
+              delta: toolCall("files", {
+                path: "node-todo/views/index.ejs",
+                startLine: 1,
+                endLine: 3
+              })
+            };
+            return;
+          }
+
+          if (/ready!/.test(input.content)) {
+            yield {
+              delta: toolCall("files", {
+                path: "node-todo/verify-exact.mjs",
+                startLine: 1,
+                endLine: 20
+              })
+            };
+            return;
+          }
+
+          assert.match(input.content, /\bready\b/);
+          yield { delta: "Completed the resumed verifier approval repair." };
+          return;
+        }
+
+        if (toolName === "files" && /node-todo\/views\/index\.ejs/.test(summary)) {
+          yield {
+            delta: toolCall("edit", {
+              path: "node-todo/views/index.ejs",
+              startLine: 1,
+              endLine: 1,
+              replacement: '<input name="title" maxlength="100" />'
+            })
+          };
+          return;
+        }
+
+        if (toolName === "edit" && /node-todo\/views\/index\.ejs/.test(summary)) {
+          yield {
+            delta: toolCall("shell", {
+              command: "node node-todo/verify-exact.mjs"
+            })
+          };
+          return;
+        }
+
+        if (toolName === "files" && /node-todo\/verify-exact\.mjs/.test(summary)) {
+          yield {
+            delta: toolCall("edit", {
+              path: "node-todo/verify-exact.mjs",
+              startLine: 7,
+              endLine: 7,
+              replacement: '  console.log("ready");'
+            })
+          };
+          return;
+        }
+
+        if (toolName === "edit" && /node-todo\/verify-exact\.mjs/.test(summary)) {
+          yield {
+            delta: toolCall("shell", {
+              command: "node node-todo/verify-exact.mjs"
+            })
+          };
+          return;
+        }
+      }
+
+      if (input.content.startsWith(resumePrompt)) {
+        assert.match(input.content, /Original task: .*optimi(?:s|z)e node-todo.*node-todo\/app\.js.*node-todo\/views\/index\.ejs.*verify-exact\.mjs/i);
+        assert.match(input.content, /Latest tool in context: files/);
+        assert.match(input.content, /Latest tool summary in context: node-todo\/verify-exact\.mjs:1-20/);
+        assert.match(input.content, /Interrupted pending approval: edit · node-todo\/verify-exact\.mjs:7-7/);
+        assert.doesNotMatch(input.content, /Approved proposal:/);
+        assert.doesNotMatch(input.content, /execute the immediately previous optimize proposal/i);
+        assert.doesNotMatch(input.content, /old-demo\/app\.js/u);
+        yield {
+          delta: toolCall("edit", {
+            path: "node-todo/verify-exact.mjs",
+            startLine: 7,
+            endLine: 7,
+            replacement: '  console.log("ready");'
+          })
+        };
+        return;
+      }
+
+      if (input.content.startsWith(`Original user request: ${resumePrompt}`)) {
+        const toolName = extractLine(input.content, "Tool:") ?? extractLine(input.content, "Latest tool:");
+        const summary = extractLine(input.content, "Summary:") ?? extractLine(input.content, "Latest summary:") ?? "";
+
+        if (toolName === "edit" && /node-todo\/verify-exact\.mjs/.test(summary)) {
+          yield {
+            delta: toolCall("shell", {
+              command: "node node-todo/verify-exact.mjs"
+            })
+          };
+          return;
+        }
+
+        if (toolName === "shell" && /node node-todo\/verify-exact\.mjs/.test(summary)) {
+          assert.match(input.content, /\bready\b/);
+          yield { delta: "Completed the resumed verifier approval repair." };
+          return;
+        }
+      }
+
+      yield { delta: "ok" };
+    }
+  }
+
+  const bus = new EventBus();
+  const transcriptStore = new TranscriptStore(transcriptPath);
+  const logStore = new LogStore(logsPath);
+  await transcriptStore.ensureInitialized();
+  await logStore.ensureInitialized();
+
+  const session = createDefaultSessionRecord(workspace, VERSION);
+  session.model = "regression-stub";
+
+  const runtime = new AgentRuntime({
+    bus,
+    provider: new NoStaleProposalIntoInterruptedApprovedVerifierApprovalProvider(),
+    tools: new InMemoryToolRegistry(),
+    session,
+    transcriptStore,
+    logStore
+  });
+  await runtime.start();
+
+  const oldProposalResult = await runAgentTask({
+    bus,
+    transcriptStore,
+    sessionId: session.sessionId,
+    prompt: "帮我优化下 old-demo"
+  });
+  assert.match(oldProposalResult.assistantText, /old-demo\/app\.js/);
+
+  const currentProposalResult = await runAgentTask({
+    bus,
+    transcriptStore,
+    sessionId: session.sessionId,
+    prompt: "先看看 node-todo，但先别改。"
+  });
+  assert.match(currentProposalResult.assistantText, /node-todo\/app\.js/);
+  assert.match(currentProposalResult.assistantText, /node-todo\/views\/index\.ejs/);
+
+  let approvalCount = 0;
+  let heldApprovalId: string | undefined;
+  let phaseTwo = false;
+  const pendingVerifierApprovalPromise = new Promise<Extract<RuntimeEvent, { type: "approval.requested" }>>((resolve) => {
+    bus.on("approval.requested", (event) => {
+      approvalCount += 1;
+
+      if (phaseTwo) {
+        bus.emit(createTerminalCommandInvokedEvent({
+          sessionId: event.sessionId,
+          content: `/approve ${event.payload.approvalId}`
+        }));
+        return;
+      }
+
+      if (approvalCount < 3) {
+        bus.emit(createTerminalCommandInvokedEvent({
+          sessionId: event.sessionId,
+          content: `/approve ${event.payload.approvalId}`
+        }));
+        return;
+      }
+
+      heldApprovalId = event.payload.approvalId;
+      resolve(event);
+    });
+  });
+
+  const approvedExecutionCompletion = waitForAssistantTaskCompletion(bus, session.sessionId);
+  bus.emit(createUserMessageSubmittedEvent({
+    sessionId: session.sessionId,
+    content: "可以"
+  }));
+
+  const pendingVerifierApproval = await pendingVerifierApprovalPromise;
+  assert.equal(pendingVerifierApproval.payload.toolName, "edit");
+  assert.match(JSON.stringify(pendingVerifierApproval.payload.input), /console\.log\("ready"\)/);
+  bus.emit(createRuntimeInterruptRequestedEvent({
+    sessionId: session.sessionId,
+    reason: "cancel"
+  }));
+
+  const cancelledTask = await approvedExecutionCompletion;
+  assert.equal(cancelledTask.payload.state, "cancelled");
+
+  const interruptedEvents = await transcriptStore.readEventsBySession(session.sessionId);
+  assert.ok(
+    interruptedEvents.some((event) =>
+      event.type === "approval.resolved"
+      && event.payload.approvalId === heldApprovalId
+      && !event.payload.approved
+    ),
+    "cancelling the approved proposal verifier chain should deny the held verifier approval"
+  );
+
+  phaseTwo = true;
+  const resumedResult = await runAgentTask({
+    bus,
+    transcriptStore,
+    sessionId: session.sessionId,
+    prompt: "可以"
+  });
+
+  const verifierContent = await readFile(join(workspace, "node-todo", "verify-exact.mjs"), "utf8");
+  assert.match(verifierContent, /console\.log\("ready"\)/);
+  assert.match(resumedResult.assistantText, /ready|verifier approval repair/i);
+  assert.equal(
+    resumedResult.toolSummaries.some((summary) => /old-demo/i.test(summary)),
+    false,
+    "approve follow-up should not jump back into the older stale proposal"
+  );
+  assert.ok(
+    resumedResult.toolSummaries.some((summary) => summary.startsWith("node-todo/verify-exact.mjs:7-7 · updated")),
+    "approve follow-up should resume the pending verifier edit instead of approving an older proposal"
+  );
+  assert.ok(
+    resumedResult.toolSummaries.some((summary) => summary.startsWith("node node-todo/verify-exact.mjs · completed")),
+    "approve follow-up should rerun exact verification after the resumed verifier edit"
+  );
+}
+
+async function verifyApproveFollowUpDoesNotLeakOldDeniedApprovalIntoInterruptedApprovedProposalVerifierApproval() {
+  const root = await mkdtemp(join(tmpdir(), "selfme-agent-no-stale-denied-approved-verifier-approval-"));
+  const workspace = join(root, "workspace");
+  const transcriptPath = join(root, "transcript.jsonl");
+  const logsPath = join(root, "logs.jsonl");
+  await mkdir(join(workspace, "node-todo", "views"), { recursive: true });
+
+  await writeFile(
+    join(workspace, "node-todo", "app.js"),
+    'const PORT = 3000;\nconsole.log(PORT);\n',
+    "utf8"
+  );
+  await writeFile(
+    join(workspace, "node-todo", "views", "index.ejs"),
+    '<input name="title" />\n',
+    "utf8"
+  );
+  await writeFile(
+    join(workspace, "node-todo", "verify-exact.mjs"),
+    [
+      'import { readFileSync } from "node:fs";',
+      'const app = readFileSync(new URL("./app.js", import.meta.url), "utf8");',
+      'const view = readFileSync(new URL("./views/index.ejs", import.meta.url), "utf8");',
+      'const appReady = /process\\.env\\.PORT/.test(app);',
+      'const viewReady = /maxlength="100"/.test(view);',
+      'if (appReady && viewReady) {',
+      '  console.log("ready!");',
+      '} else if (appReady) {',
+      '  console.log("app-only");',
+      '} else if (viewReady) {',
+      '  console.log("view-only");',
+      '} else {',
+      '  console.log("not-ready");',
+      '}'
+    ].join("\n") + "\n",
+    "utf8"
+  );
+
+  class NoStaleDeniedApprovalIntoInterruptedApprovedVerifierApprovalProvider implements ProviderClient {
+    readonly name = "no-stale-denied-approval-into-interrupted-approved-verifier-approval-provider";
+
+    async *streamResponse(input: ProviderStreamInput): AsyncIterable<ProviderStreamChunk> {
+      const deniedPrompt = "Create blocked-old.txt with the content hidden.";
+      const proposalPrompt = "先看看 node-todo，但先别改。";
+      const executeProposalPrompt = 'The user replied "可以" to approve the immediately previous proposal.';
+      const resumePrompt = 'The user replied "可以" and wants to continue the most recent unfinished task.';
+
+      if (input.content === deniedPrompt) {
+        yield {
+          delta: toolCall("write", {
+            path: "blocked-old.txt",
+            content: "hidden\n"
+          })
+        };
+        return;
+      }
+
+      if (input.content.startsWith(`Original user request: ${deniedPrompt}`)) {
+        assert.match(input.content, /denied by the user/i);
+        yield { delta: "I couldn't create blocked-old.txt because the write action was denied." };
+        return;
+      }
+
+      if (input.content === proposalPrompt) {
+        yield {
+          delta: "我先看了 node-todo；如果你愿意，我下一步可以直接优化 node-todo/app.js 和 node-todo/views/index.ejs，并运行 `node node-todo/verify-exact.mjs` 验证直到输出 exactly `ready`。"
+        };
+        return;
+      }
+
+      if (input.content.startsWith(executeProposalPrompt)) {
+        assert.match(input.content, /Approved proposal: .*node-todo\/app\.js.*node-todo\/views\/index\.ejs.*verify-exact\.mjs/u);
+        assert.doesNotMatch(input.content, /Latest denied approval:/);
+        assert.doesNotMatch(input.content, /blocked-old\.txt/u);
+        yield {
+          delta: toolCall("files", {
+            path: "node-todo/app.js",
+            startLine: 1,
+            endLine: 5
+          })
+        };
+        return;
+      }
+
+      if (input.content.startsWith(`Original user request: ${executeProposalPrompt}`)) {
+        const toolName = extractLine(input.content, "Tool:") ?? extractLine(input.content, "Latest tool:");
+        const summary = extractLine(input.content, "Summary:") ?? extractLine(input.content, "Latest summary:") ?? "";
+
+        if (toolName === "files" && /node-todo\/app\.js/.test(summary)) {
+          yield {
+            delta: toolCall("edit", {
+              path: "node-todo/app.js",
+              startLine: 1,
+              endLine: 1,
+              replacement: "const PORT = Number(process.env.PORT || 3000);"
+            })
+          };
+          return;
+        }
+
+        if (toolName === "edit" && /node-todo\/app\.js/.test(summary)) {
+          yield {
+            delta: toolCall("shell", {
+              command: "node node-todo/verify-exact.mjs"
+            })
+          };
+          return;
+        }
+
+        if (toolName === "shell" && /node node-todo\/verify-exact\.mjs/.test(summary)) {
+          if (/app-only/.test(input.content)) {
+            yield {
+              delta: toolCall("files", {
+                path: "node-todo/views/index.ejs",
+                startLine: 1,
+                endLine: 3
+              })
+            };
+            return;
+          }
+
+          if (/ready!/.test(input.content)) {
+            yield {
+              delta: toolCall("files", {
+                path: "node-todo/verify-exact.mjs",
+                startLine: 1,
+                endLine: 20
+              })
+            };
+            return;
+          }
+
+          assert.match(input.content, /\bready\b/);
+          yield { delta: "Completed the resumed verifier approval repair." };
+          return;
+        }
+
+        if (toolName === "files" && /node-todo\/views\/index\.ejs/.test(summary)) {
+          yield {
+            delta: toolCall("edit", {
+              path: "node-todo/views/index.ejs",
+              startLine: 1,
+              endLine: 1,
+              replacement: '<input name="title" maxlength="100" />'
+            })
+          };
+          return;
+        }
+
+        if (toolName === "edit" && /node-todo\/views\/index\.ejs/.test(summary)) {
+          yield {
+            delta: toolCall("shell", {
+              command: "node node-todo/verify-exact.mjs"
+            })
+          };
+          return;
+        }
+
+        if (toolName === "files" && /node-todo\/verify-exact\.mjs/.test(summary)) {
+          yield {
+            delta: toolCall("edit", {
+              path: "node-todo/verify-exact.mjs",
+              startLine: 7,
+              endLine: 7,
+              replacement: '  console.log("ready");'
+            })
+          };
+          return;
+        }
+
+        if (toolName === "edit" && /node-todo\/verify-exact\.mjs/.test(summary)) {
+          yield {
+            delta: toolCall("shell", {
+              command: "node node-todo/verify-exact.mjs"
+            })
+          };
+          return;
+        }
+      }
+
+      if (input.content.startsWith(resumePrompt)) {
+        assert.match(input.content, /Original task: .*optimi(?:s|z)e node-todo.*node-todo\/app\.js.*node-todo\/views\/index\.ejs.*verify-exact\.mjs/i);
+        assert.match(input.content, /Latest tool in context: files/);
+        assert.match(input.content, /Latest tool summary in context: node-todo\/verify-exact\.mjs:1-20/);
+        assert.match(input.content, /Interrupted pending approval: edit · node-todo\/verify-exact\.mjs:7-7/);
+        assert.doesNotMatch(input.content, /Latest denied approval:/);
+        assert.doesNotMatch(input.content, /Approved proposal:/);
+        assert.doesNotMatch(input.content, /blocked-old\.txt/u);
+        yield {
+          delta: toolCall("edit", {
+            path: "node-todo/verify-exact.mjs",
+            startLine: 7,
+            endLine: 7,
+            replacement: '  console.log("ready");'
+          })
+        };
+        return;
+      }
+
+      if (input.content.startsWith(`Original user request: ${resumePrompt}`)) {
+        const toolName = extractLine(input.content, "Tool:") ?? extractLine(input.content, "Latest tool:");
+        const summary = extractLine(input.content, "Summary:") ?? extractLine(input.content, "Latest summary:") ?? "";
+
+        if (toolName === "edit" && /node-todo\/verify-exact\.mjs/.test(summary)) {
+          yield {
+            delta: toolCall("shell", {
+              command: "node node-todo/verify-exact.mjs"
+            })
+          };
+          return;
+        }
+
+        if (toolName === "shell" && /node node-todo\/verify-exact\.mjs/.test(summary)) {
+          assert.match(input.content, /\bready\b/);
+          yield { delta: "Completed the resumed verifier approval repair." };
+          return;
+        }
+      }
+
+      yield { delta: "ok" };
+    }
+  }
+
+  const bus = new EventBus();
+  const transcriptStore = new TranscriptStore(transcriptPath);
+  const logStore = new LogStore(logsPath);
+  await transcriptStore.ensureInitialized();
+  await logStore.ensureInitialized();
+
+  const session = createDefaultSessionRecord(workspace, VERSION);
+  session.model = "regression-stub";
+
+  const runtime = new AgentRuntime({
+    bus,
+    provider: new NoStaleDeniedApprovalIntoInterruptedApprovedVerifierApprovalProvider(),
+    tools: new InMemoryToolRegistry(),
+    session,
+    transcriptStore,
+    logStore
+  });
+  await runtime.start();
+
+  let deniedApprovalCount = 0;
+  bus.on("approval.requested", (event) => {
+    if (event.payload.toolName === "write" && /blocked-old\.txt/.test(JSON.stringify(event.payload.input))) {
+      deniedApprovalCount += 1;
+      bus.emit(createTerminalCommandInvokedEvent({
+        sessionId: event.sessionId,
+        content: `/deny ${event.payload.approvalId}`
+      }));
+    }
+  });
+
+  const deniedResult = await runAgentTask({
+    bus,
+    transcriptStore,
+    sessionId: session.sessionId,
+    prompt: "Create blocked-old.txt with the content hidden."
+  });
+  assert.match(deniedResult.assistantText, /(denied|not approved)/i);
+  assert.equal(deniedApprovalCount, 1);
+
+  const currentProposalResult = await runAgentTask({
+    bus,
+    transcriptStore,
+    sessionId: session.sessionId,
+    prompt: "先看看 node-todo，但先别改。"
+  });
+  assert.match(currentProposalResult.assistantText, /node-todo\/app\.js/);
+  assert.match(currentProposalResult.assistantText, /node-todo\/views\/index\.ejs/);
+
+  let approvalCount = 0;
+  let heldApprovalId: string | undefined;
+  let phaseTwo = false;
+  const pendingVerifierApprovalPromise = new Promise<Extract<RuntimeEvent, { type: "approval.requested" }>>((resolve) => {
+    bus.on("approval.requested", (event) => {
+      if (event.payload.toolName === "write" && /blocked-old\.txt/.test(JSON.stringify(event.payload.input))) {
+        return;
+      }
+
+      approvalCount += 1;
+
+      if (phaseTwo) {
+        bus.emit(createTerminalCommandInvokedEvent({
+          sessionId: event.sessionId,
+          content: `/approve ${event.payload.approvalId}`
+        }));
+        return;
+      }
+
+      if (approvalCount < 3) {
+        bus.emit(createTerminalCommandInvokedEvent({
+          sessionId: event.sessionId,
+          content: `/approve ${event.payload.approvalId}`
+        }));
+        return;
+      }
+
+      heldApprovalId = event.payload.approvalId;
+      resolve(event);
+    });
+  });
+
+  const approvedExecutionCompletion = waitForAssistantTaskCompletion(bus, session.sessionId);
+  bus.emit(createUserMessageSubmittedEvent({
+    sessionId: session.sessionId,
+    content: "可以"
+  }));
+
+  const pendingVerifierApproval = await pendingVerifierApprovalPromise;
+  assert.equal(pendingVerifierApproval.payload.toolName, "edit");
+  assert.match(JSON.stringify(pendingVerifierApproval.payload.input), /console\.log\("ready"\)/);
+  bus.emit(createRuntimeInterruptRequestedEvent({
+    sessionId: session.sessionId,
+    reason: "cancel"
+  }));
+
+  const cancelledTask = await approvedExecutionCompletion;
+  assert.equal(cancelledTask.payload.state, "cancelled");
+
+  const interruptedEvents = await transcriptStore.readEventsBySession(session.sessionId);
+  assert.ok(
+    interruptedEvents.some((event) =>
+      event.type === "approval.resolved"
+      && event.payload.approvalId === heldApprovalId
+      && !event.payload.approved
+    ),
+    "cancelling the approved proposal verifier chain should deny the held verifier approval"
+  );
+
+  phaseTwo = true;
+  const resumedResult = await runAgentTask({
+    bus,
+    transcriptStore,
+    sessionId: session.sessionId,
+    prompt: "可以"
+  });
+
+  const verifierContent = await readFile(join(workspace, "node-todo", "verify-exact.mjs"), "utf8");
+  assert.match(verifierContent, /console\.log\("ready"\)/);
+  assert.match(resumedResult.assistantText, /ready|verifier approval repair/i);
+  assert.equal(
+    resumedResult.toolSummaries.some((summary) => /blocked-old\.txt/i.test(summary)),
+    false,
+    "approve follow-up should not leak the old denied approval target into the resumed verifier repair"
+  );
+  assert.ok(
+    resumedResult.toolSummaries.some((summary) => summary.startsWith("node-todo/verify-exact.mjs:7-7 · updated")),
+    "approve follow-up should resume the pending verifier edit instead of surfacing the old denied approval"
+  );
+  assert.ok(
+    resumedResult.toolSummaries.some((summary) => summary.startsWith("node node-todo/verify-exact.mjs · completed")),
+    "approve follow-up should rerun exact verification after the resumed verifier edit"
+  );
+}
+
+async function verifyApproveFollowUpDoesNotLeakMixedOldHistoryIntoInterruptedApprovedProposalVerifierApproval() {
+  await verifyMixedOldHistoryFollowUpDoesNotLeakIntoInterruptedApprovedProposalVerifierApproval("可以");
+}
+
+async function verifyBroadOptimizationFollowUpDoesNotLeakMixedOldHistoryIntoInterruptedApprovedProposalVerifierApproval() {
+  await verifyMixedOldHistoryFollowUpDoesNotLeakIntoInterruptedApprovedProposalVerifierApproval("帮我优化下");
+}
+
+async function verifyBroadInspectionFollowUpDoesNotLeakMixedOldHistoryIntoInterruptedApprovedProposalVerifierApproval() {
+  await verifyMixedOldHistoryFollowUpDoesNotLeakIntoInterruptedApprovedProposalVerifierApproval("帮我看看项目");
+}
+
+async function verifyMixedOldHistoryFollowUpDoesNotLeakIntoInterruptedApprovedProposalVerifierApproval(
+  followUpPrompt: "可以" | "帮我优化下" | "帮我看看项目"
+) {
+  const suffix = followUpPrompt === "可以"
+    ? "approve"
+    : followUpPrompt === "帮我优化下"
+      ? "optimize"
+      : "inspect";
+  const root = await mkdtemp(join(tmpdir(), `selfme-agent-no-stale-mixed-approved-verifier-approval-${suffix}-`));
+  const workspace = join(root, "workspace");
+  const transcriptPath = join(root, "transcript.jsonl");
+  const logsPath = join(root, "logs.jsonl");
+  await mkdir(join(workspace, "node-todo", "views"), { recursive: true });
+
+  await writeFile(join(workspace, "old-approval.mjs"), 'console.log("old-approval");\n', "utf8");
+  await writeFile(
+    join(workspace, "node-todo", "app.js"),
+    'const PORT = 3000;\nconsole.log(PORT);\n',
+    "utf8"
+  );
+  await writeFile(
+    join(workspace, "node-todo", "views", "index.ejs"),
+    '<input name="title" />\n',
+    "utf8"
+  );
+  await writeFile(
+    join(workspace, "node-todo", "verify-exact.mjs"),
+    [
+      'import { readFileSync } from "node:fs";',
+      'const app = readFileSync(new URL("./app.js", import.meta.url), "utf8");',
+      'const view = readFileSync(new URL("./views/index.ejs", import.meta.url), "utf8");',
+      'const appReady = /process\\.env\\.PORT/.test(app);',
+      'const viewReady = /maxlength="100"/.test(view);',
+      'if (appReady && viewReady) {',
+      '  console.log("ready!");',
+      '} else if (appReady) {',
+      '  console.log("app-only");',
+      '} else if (viewReady) {',
+      '  console.log("view-only");',
+      '} else {',
+      '  console.log("not-ready");',
+      '}'
+    ].join("\n") + "\n",
+    "utf8"
+  );
+
+  class NoStaleMixedHistoryIntoInterruptedApprovedVerifierApprovalProvider implements ProviderClient {
+    readonly name = "no-stale-mixed-history-into-interrupted-approved-verifier-approval-provider";
+
+    async *streamResponse(input: ProviderStreamInput): AsyncIterable<ProviderStreamChunk> {
+      const interruptedPrompt = "Edit old-approval.mjs directly.";
+      const deniedPrompt = "Create blocked-old.txt with the content hidden.";
+      const oldProposalPrompt = "帮我优化下 old-demo";
+      const proposalPrompt = "先看看 node-todo，但先别改。";
+      const executeProposalPrompt = 'The user replied "可以" to approve the immediately previous proposal.';
+      const resumePrompt = `The user replied "${followUpPrompt}" and wants to continue the most recent unfinished task.`;
+
+      if (input.content === interruptedPrompt) {
+        yield {
+          delta: toolCall("edit", {
+            path: "old-approval.mjs",
+            startLine: 1,
+            endLine: 1,
+            replacement: 'console.log("old-approval updated");'
+          })
+        };
+        return;
+      }
+
+      if (input.content === deniedPrompt) {
+        yield {
+          delta: toolCall("write", {
+            path: "blocked-old.txt",
+            content: "hidden\n"
+          })
+        };
+        return;
+      }
+
+      if (input.content.startsWith(`Original user request: ${deniedPrompt}`)) {
+        assert.match(input.content, /denied by the user/i);
+        yield { delta: "I couldn't create blocked-old.txt because the write action was denied." };
+        return;
+      }
+
+      if (input.content === oldProposalPrompt) {
+        yield {
+          delta: "我先看了一下 old-demo；如果你愿意，我下一步可以直接改 old-demo/app.js。"
+        };
+        return;
+      }
+
+      if (input.content === proposalPrompt) {
+        yield {
+          delta: "我先看了 node-todo；如果你愿意，我下一步可以直接优化 node-todo/app.js 和 node-todo/views/index.ejs，并运行 `node node-todo/verify-exact.mjs` 验证直到输出 exactly `ready`。"
+        };
+        return;
+      }
+
+      if (input.content.startsWith(executeProposalPrompt)) {
+        assert.match(input.content, /Approved proposal: .*node-todo\/app\.js.*node-todo\/views\/index\.ejs.*verify-exact\.mjs/u);
+        assert.doesNotMatch(input.content, /old-demo\/app\.js/u);
+        assert.doesNotMatch(input.content, /Latest denied approval:/);
+        assert.doesNotMatch(input.content, /Interrupted pending approval: edit · old-approval\.mjs:1-1/);
+        yield {
+          delta: toolCall("files", {
+            path: "node-todo/app.js",
+            startLine: 1,
+            endLine: 5
+          })
+        };
+        return;
+      }
+
+      if (input.content.startsWith(`Original user request: ${executeProposalPrompt}`)) {
+        const toolName = extractLine(input.content, "Tool:") ?? extractLine(input.content, "Latest tool:");
+        const summary = extractLine(input.content, "Summary:") ?? extractLine(input.content, "Latest summary:") ?? "";
+
+        if (toolName === "files" && /node-todo\/app\.js/.test(summary)) {
+          yield {
+            delta: toolCall("edit", {
+              path: "node-todo/app.js",
+              startLine: 1,
+              endLine: 1,
+              replacement: "const PORT = Number(process.env.PORT || 3000);"
+            })
+          };
+          return;
+        }
+
+        if (toolName === "edit" && /node-todo\/app\.js/.test(summary)) {
+          yield {
+            delta: toolCall("shell", {
+              command: "node node-todo/verify-exact.mjs"
+            })
+          };
+          return;
+        }
+
+        if (toolName === "shell" && /node node-todo\/verify-exact\.mjs/.test(summary)) {
+          if (/app-only/.test(input.content)) {
+            yield {
+              delta: toolCall("files", {
+                path: "node-todo/views/index.ejs",
+                startLine: 1,
+                endLine: 3
+              })
+            };
+            return;
+          }
+
+          if (/ready!/.test(input.content)) {
+            yield {
+              delta: toolCall("files", {
+                path: "node-todo/verify-exact.mjs",
+                startLine: 1,
+                endLine: 20
+              })
+            };
+            return;
+          }
+
+          assert.match(input.content, /\bready\b/);
+          yield { delta: "Completed the resumed verifier approval repair." };
+          return;
+        }
+
+        if (toolName === "files" && /node-todo\/views\/index\.ejs/.test(summary)) {
+          yield {
+            delta: toolCall("edit", {
+              path: "node-todo/views/index.ejs",
+              startLine: 1,
+              endLine: 1,
+              replacement: '<input name="title" maxlength="100" />'
+            })
+          };
+          return;
+        }
+
+        if (toolName === "edit" && /node-todo\/views\/index\.ejs/.test(summary)) {
+          yield {
+            delta: toolCall("shell", {
+              command: "node node-todo/verify-exact.mjs"
+            })
+          };
+          return;
+        }
+
+        if (toolName === "files" && /node-todo\/verify-exact\.mjs/.test(summary)) {
+          yield {
+            delta: toolCall("edit", {
+              path: "node-todo/verify-exact.mjs",
+              startLine: 7,
+              endLine: 7,
+              replacement: '  console.log("ready");'
+            })
+          };
+          return;
+        }
+
+        if (toolName === "edit" && /node-todo\/verify-exact\.mjs/.test(summary)) {
+          yield {
+            delta: toolCall("shell", {
+              command: "node node-todo/verify-exact.mjs"
+            })
+          };
+          return;
+        }
+      }
+
+      if (input.content.startsWith(resumePrompt)) {
+        assert.match(input.content, /Original task: .*optimi(?:s|z)e node-todo.*node-todo\/app\.js.*node-todo\/views\/index\.ejs.*verify-exact\.mjs/i);
+        assert.match(input.content, /Latest tool in context: files/);
+        assert.match(input.content, /Latest tool summary in context: node-todo\/verify-exact\.mjs:1-20/);
+        assert.match(input.content, /Interrupted pending approval: edit · node-todo\/verify-exact\.mjs:7-7/);
+        assert.doesNotMatch(input.content, /Approved proposal:/);
+        assert.doesNotMatch(input.content, /execute the immediately previous optimize proposal/i);
+        assert.doesNotMatch(input.content, /execute the immediately previous inspect proposal/i);
+        assert.doesNotMatch(input.content, /Latest denied approval:/);
+        assert.doesNotMatch(input.content, /Interrupted pending approval: edit · old-approval\.mjs:1-1/);
+        assert.doesNotMatch(input.content, /old-demo\/app\.js/u);
+        assert.doesNotMatch(input.content, /blocked-old\.txt/u);
+        yield {
+          delta: toolCall("edit", {
+            path: "node-todo/verify-exact.mjs",
+            startLine: 7,
+            endLine: 7,
+            replacement: '  console.log("ready");'
+          })
+        };
+        return;
+      }
+
+      if (input.content.startsWith(`Original user request: ${resumePrompt}`)) {
+        const toolName = extractLine(input.content, "Tool:") ?? extractLine(input.content, "Latest tool:");
+        const summary = extractLine(input.content, "Summary:") ?? extractLine(input.content, "Latest summary:") ?? "";
+
+        if (toolName === "edit" && /node-todo\/verify-exact\.mjs/.test(summary)) {
+          yield {
+            delta: toolCall("shell", {
+              command: "node node-todo/verify-exact.mjs"
+            })
+          };
+          return;
+        }
+
+        if (toolName === "shell" && /node node-todo\/verify-exact\.mjs/.test(summary)) {
+          assert.match(input.content, /\bready\b/);
+          yield { delta: "Completed the resumed verifier approval repair." };
+          return;
+        }
+      }
+
+      yield { delta: "ok" };
+    }
+  }
+
+  const bus = new EventBus();
+  const transcriptStore = new TranscriptStore(transcriptPath);
+  const logStore = new LogStore(logsPath);
+  await transcriptStore.ensureInitialized();
+  await logStore.ensureInitialized();
+
+  const session = createDefaultSessionRecord(workspace, VERSION);
+  session.model = "regression-stub";
+
+  const runtime = new AgentRuntime({
+    bus,
+    provider: new NoStaleMixedHistoryIntoInterruptedApprovedVerifierApprovalProvider(),
+    tools: new InMemoryToolRegistry(),
+    session,
+    transcriptStore,
+    logStore
+  });
+  await runtime.start();
+
+  const olderInterruptedCompletion = waitForAssistantTaskCompletion(bus, session.sessionId);
+  bus.emit(createUserMessageSubmittedEvent({
+    sessionId: session.sessionId,
+    content: "Edit old-approval.mjs directly."
+  }));
+
+  const oldApproval = await waitForApprovalRequest(bus, session.sessionId);
+  assert.equal(oldApproval.payload.toolName, "edit");
+  bus.emit(createRuntimeInterruptRequestedEvent({
+    sessionId: session.sessionId,
+    reason: "cancel"
+  }));
+
+  const olderCancelledTask = await olderInterruptedCompletion;
+  assert.equal(olderCancelledTask.payload.state, "cancelled");
+
+  const olderEvents = await transcriptStore.readEventsBySession(session.sessionId);
+  assert.ok(
+    olderEvents.some((event) =>
+      event.type === "approval.resolved"
+      && event.payload.approvalId === oldApproval.payload.approvalId
+      && !event.payload.approved
+    ),
+    "older interrupted task should leave behind a denied approval anchor"
+  );
+
+  let deniedApprovalCount = 0;
+  bus.on("approval.requested", (event) => {
+    if (event.payload.toolName === "write" && /blocked-old\.txt/.test(JSON.stringify(event.payload.input))) {
+      deniedApprovalCount += 1;
+      bus.emit(createTerminalCommandInvokedEvent({
+        sessionId: event.sessionId,
+        content: `/deny ${event.payload.approvalId}`
+      }));
+    }
+  });
+
+  const deniedResult = await runAgentTask({
+    bus,
+    transcriptStore,
+    sessionId: session.sessionId,
+    prompt: "Create blocked-old.txt with the content hidden."
+  });
+  assert.match(deniedResult.assistantText, /(denied|not approved)/i);
+  assert.equal(deniedApprovalCount, 1);
+
+  const oldProposalResult = await runAgentTask({
+    bus,
+    transcriptStore,
+    sessionId: session.sessionId,
+    prompt: "帮我优化下 old-demo"
+  });
+  assert.match(oldProposalResult.assistantText, /old-demo\/app\.js/);
+
+  const currentProposalResult = await runAgentTask({
+    bus,
+    transcriptStore,
+    sessionId: session.sessionId,
+    prompt: "先看看 node-todo，但先别改。"
+  });
+  assert.match(currentProposalResult.assistantText, /node-todo\/app\.js/);
+  assert.match(currentProposalResult.assistantText, /node-todo\/views\/index\.ejs/);
+
+  let approvalCount = 0;
+  let heldApprovalId: string | undefined;
+  let phaseTwo = false;
+  const pendingVerifierApprovalPromise = new Promise<Extract<RuntimeEvent, { type: "approval.requested" }>>((resolve) => {
+    bus.on("approval.requested", (event) => {
+      if (event.payload.toolName === "write" && /blocked-old\.txt/.test(JSON.stringify(event.payload.input))) {
+        return;
+      }
+
+      approvalCount += 1;
+
+      if (phaseTwo) {
+        bus.emit(createTerminalCommandInvokedEvent({
+          sessionId: event.sessionId,
+          content: `/approve ${event.payload.approvalId}`
+        }));
+        return;
+      }
+
+      if (approvalCount < 3) {
+        bus.emit(createTerminalCommandInvokedEvent({
+          sessionId: event.sessionId,
+          content: `/approve ${event.payload.approvalId}`
+        }));
+        return;
+      }
+
+      heldApprovalId = event.payload.approvalId;
+      resolve(event);
+    });
+  });
+
+  const approvedExecutionCompletion = waitForAssistantTaskCompletion(bus, session.sessionId);
+  bus.emit(createUserMessageSubmittedEvent({
+    sessionId: session.sessionId,
+    content: "可以"
+  }));
+
+  const pendingVerifierApproval = await pendingVerifierApprovalPromise;
+  assert.equal(pendingVerifierApproval.payload.toolName, "edit");
+  assert.match(JSON.stringify(pendingVerifierApproval.payload.input), /console\.log\("ready"\)/);
+  bus.emit(createRuntimeInterruptRequestedEvent({
+    sessionId: session.sessionId,
+    reason: "cancel"
+  }));
+
+  const cancelledTask = await approvedExecutionCompletion;
+  assert.equal(cancelledTask.payload.state, "cancelled");
+
+  const interruptedEvents = await transcriptStore.readEventsBySession(session.sessionId);
+  assert.ok(
+    interruptedEvents.some((event) =>
+      event.type === "approval.resolved"
+      && event.payload.approvalId === heldApprovalId
+      && !event.payload.approved
+    ),
+    "cancelling the approved proposal verifier chain should deny the held verifier approval"
+  );
+
+  phaseTwo = true;
+  const resumedResult = await runAgentTask({
+    bus,
+    transcriptStore,
+    sessionId: session.sessionId,
+    prompt: followUpPrompt
+  });
+
+  const verifierContent = await readFile(join(workspace, "node-todo", "verify-exact.mjs"), "utf8");
+  assert.match(verifierContent, /console\.log\("ready"\)/);
+  assert.match(resumedResult.assistantText, /ready|verifier approval repair/i);
+  assert.equal(
+    resumedResult.toolSummaries.some((summary) => /old-demo|blocked-old\.txt|old-approval\.mjs/i.test(summary)),
+    false,
+    `${suffix} follow-up should ignore every older history anchor and stay on the latest pending verifier repair`
+  );
+  assert.ok(
+    resumedResult.toolSummaries.some((summary) => summary.startsWith("node-todo/verify-exact.mjs:7-7 · updated")),
+    `${suffix} follow-up should resume the pending verifier edit when mixed old history exists`
+  );
+  assert.ok(
+    resumedResult.toolSummaries.some((summary) => summary.startsWith("node node-todo/verify-exact.mjs · completed")),
+    `${suffix} follow-up should rerun exact verification after the resumed verifier edit`
+  );
+}
+
 async function verifyResumeFollowUpAfterApprovalWaitInProjectChain() {
   await verifyApprovalWaitResumeInProjectChain("还能继续吗");
 }
@@ -39025,11 +42685,22 @@ async function verifyTerminalLoopContinuesBroadProjectImprovementAfterProjectEnt
 }
 
 async function verifyTerminalLoopStopAndResumeBroadProjectImprovementAfterProjectEntryExplanation() {
-  const root = await mkdtemp(join(tmpdir(), "selfme-agent-terminal-loop-project-entry-resume-"));
+  await verifyTerminalLoopStopAndResumeBroadProjectImprovementAfterProjectEntryExplanationWithFollowUp("还能继续吗");
+}
+
+async function verifyTerminalLoopStopAndResumeBroadProjectImprovementAfterProjectEntryExplanationBroadOptimizationFollowUp() {
+  await verifyTerminalLoopStopAndResumeBroadProjectImprovementAfterProjectEntryExplanationWithFollowUp("帮我优化下");
+}
+
+async function verifyTerminalLoopStopAndResumeBroadProjectImprovementAfterProjectEntryExplanationWithFollowUp(
+  followUpPrompt: "还能继续吗" | "帮我优化下"
+) {
+  const suffix = followUpPrompt === "还能继续吗" ? "resume" : "opt";
+  const root = await mkdtemp(join(tmpdir(), `selfme-agent-terminal-loop-project-entry-resume-${suffix}-`));
   const workspace = join(root, "workspace");
   const transcriptPath = join(root, "transcript.jsonl");
   const logsPath = join(root, "logs.jsonl");
-  const sessionId = "terminal-loop-project-entry-explanation-resume";
+  const sessionId = `terminal-loop-project-entry-explanation-resume-${suffix}`;
   const originalPrompt = "看看项目然后帮我优化下。如果你读到 package.json 后先长解释，也要继续实际优化。";
   await mkdir(join(workspace, "node-todo"), { recursive: true });
 
@@ -39119,7 +42790,7 @@ async function verifyTerminalLoopStopAndResumeBroadProjectImprovementAfterProjec
         return;
       }
 
-      if (input.content.startsWith('The user replied "还能继续吗" and wants to continue the most recent unfinished task.')) {
+      if (input.content.startsWith(`The user replied "${followUpPrompt}" and wants to continue the most recent unfinished task.`)) {
         assert.match(input.content, /Original task: 看看项目然后帮我优化下/);
         assert.match(input.content, /Pending next step target: node-todo\/app\.js/);
         assert.match(input.content, /Latest tool in context: files/);
@@ -39135,7 +42806,7 @@ async function verifyTerminalLoopStopAndResumeBroadProjectImprovementAfterProjec
       }
 
       if (
-        input.content.startsWith('Original user request: The user replied "还能继续吗" and wants to continue the most recent unfinished task.')
+        input.content.startsWith(`Original user request: The user replied "${followUpPrompt}" and wants to continue the most recent unfinished task.`)
       ) {
         const toolName = extractLine(input.content, "Tool:") ?? extractLine(input.content, "Latest tool:");
         const summary = extractLine(input.content, "Summary:") ?? extractLine(input.content, "Latest summary:") ?? "";
@@ -39271,7 +42942,7 @@ async function verifyTerminalLoopStopAndResumeBroadProjectImprovementAfterProjec
     );
 
     const resumedCompletion = waitForAssistantTaskCompletion(bus, sessionId);
-    process.stdin.emit("data", Buffer.from("还能继续吗\r"));
+    process.stdin.emit("data", Buffer.from(`${followUpPrompt}\r`));
     const resumedTask = await resumedCompletion;
     const resumedEvents = await transcriptStore.readEventsBySession(sessionId);
     const resumedAssistantText = collectAssistantText(resumedEvents, resumedTask.taskId ?? "");
@@ -39562,11 +43233,22 @@ async function verifyTerminalLoopContinuesBroadProjectImprovementAfterFirstWorkf
 }
 
 async function verifyTerminalLoopStopAndResumeBroadProjectImprovementAfterFirstWorkfileExplanation() {
-  const root = await mkdtemp(join(tmpdir(), "selfme-agent-terminal-loop-workfile-resume-"));
+  await verifyTerminalLoopStopAndResumeBroadProjectImprovementAfterFirstWorkfileExplanationWithFollowUp("还能继续吗");
+}
+
+async function verifyTerminalLoopStopAndResumeBroadProjectImprovementAfterFirstWorkfileExplanationBroadOptimizationFollowUp() {
+  await verifyTerminalLoopStopAndResumeBroadProjectImprovementAfterFirstWorkfileExplanationWithFollowUp("帮我优化下");
+}
+
+async function verifyTerminalLoopStopAndResumeBroadProjectImprovementAfterFirstWorkfileExplanationWithFollowUp(
+  followUpPrompt: "还能继续吗" | "帮我优化下"
+) {
+  const suffix = followUpPrompt === "还能继续吗" ? "resume" : "opt";
+  const root = await mkdtemp(join(tmpdir(), `selfme-agent-terminal-loop-workfile-resume-${suffix}-`));
   const workspace = join(root, "workspace");
   const transcriptPath = join(root, "transcript.jsonl");
   const logsPath = join(root, "logs.jsonl");
-  const sessionId = "terminal-loop-workfile-explanation-resume";
+  const sessionId = `terminal-loop-workfile-explanation-resume-${suffix}`;
   const originalPrompt = "看看项目然后帮我优化下。如果你读到 app.js 后先长解释，也要继续实际优化。";
   await mkdir(join(workspace, "node-todo"), { recursive: true });
 
@@ -39656,7 +43338,7 @@ async function verifyTerminalLoopStopAndResumeBroadProjectImprovementAfterFirstW
         return;
       }
 
-      if (input.content.startsWith('The user replied "还能继续吗" and wants to continue the most recent unfinished task.')) {
+      if (input.content.startsWith(`The user replied "${followUpPrompt}" and wants to continue the most recent unfinished task.`)) {
         assert.match(input.content, /Original task: 看看项目然后帮我优化下/);
         assert.match(input.content, /Recent editable working file: node-todo\/app\.js/);
         assert.match(input.content, /Pending next step target: node-todo\/app\.js/);
@@ -39674,7 +43356,7 @@ async function verifyTerminalLoopStopAndResumeBroadProjectImprovementAfterFirstW
       }
 
       if (
-        input.content.startsWith('Original user request: The user replied "还能继续吗" and wants to continue the most recent unfinished task.')
+        input.content.startsWith(`Original user request: The user replied "${followUpPrompt}" and wants to continue the most recent unfinished task.`)
       ) {
         const toolName = extractLine(input.content, "Tool:") ?? extractLine(input.content, "Latest tool:");
         const summary = extractLine(input.content, "Summary:") ?? extractLine(input.content, "Latest summary:") ?? "";
@@ -39806,7 +43488,7 @@ async function verifyTerminalLoopStopAndResumeBroadProjectImprovementAfterFirstW
     );
 
     const resumedCompletion = waitForAssistantTaskCompletion(bus, sessionId);
-    process.stdin.emit("data", Buffer.from("还能继续吗\r"));
+    process.stdin.emit("data", Buffer.from(`${followUpPrompt}\r`));
     const resumedTask = await resumedCompletion;
     const resumedEvents = await transcriptStore.readEventsBySession(sessionId);
     const resumedAssistantText = collectAssistantText(resumedEvents, resumedTask.taskId ?? "");
@@ -40125,11 +43807,22 @@ async function verifyTerminalLoopContinuesProjectDrivenMultiTargetOptimization()
 }
 
 async function verifyTerminalLoopStopAndResumeProjectDrivenMultiTargetStageSummary() {
-  const root = await mkdtemp(join(tmpdir(), "selfme-agent-terminal-loop-project-multi-target-stage-resume-"));
+  await verifyTerminalLoopStopAndResumeProjectDrivenMultiTargetStageSummaryWithFollowUp("还能继续吗");
+}
+
+async function verifyTerminalLoopStopAndResumeProjectDrivenMultiTargetStageSummaryBroadOptimizationFollowUp() {
+  await verifyTerminalLoopStopAndResumeProjectDrivenMultiTargetStageSummaryWithFollowUp("帮我优化下");
+}
+
+async function verifyTerminalLoopStopAndResumeProjectDrivenMultiTargetStageSummaryWithFollowUp(
+  followUpPrompt: "还能继续吗" | "帮我优化下"
+) {
+  const suffix = followUpPrompt === "还能继续吗" ? "resume" : "opt";
+  const root = await mkdtemp(join(tmpdir(), `selfme-agent-terminal-loop-project-multi-target-stage-resume-${suffix}-`));
   const workspace = join(root, "workspace");
   const transcriptPath = join(root, "transcript.jsonl");
   const logsPath = join(root, "logs.jsonl");
-  const sessionId = "terminal-loop-project-multi-target-stage-resume";
+  const sessionId = `terminal-loop-project-multi-target-stage-resume-${suffix}`;
   const originalPrompt = "看看项目，然后直接优化 node-todo：把 node-todo/app.js 的端口改成 process.env.PORT，再给 node-todo/views/index.ejs 的 title input 加上 maxlength 100。";
   await mkdir(join(workspace, "node-todo", "views"), { recursive: true });
 
@@ -40247,7 +43940,7 @@ async function verifyTerminalLoopStopAndResumeProjectDrivenMultiTargetStageSumma
         return;
       }
 
-      if (input.content.startsWith('The user replied "还能继续吗" and wants to continue the most recent unfinished task.')) {
+      if (input.content.startsWith(`The user replied "${followUpPrompt}" and wants to continue the most recent unfinished task.`)) {
         assert.match(input.content, /Original task: 看看项目，然后直接优化 node-todo/);
         assert.match(input.content, /Recent editable working file: node-todo\/app\.js/);
         assert.match(input.content, /Pending next step target: node-todo\/views\/index\.ejs/);
@@ -40264,7 +43957,7 @@ async function verifyTerminalLoopStopAndResumeProjectDrivenMultiTargetStageSumma
       }
 
       if (
-        input.content.startsWith('Original user request: The user replied "还能继续吗" and wants to continue the most recent unfinished task.')
+        input.content.startsWith(`Original user request: The user replied "${followUpPrompt}" and wants to continue the most recent unfinished task.`)
       ) {
         const toolName = extractLine(input.content, "Tool:") ?? extractLine(input.content, "Latest tool:");
         const summary = extractLine(input.content, "Summary:") ?? extractLine(input.content, "Latest summary:") ?? "";
@@ -40391,7 +44084,7 @@ async function verifyTerminalLoopStopAndResumeProjectDrivenMultiTargetStageSumma
     );
 
     const resumedCompletion = waitForAssistantTaskCompletion(bus, sessionId);
-    process.stdin.emit("data", Buffer.from("还能继续吗\r"));
+    process.stdin.emit("data", Buffer.from(`${followUpPrompt}\r`));
     const resumedTask = await resumedCompletion;
     const resumedEvents = await transcriptStore.readEventsBySession(sessionId);
     const resumedAssistantText = collectAssistantText(resumedEvents, resumedTask.taskId ?? "");
@@ -41336,11 +45029,259 @@ async function verifyTerminalLoopApprovedProposalExecutesMultiStepTask() {
 }
 
 async function verifyTerminalLoopStopAndResumeApprovedProposalExecution() {
-  const root = await mkdtemp(join(tmpdir(), "selfme-agent-terminal-loop-approved-proposal-resume-"));
+  await verifyTerminalLoopStopAndResumeApprovedProposalExecutionWithFollowUp("还能继续吗");
+}
+
+async function verifyTerminalLoopStopAndResumeApprovedProposalExecutionBroadOptimizationFollowUp() {
+  await verifyTerminalLoopStopAndResumeApprovedProposalExecutionWithFollowUp("帮我优化下");
+}
+
+async function verifyTerminalLoopExplicitNewTaskDoesNotResumeApprovedProposalExecution() {
+  const root = await mkdtemp(join(tmpdir(), "selfme-agent-terminal-loop-approved-proposal-execution-new-task-"));
   const workspace = join(root, "workspace");
   const transcriptPath = join(root, "transcript.jsonl");
   const logsPath = join(root, "logs.jsonl");
-  const sessionId = "terminal-loop-approved-proposal-resume";
+  const sessionId = "terminal-loop-approved-proposal-execution-new-task";
+  const proposalPrompt = "先看看 node-todo，但先别改。";
+  await mkdir(join(workspace, "node-todo", "views"), { recursive: true });
+
+  await writeFile(
+    join(workspace, "node-todo", "app.js"),
+    'const PORT = 3000;\nconsole.log(PORT);\n',
+    "utf8"
+  );
+  await writeFile(
+    join(workspace, "node-todo", "views", "index.ejs"),
+    '<input name="title" />\n',
+    "utf8"
+  );
+
+  class TerminalLoopApprovedProposalExecutionNewTaskProvider implements ProviderClient {
+    readonly name = "terminal-loop-approved-proposal-execution-new-task-provider";
+
+    async *streamResponse(input: ProviderStreamInput): AsyncIterable<ProviderStreamChunk> {
+      const executeProposalPrompt = 'The user replied "可以" to approve the immediately previous proposal.';
+
+      if (input.content === proposalPrompt) {
+        yield {
+          delta: "我先看了 node-todo；如果你愿意，我下一步可以直接优化 node-todo/app.js 和 node-todo/views/index.ejs。"
+        };
+        return;
+      }
+
+      if (input.content === "Create new.txt with the content new-task.") {
+        yield {
+          delta: toolCall("write", {
+            path: "new.txt",
+            content: "new-task\n"
+          })
+        };
+        return;
+      }
+
+      if (input.content.startsWith("The user replied ") && input.content.includes("wants to continue the most recent unfinished task.")) {
+        assert.fail("explicit new task should not be rewritten into a resume follow-up during approved proposal execution interruption");
+      }
+
+      if (input.content.startsWith("Original user request: Create new.txt with the content new-task.")) {
+        yield { delta: "Created new.txt instead of resuming the interrupted approved proposal execution." };
+        return;
+      }
+
+      if (input.content.startsWith(executeProposalPrompt)) {
+        yield {
+          delta: toolCall("files", {
+            path: "node-todo/app.js",
+            startLine: 1,
+            endLine: 5
+          })
+        };
+        return;
+      }
+
+      if (input.content.startsWith(`Original user request: ${executeProposalPrompt}`)) {
+        const toolName = extractLine(input.content, "Tool:") ?? extractLine(input.content, "Latest tool:");
+        const summary = extractLine(input.content, "Summary:") ?? extractLine(input.content, "Latest summary:") ?? "";
+
+        if (toolName === "files" && /node-todo\/app\.js/.test(summary)) {
+          yield {
+            delta: toolCall("edit", {
+              path: "node-todo/app.js",
+              startLine: 1,
+              endLine: 1,
+              replacement: "const PORT = Number(process.env.PORT || 3000);"
+            })
+          };
+          return;
+        }
+
+        if (toolName === "edit" && /node-todo\/app\.js/.test(summary)) {
+          yield { delta: "I updated node-todo/app.js and will continue with node-todo/views/index.ejs next." };
+          await waitForProviderDelay(input.signal, 10_000);
+          yield {
+            delta: toolCall("files", {
+              path: "node-todo/views/index.ejs",
+              startLine: 1,
+              endLine: 3
+            })
+          };
+          return;
+        }
+      }
+
+      yield { delta: "ok" };
+    }
+  }
+
+  const bus = new EventBus();
+  const transcriptStore = new TranscriptStore(transcriptPath);
+  const logStore = new LogStore(logsPath);
+  await transcriptStore.ensureInitialized();
+  await logStore.ensureInitialized();
+
+  const session = createDefaultSessionRecord(workspace, VERSION);
+  session.sessionId = sessionId;
+  session.model = "regression-stub";
+
+  const runtime = new AgentRuntime({
+    bus,
+    provider: new TerminalLoopApprovedProposalExecutionNewTaskProvider(),
+    tools: new InMemoryToolRegistry(),
+    session,
+    transcriptStore,
+    logStore
+  });
+  await runtime.start();
+
+  const editor = new EditorController();
+  const panel = new TerminalPanelController();
+  const terminal = new TerminalEventLoop({
+    bus,
+    editor,
+    panel,
+    sessionId
+  });
+
+  const originalExit = process.exit;
+  const existingDataListeners = process.stdin.listeners("data") as Array<(...args: any[]) => void>;
+
+  (process as typeof process & {
+    exit: (code?: number) => never;
+  }).exit = ((code?: number) => {
+    throw new Error(`EXIT:${code ?? 0}`);
+  }) as typeof process.exit;
+
+  try {
+    terminal.start();
+
+    const proposalCompletion = waitForAssistantTaskCompletion(bus, sessionId);
+    process.stdin.emit("data", Buffer.from(`${proposalPrompt}\r`));
+    const proposalTask = await proposalCompletion;
+    assert.equal(proposalTask.payload.state, "completed");
+
+    const approvedCompletion = waitForAssistantTaskCompletion(bus, sessionId);
+    const stageSummaryPromise = waitForAssistantDeltaContaining(
+      bus,
+      sessionId,
+      /I updated node-todo\/app\.js and will continue with node-todo\/views\/index\.ejs next\./
+    );
+    process.stdin.emit("data", Buffer.from("可以\r"));
+
+    await stageSummaryPromise;
+    await waitForBusyPhase(bus, sessionId, "assistant");
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    process.stdin.emit("data", "\u001b");
+
+    const cancelledTask = await approvedCompletion;
+    assert.equal(cancelledTask.payload.state, "cancelled");
+
+    const interruptedEvents = await transcriptStore.readEventsBySession(sessionId);
+    assert.ok(
+      interruptedEvents.some((event) =>
+        event.type === "tool.execution.completed"
+        && event.payload.summary.startsWith("node-todo/app.js:1-1 · updated")
+      ),
+      "terminal approved proposal execution interruption should preserve the app.js edit before the explicit new task"
+    );
+    assert.ok(
+      interruptedEvents.some((event) =>
+        event.type === "assistant.delta.received"
+        && /I updated node-todo\/app\.js and will continue with node-todo\/views\/index\.ejs next\./.test(event.payload.delta)
+      ),
+      "terminal approved proposal execution interruption should preserve the pending view summary before the explicit new task"
+    );
+    assert.equal(
+      interruptedEvents.some((event) =>
+        event.type === "tool.execution.completed"
+        && event.payload.summary.startsWith("node-todo/views/index.ejs:1-")
+      ),
+      false,
+      "terminal approved proposal execution interruption should stop before the pending view read"
+    );
+
+    const newTaskCompletion = waitForAssistantTaskCompletion(bus, sessionId);
+    process.stdin.emit("data", Buffer.from("Create new.txt with the content new-task.\r"));
+    const newTask = await newTaskCompletion;
+    const newTaskEvents = await transcriptStore.readEventsBySession(sessionId);
+    const newTaskAssistantText = collectAssistantText(newTaskEvents, newTask.taskId ?? "");
+    const appContent = await readFile(join(workspace, "node-todo", "app.js"), "utf8");
+    const viewContent = await readFile(join(workspace, "node-todo", "views", "index.ejs"), "utf8");
+    const newContent = await readFile(join(workspace, "new.txt"), "utf8");
+
+    assert.equal(newTask.payload.state, "completed");
+    assert.equal(editor.getState().value, "", "explicit new task after approved proposal execution interruption should clear the editor buffer");
+    assert.equal(newContent, "new-task\n");
+    assert.match(appContent, /process\.env\.PORT/);
+    assert.doesNotMatch(viewContent, /maxlength="100"/);
+    assert.match(newTaskAssistantText, /Created new\.txt|new task|已处理 `new\.txt`|已完成/u);
+    assert.ok(
+      newTaskEvents.some((event) =>
+        event.type === "tool.execution.completed"
+        && event.payload.summary.startsWith("new.txt · created")
+        && event.taskId === newTask.taskId
+      ),
+      "explicit new task should create new.txt instead of resuming the interrupted approved proposal execution"
+    );
+    assert.equal(
+      newTaskEvents.some((event) =>
+        event.type === "tool.execution.completed"
+        && (
+          event.payload.summary.startsWith("node-todo/views/index.ejs:1-")
+          || event.payload.summary.startsWith("node-todo/views/index.ejs:1-1 · updated")
+        )
+        && event.taskId === newTask.taskId
+      ),
+      false,
+      "explicit new task should not continue the interrupted approved proposal execution"
+    );
+  } finally {
+    process.exit = originalExit;
+    try {
+      bus.emit(createTerminalCommandInvokedEvent({
+        sessionId,
+        content: "/exit"
+      }));
+    } catch (error) {
+      assert.match(String(error), /EXIT:0/);
+    }
+
+    for (const listener of process.stdin.listeners("data") as Array<(...args: any[]) => void>) {
+      if (!existingDataListeners.includes(listener)) {
+        process.stdin.off("data", listener);
+      }
+    }
+  }
+}
+
+async function verifyTerminalLoopStopAndResumeApprovedProposalExecutionWithFollowUp(
+  followUpPrompt: "还能继续吗" | "帮我优化下"
+) {
+  const suffix = followUpPrompt === "还能继续吗" ? "resume" : "opt";
+  const root = await mkdtemp(join(tmpdir(), `selfme-agent-terminal-loop-approved-proposal-resume-${suffix}-`));
+  const workspace = join(root, "workspace");
+  const transcriptPath = join(root, "transcript.jsonl");
+  const logsPath = join(root, "logs.jsonl");
+  const sessionId = `terminal-loop-approved-proposal-resume-${suffix}`;
   const proposalPrompt = "先看看 node-todo，但先别改。";
   await mkdir(join(workspace, "node-todo", "views"), { recursive: true });
 
@@ -41360,7 +45301,7 @@ async function verifyTerminalLoopStopAndResumeApprovedProposalExecution() {
 
     async *streamResponse(input: ProviderStreamInput): AsyncIterable<ProviderStreamChunk> {
       const executeProposalPrompt = 'The user replied "可以" to approve the immediately previous proposal.';
-      const resumePrompt = 'The user replied "还能继续吗" and wants to continue the most recent unfinished task.';
+      const resumePrompt = `The user replied "${followUpPrompt}" and wants to continue the most recent unfinished task.`;
 
       if (input.content === proposalPrompt) {
         yield {
@@ -41536,7 +45477,7 @@ async function verifyTerminalLoopStopAndResumeApprovedProposalExecution() {
     );
 
     const resumedCompletion = waitForAssistantTaskCompletion(bus, sessionId);
-    process.stdin.emit("data", Buffer.from("还能继续吗\r"));
+    process.stdin.emit("data", Buffer.from(`${followUpPrompt}\r`));
     const resumedTask = await resumedCompletion;
     const resumedEvents = await transcriptStore.readEventsBySession(sessionId);
     const resumedAssistantText = collectAssistantText(resumedEvents, resumedTask.taskId ?? "");
@@ -41602,11 +45543,22 @@ async function verifyTerminalLoopStopAndResumeApprovedProposalExecution() {
 }
 
 async function verifyTerminalLoopStopAndResumeApprovedProposalApprovalWait() {
-  const root = await mkdtemp(join(tmpdir(), "selfme-agent-terminal-loop-approved-proposal-approval-wait-"));
+  await verifyTerminalLoopStopAndResumeApprovedProposalApprovalWaitWithFollowUp("还能继续吗");
+}
+
+async function verifyTerminalLoopStopAndResumeApprovedProposalApprovalWaitBroadOptimizationFollowUp() {
+  await verifyTerminalLoopStopAndResumeApprovedProposalApprovalWaitWithFollowUp("帮我优化下");
+}
+
+async function verifyTerminalLoopStopAndResumeApprovedProposalApprovalWaitWithFollowUp(
+  followUpPrompt: "还能继续吗" | "帮我优化下"
+) {
+  const suffix = followUpPrompt === "还能继续吗" ? "resume" : "opt";
+  const root = await mkdtemp(join(tmpdir(), `selfme-agent-terminal-loop-approved-proposal-approval-wait-${suffix}-`));
   const workspace = join(root, "workspace");
   const transcriptPath = join(root, "transcript.jsonl");
   const logsPath = join(root, "logs.jsonl");
-  const sessionId = "terminal-loop-approved-proposal-approval-wait";
+  const sessionId = `terminal-loop-approved-proposal-approval-wait-${suffix}`;
   const proposalPrompt = "先看看 node-todo，但先别改。";
   await mkdir(join(workspace, "node-todo", "views"), { recursive: true });
 
@@ -41646,7 +45598,7 @@ async function verifyTerminalLoopStopAndResumeApprovedProposalApprovalWait() {
 
     async *streamResponse(input: ProviderStreamInput): AsyncIterable<ProviderStreamChunk> {
       const executeProposalPrompt = 'The user replied "可以" to approve the immediately previous proposal.';
-      const resumePrompt = 'The user replied "还能继续吗" and wants to continue the most recent unfinished task.';
+      const resumePrompt = `The user replied "${followUpPrompt}" and wants to continue the most recent unfinished task.`;
 
       if (input.content === proposalPrompt) {
         yield {
@@ -41874,7 +45826,7 @@ async function verifyTerminalLoopStopAndResumeApprovedProposalApprovalWait() {
 
     phaseTwo = true;
     const resumedCompletion = waitForAssistantTaskCompletion(bus, sessionId);
-    process.stdin.emit("data", Buffer.from("还能继续吗\r"));
+    process.stdin.emit("data", Buffer.from(`${followUpPrompt}\r`));
     const resumedTask = await resumedCompletion;
     const resumedEvents = await transcriptStore.readEventsBySession(sessionId);
     const resumedAssistantText = collectAssistantText(resumedEvents, resumedTask.taskId ?? "");
@@ -41951,12 +45903,319 @@ async function verifyTerminalLoopStopAndResumeApprovedProposalApprovalWait() {
   }
 }
 
-async function verifyTerminalLoopStopAndResumeApprovedProposalVerifierShift() {
-  const root = await mkdtemp(join(tmpdir(), "selfme-agent-terminal-loop-approved-proposal-verifier-shift-resume-"));
+async function verifyTerminalLoopExplicitNewTaskDoesNotResumeApprovedProposalApprovalWait() {
+  const root = await mkdtemp(join(tmpdir(), "selfme-agent-terminal-loop-approved-proposal-approval-wait-new-task-"));
   const workspace = join(root, "workspace");
   const transcriptPath = join(root, "transcript.jsonl");
   const logsPath = join(root, "logs.jsonl");
-  const sessionId = "terminal-loop-approved-proposal-verifier-shift-resume";
+  const sessionId = "terminal-loop-approved-proposal-approval-wait-new-task";
+  const proposalPrompt = "先看看 node-todo，但先别改。";
+  await mkdir(join(workspace, "node-todo", "views"), { recursive: true });
+
+  await writeFile(
+    join(workspace, "node-todo", "app.js"),
+    'const PORT = 3000;\nconsole.log(PORT);\n',
+    "utf8"
+  );
+  await writeFile(
+    join(workspace, "node-todo", "views", "index.ejs"),
+    '<input name="title" />\n',
+    "utf8"
+  );
+  await writeFile(
+    join(workspace, "node-todo", "verify-setup.mjs"),
+    [
+      'import { readFileSync } from "node:fs";',
+      'const app = readFileSync(new URL("./app.js", import.meta.url), "utf8");',
+      'const view = readFileSync(new URL("./views/index.ejs", import.meta.url), "utf8");',
+      'const appReady = /process\\.env\\.PORT/.test(app);',
+      'const viewReady = /maxlength="100"/.test(view);',
+      'if (appReady && viewReady) {',
+      '  console.log("ready");',
+      '} else if (appReady) {',
+      '  console.log("app-only");',
+      '} else if (viewReady) {',
+      '  console.log("view-only");',
+      '} else {',
+      '  console.log("not-ready");',
+      '}'
+    ].join("\n") + "\n",
+    "utf8"
+  );
+
+  class TerminalLoopApprovedProposalApprovalWaitNewTaskProvider implements ProviderClient {
+    readonly name = "terminal-loop-approved-proposal-approval-wait-new-task-provider";
+
+    async *streamResponse(input: ProviderStreamInput): AsyncIterable<ProviderStreamChunk> {
+      const executeProposalPrompt = 'The user replied "可以" to approve the immediately previous proposal.';
+
+      if (input.content === proposalPrompt) {
+        yield {
+          delta: "我先看了 node-todo；如果你愿意，我下一步可以直接优化 node-todo/app.js 和 node-todo/views/index.ejs，并运行 node-todo/verify-setup.mjs 验证直到输出 exactly `ready`。"
+        };
+        return;
+      }
+
+      if (input.content === "Create new.txt with the content new-task.") {
+        yield {
+          delta: toolCall("write", {
+            path: "new.txt",
+            content: "new-task\n"
+          })
+        };
+        return;
+      }
+
+      if (input.content.startsWith("The user replied ") && input.content.includes("wants to continue the most recent unfinished task.")) {
+        assert.fail("explicit new task should not be rewritten into a resume follow-up during approved proposal approval-wait interruption");
+      }
+
+      if (input.content.startsWith("Original user request: Create new.txt with the content new-task.")) {
+        yield { delta: "Created new.txt instead of resuming the interrupted approved proposal approval-wait chain." };
+        return;
+      }
+
+      if (input.content.startsWith(executeProposalPrompt)) {
+        yield {
+          delta: toolCall("files", {
+            path: "node-todo/app.js",
+            startLine: 1,
+            endLine: 5
+          })
+        };
+        return;
+      }
+
+      if (input.content.startsWith(`Original user request: ${executeProposalPrompt}`)) {
+        const toolName = extractLine(input.content, "Tool:") ?? extractLine(input.content, "Latest tool:");
+        const summary = extractLine(input.content, "Summary:") ?? extractLine(input.content, "Latest summary:") ?? "";
+
+        if (toolName === "files" && /node-todo\/app\.js/.test(summary)) {
+          yield {
+            delta: toolCall("edit", {
+              path: "node-todo/app.js",
+              startLine: 1,
+              endLine: 1,
+              replacement: "const PORT = Number(process.env.PORT || 3000);"
+            })
+          };
+          return;
+        }
+
+        if (toolName === "edit" && /node-todo\/app\.js/.test(summary)) {
+          yield {
+            delta: toolCall("shell", {
+              command: "node node-todo/verify-setup.mjs"
+            })
+          };
+          return;
+        }
+
+        if (toolName === "shell" && /node node-todo\/verify-setup\.mjs/.test(summary)) {
+          if (/app-only/.test(input.content)) {
+            yield {
+              delta: toolCall("files", {
+                path: "node-todo/views/index.ejs",
+                startLine: 1,
+                endLine: 3
+              })
+            };
+            return;
+          }
+
+          assert.match(input.content, /ready/);
+          yield { delta: "Completed the approved proposal approval-wait chain." };
+          return;
+        }
+
+        if (toolName === "files" && /node-todo\/views\/index\.ejs/.test(summary)) {
+          yield {
+            delta: toolCall("edit", {
+              path: "node-todo/views/index.ejs",
+              startLine: 1,
+              endLine: 1,
+              replacement: '<input name="title" maxlength="100" />'
+            })
+          };
+          return;
+        }
+      }
+
+      yield { delta: "ok" };
+    }
+  }
+
+  const bus = new EventBus();
+  const transcriptStore = new TranscriptStore(transcriptPath);
+  const logStore = new LogStore(logsPath);
+  await transcriptStore.ensureInitialized();
+  await logStore.ensureInitialized();
+
+  const session = createDefaultSessionRecord(workspace, VERSION);
+  session.sessionId = sessionId;
+  session.model = "regression-stub";
+
+  const runtime = new AgentRuntime({
+    bus,
+    provider: new TerminalLoopApprovedProposalApprovalWaitNewTaskProvider(),
+    tools: new InMemoryToolRegistry(),
+    session,
+    transcriptStore,
+    logStore
+  });
+  await runtime.start();
+
+  let approvalCount = 0;
+  let heldApprovalId: string | undefined;
+  const secondApprovalPromise = new Promise<Extract<RuntimeEvent, { type: "approval.requested" }>>((resolve) => {
+    bus.on("approval.requested", (event) => {
+      approvalCount += 1;
+
+      if (approvalCount === 1) {
+        bus.emit(createTerminalCommandInvokedEvent({
+          sessionId: event.sessionId,
+          content: `/approve ${event.payload.approvalId}`
+        }));
+        return;
+      }
+
+      heldApprovalId = event.payload.approvalId;
+      resolve(event);
+    });
+  });
+
+  const editor = new EditorController();
+  const panel = new TerminalPanelController();
+  const terminal = new TerminalEventLoop({
+    bus,
+    editor,
+    panel,
+    sessionId
+  });
+
+  const originalExit = process.exit;
+  const existingDataListeners = process.stdin.listeners("data") as Array<(...args: any[]) => void>;
+
+  (process as typeof process & {
+    exit: (code?: number) => never;
+  }).exit = ((code?: number) => {
+    throw new Error(`EXIT:${code ?? 0}`);
+  }) as typeof process.exit;
+
+  try {
+    terminal.start();
+
+    const proposalCompletion = waitForAssistantTaskCompletion(bus, sessionId);
+    process.stdin.emit("data", Buffer.from(`${proposalPrompt}\r`));
+    const proposalTask = await proposalCompletion;
+    assert.equal(proposalTask.payload.state, "completed");
+
+    const approvedCompletion = waitForAssistantTaskCompletion(bus, sessionId);
+    process.stdin.emit("data", Buffer.from("可以\r"));
+
+    const pendingApproval = await secondApprovalPromise;
+    assert.equal(pendingApproval.payload.toolName, "edit");
+    assert.match(JSON.stringify(pendingApproval.payload.input), /maxlength="100"/);
+    process.stdin.emit("data", "\u0003");
+
+    const cancelledTask = await approvedCompletion;
+    assert.equal(cancelledTask.payload.state, "cancelled");
+
+    const interruptedEvents = await transcriptStore.readEventsBySession(sessionId);
+    assert.ok(
+      interruptedEvents.some((event) =>
+        event.type === "tool.execution.completed"
+        && event.payload.summary.startsWith("node-todo/views/index.ejs:1-3")
+      ),
+      "interrupted approved proposal approval-wait task should preserve the narrowed pending view file before the explicit new task"
+    );
+    assert.equal(
+      interruptedEvents.some((event) =>
+        event.type === "tool.execution.completed"
+        && event.payload.summary.startsWith("node-todo/views/index.ejs:1-1 · updated")
+      ),
+      false,
+      "interrupted approved proposal approval-wait task should stop before the pending approved edit is applied"
+    );
+    assert.ok(
+      interruptedEvents.some((event) =>
+        event.type === "approval.resolved"
+        && event.payload.approvalId === heldApprovalId
+        && !event.payload.approved
+      ),
+      "interrupting the approved proposal approval-wait task should deny the held approval"
+    );
+
+    const newTaskCompletion = waitForAssistantTaskCompletion(bus, sessionId);
+    process.stdin.emit("data", Buffer.from("Create new.txt with the content new-task.\r"));
+    const newTask = await newTaskCompletion;
+    const newTaskEvents = await transcriptStore.readEventsBySession(sessionId);
+    const newTaskAssistantText = collectAssistantText(newTaskEvents, newTask.taskId ?? "");
+    const newContent = await readFile(join(workspace, "new.txt"), "utf8");
+    const viewContent = await readFile(join(workspace, "node-todo", "views", "index.ejs"), "utf8");
+
+    assert.equal(newTask.payload.state, "completed");
+    assert.equal(editor.getState().value, "", "explicit new task after approved proposal approval-wait interruption should clear the editor buffer");
+    assert.equal(newContent, "new-task\n");
+    assert.doesNotMatch(viewContent, /maxlength="100"/);
+    assert.match(newTaskAssistantText, /Created new\.txt|new task|已处理 `new\.txt`|已完成/u);
+    assert.ok(
+      newTaskEvents.some((event) =>
+        event.type === "tool.execution.completed"
+        && event.payload.summary.startsWith("new.txt · created")
+        && event.taskId === newTask.taskId
+      ),
+      "explicit new task should create new.txt instead of resuming the interrupted approved proposal approval-wait chain"
+    );
+    assert.equal(
+      newTaskEvents.some((event) =>
+        event.type === "tool.execution.completed"
+        && (
+          event.payload.summary.startsWith("node-todo/views/index.ejs:1-3")
+          || event.payload.summary.startsWith("node-todo/views/index.ejs:1-1 · updated")
+          || event.payload.summary.startsWith("node node-todo/verify-setup.mjs · completed")
+        )
+        && event.taskId === newTask.taskId
+      ),
+      false,
+      "explicit new task should not continue any approval-wait repair steps"
+    );
+  } finally {
+    process.exit = originalExit;
+    try {
+      bus.emit(createTerminalCommandInvokedEvent({
+        sessionId,
+        content: "/exit"
+      }));
+    } catch (error) {
+      assert.match(String(error), /EXIT:0/);
+    }
+
+    for (const listener of process.stdin.listeners("data") as Array<(...args: any[]) => void>) {
+      if (!existingDataListeners.includes(listener)) {
+        process.stdin.off("data", listener);
+      }
+    }
+  }
+}
+
+async function verifyTerminalLoopStopAndResumeApprovedProposalVerifierShift() {
+  await verifyTerminalLoopStopAndResumeApprovedProposalVerifierShiftWithFollowUp("还能继续吗");
+}
+
+async function verifyTerminalLoopStopAndResumeApprovedProposalVerifierShiftBroadOptimizationFollowUp() {
+  await verifyTerminalLoopStopAndResumeApprovedProposalVerifierShiftWithFollowUp("帮我优化下");
+}
+
+async function verifyTerminalLoopStopAndResumeApprovedProposalVerifierShiftWithFollowUp(
+  followUpPrompt: "还能继续吗" | "帮我优化下"
+) {
+  const suffix = followUpPrompt === "还能继续吗" ? "resume" : "opt";
+  const root = await mkdtemp(join(tmpdir(), `selfme-agent-terminal-loop-approved-proposal-verifier-shift-resume-${suffix}-`));
+  const workspace = join(root, "workspace");
+  const transcriptPath = join(root, "transcript.jsonl");
+  const logsPath = join(root, "logs.jsonl");
+  const sessionId = `terminal-loop-approved-proposal-verifier-shift-resume-${suffix}`;
   const proposalPrompt = "先看看 node-todo，但先别改。";
   await mkdir(join(workspace, "node-todo", "views"), { recursive: true });
 
@@ -41996,7 +46255,7 @@ async function verifyTerminalLoopStopAndResumeApprovedProposalVerifierShift() {
 
     async *streamResponse(input: ProviderStreamInput): AsyncIterable<ProviderStreamChunk> {
       const executeProposalPrompt = 'The user replied "可以" to approve the immediately previous proposal.';
-      const resumePrompt = 'The user replied "还能继续吗" and wants to continue the most recent unfinished task.';
+      const resumePrompt = `The user replied "${followUpPrompt}" and wants to continue the most recent unfinished task.`;
 
       if (input.content === proposalPrompt) {
         yield {
@@ -42247,7 +46506,7 @@ async function verifyTerminalLoopStopAndResumeApprovedProposalVerifierShift() {
     );
 
     const resumedCompletion = waitForAssistantTaskCompletion(bus, sessionId);
-    process.stdin.emit("data", Buffer.from("还能继续吗\r"));
+    process.stdin.emit("data", Buffer.from(`${followUpPrompt}\r`));
     const resumedTask = await resumedCompletion;
     const resumedEvents = await transcriptStore.readEventsBySession(sessionId);
     const resumedAssistantText = collectAssistantText(resumedEvents, resumedTask.taskId ?? "");
@@ -42303,6 +46562,1096 @@ async function verifyTerminalLoopStopAndResumeApprovedProposalVerifierShift() {
     assert.ok(
       approvalCount >= 4,
       "terminal approved proposal verifier-shift resume should cover the app edit, view edit, resumed verifier read path, and verifier repair"
+    );
+  } finally {
+    process.exit = originalExit;
+    try {
+      bus.emit(createTerminalCommandInvokedEvent({
+        sessionId,
+        content: "/exit"
+      }));
+    } catch (error) {
+      assert.match(String(error), /EXIT:0/);
+    }
+
+    for (const listener of process.stdin.listeners("data") as Array<(...args: any[]) => void>) {
+      if (!existingDataListeners.includes(listener)) {
+        process.stdin.off("data", listener);
+      }
+    }
+  }
+}
+
+async function verifyTerminalLoopExplicitNewTaskDoesNotResumeApprovedProposalVerifierShift() {
+  const root = await mkdtemp(join(tmpdir(), "selfme-agent-terminal-loop-approved-proposal-verifier-shift-new-task-"));
+  const workspace = join(root, "workspace");
+  const transcriptPath = join(root, "transcript.jsonl");
+  const logsPath = join(root, "logs.jsonl");
+  const sessionId = "terminal-loop-approved-proposal-verifier-shift-new-task";
+  const proposalPrompt = "先看看 node-todo，但先别改。";
+  await mkdir(join(workspace, "node-todo", "views"), { recursive: true });
+
+  await writeFile(
+    join(workspace, "node-todo", "app.js"),
+    'const PORT = 3000;\nconsole.log(PORT);\n',
+    "utf8"
+  );
+  await writeFile(
+    join(workspace, "node-todo", "views", "index.ejs"),
+    '<input name="title" />\n',
+    "utf8"
+  );
+  await writeFile(
+    join(workspace, "node-todo", "verify-exact.mjs"),
+    [
+      'import { readFileSync } from "node:fs";',
+      'const app = readFileSync(new URL("./app.js", import.meta.url), "utf8");',
+      'const view = readFileSync(new URL("./views/index.ejs", import.meta.url), "utf8");',
+      'const appReady = /process\\.env\\.PORT/.test(app);',
+      'const viewReady = /maxlength="100"/.test(view);',
+      'if (appReady && viewReady) {',
+      '  console.log("ready!");',
+      '} else if (appReady) {',
+      '  console.log("app-only");',
+      '} else if (viewReady) {',
+      '  console.log("view-only");',
+      '} else {',
+      '  console.log("not-ready");',
+      '}'
+    ].join("\n") + "\n",
+    "utf8"
+  );
+
+  class TerminalLoopApprovedProposalVerifierShiftNewTaskProvider implements ProviderClient {
+    readonly name = "terminal-loop-approved-proposal-verifier-shift-new-task-provider";
+
+    async *streamResponse(input: ProviderStreamInput): AsyncIterable<ProviderStreamChunk> {
+      const executeProposalPrompt = 'The user replied "可以" to approve the immediately previous proposal.';
+
+      if (input.content === proposalPrompt) {
+        yield {
+          delta: "我先看了 node-todo；如果你愿意，我下一步可以直接优化 node-todo/app.js 和 node-todo/views/index.ejs，并运行 node-todo/verify-exact.mjs 验证直到输出 exactly `ready`。"
+        };
+        return;
+      }
+
+      if (input.content === "Create new.txt with the content new-task.") {
+        yield {
+          delta: toolCall("write", {
+            path: "new.txt",
+            content: "new-task\n"
+          })
+        };
+        return;
+      }
+
+      if (input.content.startsWith("The user replied ") && input.content.includes("wants to continue the most recent unfinished task.")) {
+        assert.fail("explicit new task should not be rewritten into a resume follow-up during approved proposal verifier-shift interruption");
+      }
+
+      if (input.content.startsWith("Original user request: Create new.txt with the content new-task.")) {
+        yield { delta: "Created new.txt instead of resuming the interrupted verifier-shift chain." };
+        return;
+      }
+
+      if (input.content.startsWith(executeProposalPrompt)) {
+        yield {
+          delta: toolCall("files", {
+            path: "node-todo/app.js",
+            startLine: 1,
+            endLine: 5
+          })
+        };
+        return;
+      }
+
+      if (input.content.startsWith(`Original user request: ${executeProposalPrompt}`)) {
+        const toolName = extractLine(input.content, "Tool:") ?? extractLine(input.content, "Latest tool:");
+        const summary = extractLine(input.content, "Summary:") ?? extractLine(input.content, "Latest summary:") ?? "";
+
+        if (toolName === "files" && /node-todo\/app\.js/.test(summary)) {
+          yield {
+            delta: toolCall("edit", {
+              path: "node-todo/app.js",
+              startLine: 1,
+              endLine: 1,
+              replacement: "const PORT = Number(process.env.PORT || 3000);"
+            })
+          };
+          return;
+        }
+
+        if (toolName === "edit" && /node-todo\/app\.js/.test(summary)) {
+          yield {
+            delta: toolCall("shell", {
+              command: "node node-todo/verify-exact.mjs"
+            })
+          };
+          return;
+        }
+
+        if (toolName === "shell" && /node node-todo\/verify-exact\.mjs/.test(summary)) {
+          if (/app-only/.test(input.content)) {
+            yield {
+              delta: toolCall("files", {
+                path: "node-todo/views/index.ejs",
+                startLine: 1,
+                endLine: 3
+              })
+            };
+            return;
+          }
+
+          if (/ready!/.test(input.content)) {
+            yield {
+              delta: "I already finished node-todo/app.js and node-todo/views/index.ejs; the remaining exact-output gap is now in node-todo/verify-exact.mjs."
+            };
+            await waitForProviderDelay(input.signal, 10_000);
+            yield {
+              delta: toolCall("files", {
+                path: "node-todo/verify-exact.mjs",
+                startLine: 1,
+                endLine: 20
+              })
+            };
+            return;
+          }
+
+          assert.match(input.content, /ready/);
+          yield { delta: "Completed the resumed approved proposal verifier-shift chain from the latest failure point." };
+          return;
+        }
+
+        if (toolName === "files" && /node-todo\/views\/index\.ejs/.test(summary)) {
+          yield {
+            delta: toolCall("edit", {
+              path: "node-todo/views/index.ejs",
+              startLine: 1,
+              endLine: 1,
+              replacement: '<input name="title" maxlength="100" />'
+            })
+          };
+          return;
+        }
+
+        if (toolName === "edit" && /node-todo\/views\/index\.ejs/.test(summary)) {
+          yield {
+            delta: toolCall("shell", {
+              command: "node node-todo/verify-exact.mjs"
+            })
+          };
+          return;
+        }
+      }
+
+      yield { delta: "ok" };
+    }
+  }
+
+  const bus = new EventBus();
+  const transcriptStore = new TranscriptStore(transcriptPath);
+  const logStore = new LogStore(logsPath);
+  await transcriptStore.ensureInitialized();
+  await logStore.ensureInitialized();
+
+  const session = createDefaultSessionRecord(workspace, VERSION);
+  session.sessionId = sessionId;
+  session.model = "regression-stub";
+
+  const runtime = new AgentRuntime({
+    bus,
+    provider: new TerminalLoopApprovedProposalVerifierShiftNewTaskProvider(),
+    tools: new InMemoryToolRegistry(),
+    session,
+    transcriptStore,
+    logStore
+  });
+  await runtime.start();
+
+  bus.on("approval.requested", (event) => {
+    bus.emit(createTerminalCommandInvokedEvent({
+      sessionId: event.sessionId,
+      content: `/approve ${event.payload.approvalId}`
+    }));
+  });
+
+  const editor = new EditorController();
+  const panel = new TerminalPanelController();
+  const terminal = new TerminalEventLoop({
+    bus,
+    editor,
+    panel,
+    sessionId
+  });
+
+  const originalExit = process.exit;
+  const existingDataListeners = process.stdin.listeners("data") as Array<(...args: any[]) => void>;
+
+  (process as typeof process & {
+    exit: (code?: number) => never;
+  }).exit = ((code?: number) => {
+    throw new Error(`EXIT:${code ?? 0}`);
+  }) as typeof process.exit;
+
+  try {
+    terminal.start();
+
+    const proposalCompletion = waitForAssistantTaskCompletion(bus, sessionId);
+    process.stdin.emit("data", Buffer.from(`${proposalPrompt}\r`));
+    const proposalTask = await proposalCompletion;
+    assert.equal(proposalTask.payload.state, "completed");
+
+    const approvedCompletion = waitForAssistantTaskCompletion(bus, sessionId);
+    const stageSummaryPromise = waitForAssistantDeltaContaining(
+      bus,
+      sessionId,
+      /remaining exact-output gap is now in node-todo\/verify-exact\.mjs\./
+    );
+    process.stdin.emit("data", Buffer.from("可以\r"));
+
+    await stageSummaryPromise;
+    await waitForBusyPhase(bus, sessionId, "assistant");
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    process.stdin.emit("data", "\u001b");
+
+    const cancelledTask = await approvedCompletion;
+    assert.equal(cancelledTask.payload.state, "cancelled");
+
+    const interruptedEvents = await transcriptStore.readEventsBySession(sessionId);
+    assert.ok(
+      interruptedEvents.some((event) =>
+        event.type === "assistant.delta.received"
+        && /remaining exact-output gap is now in node-todo\/verify-exact\.mjs/.test(event.payload.delta)
+      ),
+      "interrupted verifier-shift task should preserve the latest-failure-point summary before the explicit new task"
+    );
+    assert.equal(
+      interruptedEvents.some((event) =>
+        event.type === "tool.execution.completed"
+        && event.payload.summary.startsWith("node-todo/verify-exact.mjs:1-")
+      ),
+      false,
+      "interrupted verifier-shift task should stop before the verifier file read lands"
+    );
+
+    const newTaskCompletion = waitForAssistantTaskCompletion(bus, sessionId);
+    process.stdin.emit("data", Buffer.from("Create new.txt with the content new-task.\r"));
+    const newTask = await newTaskCompletion;
+    const newTaskEvents = await transcriptStore.readEventsBySession(sessionId);
+    const newTaskAssistantText = collectAssistantText(newTaskEvents, newTask.taskId ?? "");
+    const newContent = await readFile(join(workspace, "new.txt"), "utf8");
+    const verifierContent = await readFile(join(workspace, "node-todo", "verify-exact.mjs"), "utf8");
+
+    assert.equal(newTask.payload.state, "completed");
+    assert.equal(editor.getState().value, "", "explicit new task after verifier-shift interruption should clear the editor buffer");
+    assert.equal(newContent, "new-task\n");
+    assert.doesNotMatch(verifierContent, /console\.log\("ready"\)/);
+    assert.match(newTaskAssistantText, /Created new\.txt|new task|已处理 `new\.txt`|已完成/u);
+    assert.ok(
+      newTaskEvents.some((event) =>
+        event.type === "tool.execution.completed"
+        && event.payload.summary.startsWith("new.txt · created")
+        && event.taskId === newTask.taskId
+      ),
+      "explicit new task should create new.txt instead of resuming the interrupted verifier-shift chain"
+    );
+    assert.equal(
+      newTaskEvents.some((event) =>
+        event.type === "tool.execution.completed"
+        && (
+          event.payload.summary.startsWith("node-todo/verify-exact.mjs:1-")
+          || event.payload.summary.startsWith("node-todo/verify-exact.mjs:7-7 · updated")
+          || event.payload.summary.startsWith("node node-todo/verify-exact.mjs · completed")
+        )
+        && event.taskId === newTask.taskId
+      ),
+      false,
+      "explicit new task should not continue any verifier-shift repair steps"
+    );
+  } finally {
+    process.exit = originalExit;
+    try {
+      bus.emit(createTerminalCommandInvokedEvent({
+        sessionId,
+        content: "/exit"
+      }));
+    } catch (error) {
+      assert.match(String(error), /EXIT:0/);
+    }
+
+    for (const listener of process.stdin.listeners("data") as Array<(...args: any[]) => void>) {
+      if (!existingDataListeners.includes(listener)) {
+        process.stdin.off("data", listener);
+      }
+    }
+  }
+}
+
+async function verifyTerminalLoopApprovedProposalVerifierShiftApprovalWaitBroadOptimizationFollowUp() {
+  await verifyTerminalLoopApprovedProposalVerifierShiftApprovalWaitBroadFollowUp("帮我优化下");
+}
+
+async function verifyTerminalLoopApprovedProposalVerifierShiftApprovalWaitBroadInspectionFollowUp() {
+  await verifyTerminalLoopApprovedProposalVerifierShiftApprovalWaitBroadFollowUp("帮我看看项目");
+}
+
+async function verifyTerminalLoopApprovedProposalVerifierShiftApprovalWaitBareAffirmativeFollowUp() {
+  await verifyTerminalLoopApprovedProposalVerifierShiftApprovalWaitBroadFollowUp("可以");
+}
+
+async function verifyTerminalLoopApprovedProposalVerifierShiftApprovalWaitResumeFollowUp() {
+  await verifyTerminalLoopApprovedProposalVerifierShiftApprovalWaitBroadFollowUp("还能继续吗");
+}
+
+async function verifyTerminalLoopApprovedProposalVerifierShiftApprovalWaitBroadFollowUp(
+  followUpPrompt: "还能继续吗" | "可以" | "帮我优化下" | "帮我看看项目"
+) {
+  const suffix = followUpPrompt === "可以"
+    ? "affirm"
+    : followUpPrompt === "还能继续吗"
+      ? "resume"
+    : followUpPrompt === "帮我优化下"
+      ? "opt"
+      : "inspect";
+  const root = await mkdtemp(join(tmpdir(), `selfme-agent-terminal-loop-approved-proposal-verifier-approval-${suffix}-`));
+  const workspace = join(root, "workspace");
+  const transcriptPath = join(root, "transcript.jsonl");
+  const logsPath = join(root, "logs.jsonl");
+  const sessionId = `terminal-loop-approved-proposal-verifier-approval-${suffix}`;
+  const proposalPrompt = "先看看 node-todo，但先别改。";
+  await mkdir(join(workspace, "node-todo", "views"), { recursive: true });
+
+  await writeFile(
+    join(workspace, "node-todo", "app.js"),
+    'const PORT = 3000;\nconsole.log(PORT);\n',
+    "utf8"
+  );
+  await writeFile(
+    join(workspace, "node-todo", "views", "index.ejs"),
+    '<input name="title" />\n',
+    "utf8"
+  );
+  await writeFile(
+    join(workspace, "node-todo", "verify-exact.mjs"),
+    [
+      'import { readFileSync } from "node:fs";',
+      'const app = readFileSync(new URL("./app.js", import.meta.url), "utf8");',
+      'const view = readFileSync(new URL("./views/index.ejs", import.meta.url), "utf8");',
+      'const appReady = /process\\.env\\.PORT/.test(app);',
+      'const viewReady = /maxlength="100"/.test(view);',
+      'if (appReady && viewReady) {',
+      '  console.log("ready!");',
+      '} else if (appReady) {',
+      '  console.log("app-only");',
+      '} else if (viewReady) {',
+      '  console.log("view-only");',
+      '} else {',
+      '  console.log("not-ready");',
+      '}'
+    ].join("\n") + "\n",
+    "utf8"
+  );
+
+  class TerminalLoopApprovedProposalVerifierShiftApprovalWaitBroadFollowUpProvider implements ProviderClient {
+    readonly name = "terminal-loop-approved-proposal-verifier-shift-approval-wait-broad-followup-provider";
+
+    async *streamResponse(input: ProviderStreamInput): AsyncIterable<ProviderStreamChunk> {
+      const executeProposalPrompt = 'The user replied "可以" to approve the immediately previous proposal.';
+
+      if (input.content === proposalPrompt) {
+        yield {
+          delta: "我先看了 node-todo；如果你愿意，我下一步可以直接优化 node-todo/app.js 和 node-todo/views/index.ejs，并运行 node-todo/verify-exact.mjs 验证直到输出 exactly `ready`。"
+        };
+        return;
+      }
+
+      if (input.content.startsWith(executeProposalPrompt)) {
+        assert.match(input.content, /Approved proposal: .*node-todo\/app\.js.*node-todo\/views\/index\.ejs.*verify-exact\.mjs/u);
+        yield {
+          delta: toolCall("files", {
+            path: "node-todo/app.js",
+            startLine: 1,
+            endLine: 5
+          })
+        };
+        return;
+      }
+
+      if (input.content.startsWith(`Original user request: ${executeProposalPrompt}`)) {
+        const toolName = extractLine(input.content, "Tool:") ?? extractLine(input.content, "Latest tool:");
+        const summary = extractLine(input.content, "Summary:") ?? extractLine(input.content, "Latest summary:") ?? "";
+
+        if (toolName === "files" && /node-todo\/app\.js/.test(summary)) {
+          yield {
+            delta: toolCall("edit", {
+              path: "node-todo/app.js",
+              startLine: 1,
+              endLine: 1,
+              replacement: "const PORT = Number(process.env.PORT || 3000);"
+            })
+          };
+          return;
+        }
+
+        if (toolName === "edit" && /node-todo\/app\.js/.test(summary)) {
+          yield {
+            delta: toolCall("shell", {
+              command: "node node-todo/verify-exact.mjs"
+            })
+          };
+          return;
+        }
+
+        if (toolName === "shell" && /node node-todo\/verify-exact\.mjs/.test(summary)) {
+          if (/app-only/.test(input.content)) {
+            yield {
+              delta: toolCall("files", {
+                path: "node-todo/views/index.ejs",
+                startLine: 1,
+                endLine: 3
+              })
+            };
+            return;
+          }
+
+          if (/ready!/.test(input.content)) {
+            yield {
+              delta: toolCall("files", {
+                path: "node-todo/verify-exact.mjs",
+                startLine: 1,
+                endLine: 20
+              })
+            };
+            return;
+          }
+
+          assert.match(input.content, /\bready\b/);
+          yield { delta: "Completed the resumed approved proposal verifier approval broad follow-up chain from the pending verifier edit." };
+          return;
+        }
+
+        if (toolName === "files" && /node-todo\/views\/index\.ejs/.test(summary)) {
+          yield {
+            delta: toolCall("edit", {
+              path: "node-todo/views/index.ejs",
+              startLine: 1,
+              endLine: 1,
+              replacement: '<input name="title" maxlength="100" />'
+            })
+          };
+          return;
+        }
+
+        if (toolName === "edit" && /node-todo\/views\/index\.ejs/.test(summary)) {
+          yield {
+            delta: toolCall("shell", {
+              command: "node node-todo/verify-exact.mjs"
+            })
+          };
+          return;
+        }
+
+        if (toolName === "files" && /node-todo\/verify-exact\.mjs/.test(summary)) {
+          yield {
+            delta: toolCall("edit", {
+              path: "node-todo/verify-exact.mjs",
+              startLine: 7,
+              endLine: 7,
+              replacement: '  console.log("ready");'
+            })
+          };
+          return;
+        }
+
+        if (toolName === "edit" && /node-todo\/verify-exact\.mjs/.test(summary)) {
+          yield {
+            delta: toolCall("shell", {
+              command: "node node-todo/verify-exact.mjs"
+            })
+          };
+          return;
+        }
+      }
+
+      if (input.content.startsWith(`The user replied "${followUpPrompt}" and wants to continue the most recent unfinished task.`)) {
+        assert.match(input.content, /Original task: .*optimi(?:s|z)e node-todo.*node-todo\/app\.js.*node-todo\/views\/index\.ejs.*verify-exact\.mjs/i);
+        if (followUpPrompt === "还能继续吗") {
+          assert.match(input.content, /Resume that task now instead of treating this as a discussion question\./);
+        } else if (followUpPrompt === "可以") {
+          assert.match(input.content, /Resume that task now instead of treating this as a generic acknowledgement\./);
+        } else if (followUpPrompt === "帮我优化下") {
+          assert.match(input.content, /Resume that task now instead of treating this as a broad optimization follow-up\./);
+        } else {
+          assert.match(input.content, /Resume that task now instead of treating this as a broad inspection follow-up\./);
+        }
+        assert.match(input.content, /Recent editable working file: node-todo\/verify-exact\.mjs/);
+        assert.match(input.content, /Latest tool in context: files/);
+        assert.match(input.content, /Latest tool summary in context: node-todo\/verify-exact\.mjs:1-20/);
+        assert.match(input.content, /Interrupted pending approval: edit · node-todo\/verify-exact\.mjs:7-7/);
+        yield {
+          delta: toolCall("edit", {
+            path: "node-todo/verify-exact.mjs",
+            startLine: 7,
+            endLine: 7,
+            replacement: '  console.log("ready");'
+          })
+        };
+        return;
+      }
+
+      if (
+        input.content.startsWith(`Original user request: The user replied "${followUpPrompt}" and wants to continue the most recent unfinished task.`)
+      ) {
+        const toolName = extractLine(input.content, "Tool:") ?? extractLine(input.content, "Latest tool:");
+        const summary = extractLine(input.content, "Summary:") ?? extractLine(input.content, "Latest summary:") ?? "";
+
+        if (toolName === "edit" && /node-todo\/verify-exact\.mjs/.test(summary)) {
+          yield {
+            delta: toolCall("shell", {
+              command: "node node-todo/verify-exact.mjs"
+            })
+          };
+          return;
+        }
+
+        if (toolName === "shell" && /node node-todo\/verify-exact\.mjs/.test(summary)) {
+          assert.match(input.content, /\bready\b/);
+          yield { delta: "Completed the resumed approved proposal verifier approval broad follow-up chain from the pending verifier edit." };
+          return;
+        }
+      }
+
+      yield { delta: "ok" };
+    }
+  }
+
+  const bus = new EventBus();
+  const transcriptStore = new TranscriptStore(transcriptPath);
+  const logStore = new LogStore(logsPath);
+  await transcriptStore.ensureInitialized();
+  await logStore.ensureInitialized();
+
+  const session = createDefaultSessionRecord(workspace, VERSION);
+  session.sessionId = sessionId;
+  session.model = "regression-stub";
+
+  const runtime = new AgentRuntime({
+    bus,
+    provider: new TerminalLoopApprovedProposalVerifierShiftApprovalWaitBroadFollowUpProvider(),
+    tools: new InMemoryToolRegistry(),
+    session,
+    transcriptStore,
+    logStore
+  });
+  await runtime.start();
+
+  let approvalCount = 0;
+  let heldApprovalId: string | undefined;
+  let phaseTwo = false;
+  const thirdApprovalPromise = new Promise<Extract<RuntimeEvent, { type: "approval.requested" }>>((resolve) => {
+    bus.on("approval.requested", (event) => {
+      approvalCount += 1;
+
+      if (!phaseTwo) {
+        if (approvalCount < 3) {
+          bus.emit(createTerminalCommandInvokedEvent({
+            sessionId: event.sessionId,
+            content: `/approve ${event.payload.approvalId}`
+          }));
+          return;
+        }
+
+        heldApprovalId = event.payload.approvalId;
+        resolve(event);
+        return;
+      }
+
+      bus.emit(createTerminalCommandInvokedEvent({
+        sessionId: event.sessionId,
+        content: `/approve ${event.payload.approvalId}`
+      }));
+    });
+  });
+
+  const editor = new EditorController();
+  const panel = new TerminalPanelController();
+  const terminal = new TerminalEventLoop({
+    bus,
+    editor,
+    panel,
+    sessionId
+  });
+
+  const originalExit = process.exit;
+  const existingDataListeners = process.stdin.listeners("data") as Array<(...args: any[]) => void>;
+
+  (process as typeof process & {
+    exit: (code?: number) => never;
+  }).exit = ((code?: number) => {
+    throw new Error(`EXIT:${code ?? 0}`);
+  }) as typeof process.exit;
+
+  try {
+    terminal.start();
+
+    const proposalCompletion = waitForAssistantTaskCompletion(bus, sessionId);
+    process.stdin.emit("data", Buffer.from(`${proposalPrompt}\r`));
+    const proposalTask = await proposalCompletion;
+    assert.equal(proposalTask.payload.state, "completed");
+
+    const approvedCompletion = waitForAssistantTaskCompletion(bus, sessionId);
+    process.stdin.emit("data", Buffer.from("可以\r"));
+
+    const pendingApproval = await thirdApprovalPromise;
+    assert.equal(pendingApproval.payload.toolName, "edit");
+    assert.match(JSON.stringify(pendingApproval.payload.input), /console\.log\("ready"\)/);
+    process.stdin.emit("data", "\u0003");
+
+    const cancelledTask = await approvedCompletion;
+    assert.equal(cancelledTask.payload.state, "cancelled");
+
+    const interruptedEvents = await transcriptStore.readEventsBySession(sessionId);
+    assert.ok(
+      interruptedEvents.some((event) =>
+        event.type === "tool.execution.completed" && event.payload.summary.startsWith("node-todo/verify-exact.mjs:1-20")
+      ),
+      "terminal approved proposal verifier approval broad follow-up should preserve the narrowed verifier file before stop"
+    );
+    assert.equal(
+      interruptedEvents.some((event) =>
+        event.type === "tool.execution.completed" && event.payload.summary.startsWith("node-todo/verify-exact.mjs:7-7 · updated")
+      ),
+      false,
+      "terminal approved proposal verifier approval broad follow-up should stop before the pending verifier edit is applied"
+    );
+    assert.ok(
+      interruptedEvents.some((event) =>
+        event.type === "approval.resolved"
+        && event.payload.approvalId === heldApprovalId
+        && !event.payload.approved
+      ),
+      "terminal approved proposal verifier approval broad follow-up should resolve the held verifier approval as denied for the cancelled run"
+    );
+
+    phaseTwo = true;
+    const resumedCompletion = waitForAssistantTaskCompletion(bus, sessionId);
+    process.stdin.emit("data", Buffer.from(`${followUpPrompt}\r`));
+    const resumedTask = await resumedCompletion;
+    const resumedEvents = await transcriptStore.readEventsBySession(sessionId);
+    const resumedAssistantText = collectAssistantText(resumedEvents, resumedTask.taskId ?? "");
+    const verifierContent = await readFile(join(workspace, "node-todo", "verify-exact.mjs"), "utf8");
+
+    assert.equal(resumedTask.payload.state, "completed");
+    assert.equal(editor.getState().value, "", "terminal approved proposal verifier approval resume should clear the editor buffer");
+    assert.match(verifierContent, /console\.log\("ready"\)/);
+    assert.match(resumedAssistantText, /approved proposal verifier approval broad follow-up|pending verifier edit|ready/i);
+    assert.doesNotMatch(resumedAssistantText, /^(可以|可以继续|好的|sure|okay)\b/i);
+    assert.equal(
+      resumedEvents.some((event) =>
+        event.type === "tool.execution.completed"
+        && event.payload.summary.startsWith("node-todo/app.js:1-")
+        && event.taskId === resumedTask.taskId
+      ),
+      false,
+      "terminal approved proposal verifier approval broad follow-up should not reread app.js"
+    );
+    assert.equal(
+      resumedEvents.some((event) =>
+        event.type === "tool.execution.completed"
+        && event.payload.summary.startsWith("node-todo/views/index.ejs:1-")
+        && event.taskId === resumedTask.taskId
+      ),
+      false,
+      "terminal approved proposal verifier approval broad follow-up should not reread views/index.ejs"
+    );
+    assert.equal(
+      resumedEvents.some((event) =>
+        event.type === "tool.execution.completed"
+        && event.payload.summary.startsWith("node-todo/verify-exact.mjs:1-20")
+        && event.taskId === resumedTask.taskId
+      ),
+      false,
+      "terminal approved proposal verifier approval broad follow-up should not reread the verifier before retrying the pending edit"
+    );
+    assert.ok(
+      resumedEvents.some((event) =>
+        event.type === "tool.execution.completed"
+        && event.payload.summary.startsWith("node-todo/verify-exact.mjs:7-7 · updated")
+        && event.taskId === resumedTask.taskId
+      ),
+      "terminal approved proposal verifier approval broad follow-up should continue directly with the pending verifier edit"
+    );
+    assert.equal(
+      resumedEvents.filter((event) =>
+        event.type === "tool.execution.completed"
+        && event.payload.summary.startsWith("node node-todo/verify-exact.mjs · completed")
+        && event.taskId === resumedTask.taskId
+      ).length,
+      1,
+      "terminal approved proposal verifier approval broad follow-up should rerun exact verification exactly once after the resumed verifier edit"
+    );
+    assert.equal(
+      approvalCount,
+      4,
+      "terminal approved proposal verifier approval broad follow-up should need two original approvals, one denied held verifier approval, and one fresh resumed verifier approval"
+    );
+  } finally {
+    process.exit = originalExit;
+    try {
+      bus.emit(createTerminalCommandInvokedEvent({
+        sessionId,
+        content: "/exit"
+      }));
+    } catch (error) {
+      assert.match(String(error), /EXIT:0/);
+    }
+
+    for (const listener of process.stdin.listeners("data") as Array<(...args: any[]) => void>) {
+      if (!existingDataListeners.includes(listener)) {
+        process.stdin.off("data", listener);
+      }
+    }
+  }
+}
+
+async function verifyTerminalLoopExplicitNewTaskDoesNotResumeApprovedProposalVerifierApproval() {
+  const root = await mkdtemp(join(tmpdir(), "selfme-agent-terminal-loop-approved-proposal-verifier-approval-new-task-"));
+  const workspace = join(root, "workspace");
+  const transcriptPath = join(root, "transcript.jsonl");
+  const logsPath = join(root, "logs.jsonl");
+  const sessionId = "terminal-loop-approved-proposal-verifier-approval-new-task";
+  const proposalPrompt = "先看看 node-todo，但先别改。";
+  await mkdir(join(workspace, "node-todo", "views"), { recursive: true });
+
+  await writeFile(
+    join(workspace, "node-todo", "app.js"),
+    'const PORT = 3000;\nconsole.log(PORT);\n',
+    "utf8"
+  );
+  await writeFile(
+    join(workspace, "node-todo", "views", "index.ejs"),
+    '<input name="title" />\n',
+    "utf8"
+  );
+  await writeFile(
+    join(workspace, "node-todo", "verify-exact.mjs"),
+    [
+      'import { readFileSync } from "node:fs";',
+      'const app = readFileSync(new URL("./app.js", import.meta.url), "utf8");',
+      'const view = readFileSync(new URL("./views/index.ejs", import.meta.url), "utf8");',
+      'const appReady = /process\\.env\\.PORT/.test(app);',
+      'const viewReady = /maxlength="100"/.test(view);',
+      'if (appReady && viewReady) {',
+      '  console.log("ready!");',
+      '} else if (appReady) {',
+      '  console.log("app-only");',
+      '} else if (viewReady) {',
+      '  console.log("view-only");',
+      '} else {',
+      '  console.log("not-ready");',
+      '}'
+    ].join("\n") + "\n",
+    "utf8"
+  );
+
+  class TerminalLoopApprovedProposalVerifierApprovalNewTaskProvider implements ProviderClient {
+    readonly name = "terminal-loop-approved-proposal-verifier-approval-new-task-provider";
+
+    async *streamResponse(input: ProviderStreamInput): AsyncIterable<ProviderStreamChunk> {
+      const executeProposalPrompt = 'The user replied "可以" to approve the immediately previous proposal.';
+
+      if (input.content === proposalPrompt) {
+        yield {
+          delta: "我先看了 node-todo；如果你愿意，我下一步可以直接优化 node-todo/app.js 和 node-todo/views/index.ejs，并运行 node-todo/verify-exact.mjs 验证直到输出 exactly `ready`。"
+        };
+        return;
+      }
+
+      if (input.content === "Create new.txt with the content new-task.") {
+        yield {
+          delta: toolCall("write", {
+            path: "new.txt",
+            content: "new-task\n"
+          })
+        };
+        return;
+      }
+
+      if (input.content.startsWith("The user replied ") && input.content.includes("wants to continue the most recent unfinished task.")) {
+        assert.fail("explicit new task should not be rewritten into a resume follow-up during approved proposal verifier-approval interruption");
+      }
+
+      if (input.content.startsWith("Original user request: Create new.txt with the content new-task.")) {
+        yield { delta: "Created new.txt instead of resuming the interrupted verifier approval chain." };
+        return;
+      }
+
+      if (input.content.startsWith(executeProposalPrompt)) {
+        yield {
+          delta: toolCall("files", {
+            path: "node-todo/app.js",
+            startLine: 1,
+            endLine: 5
+          })
+        };
+        return;
+      }
+
+      if (input.content.startsWith(`Original user request: ${executeProposalPrompt}`)) {
+        const toolName = extractLine(input.content, "Tool:") ?? extractLine(input.content, "Latest tool:");
+        const summary = extractLine(input.content, "Summary:") ?? extractLine(input.content, "Latest summary:") ?? "";
+
+        if (toolName === "files" && /node-todo\/app\.js/.test(summary)) {
+          yield {
+            delta: toolCall("edit", {
+              path: "node-todo/app.js",
+              startLine: 1,
+              endLine: 1,
+              replacement: "const PORT = Number(process.env.PORT || 3000);"
+            })
+          };
+          return;
+        }
+
+        if (toolName === "edit" && /node-todo\/app\.js/.test(summary)) {
+          yield {
+            delta: toolCall("shell", {
+              command: "node node-todo/verify-exact.mjs"
+            })
+          };
+          return;
+        }
+
+        if (toolName === "shell" && /node node-todo\/verify-exact\.mjs/.test(summary)) {
+          if (/app-only/.test(input.content)) {
+            yield {
+              delta: toolCall("files", {
+                path: "node-todo/views/index.ejs",
+                startLine: 1,
+                endLine: 3
+              })
+            };
+            return;
+          }
+
+          if (/ready!/.test(input.content)) {
+            yield {
+              delta: toolCall("files", {
+                path: "node-todo/verify-exact.mjs",
+                startLine: 1,
+                endLine: 20
+              })
+            };
+            return;
+          }
+
+          assert.match(input.content, /\bready\b/);
+          yield { delta: "Completed the resumed approved proposal verifier approval chain from the pending verifier edit." };
+          return;
+        }
+
+        if (toolName === "files" && /node-todo\/views\/index\.ejs/.test(summary)) {
+          yield {
+            delta: toolCall("edit", {
+              path: "node-todo/views/index.ejs",
+              startLine: 1,
+              endLine: 1,
+              replacement: '<input name="title" maxlength="100" />'
+            })
+          };
+          return;
+        }
+
+        if (toolName === "edit" && /node-todo\/views\/index\.ejs/.test(summary)) {
+          yield {
+            delta: toolCall("shell", {
+              command: "node node-todo/verify-exact.mjs"
+            })
+          };
+          return;
+        }
+
+        if (toolName === "files" && /node-todo\/verify-exact\.mjs/.test(summary)) {
+          yield {
+            delta: toolCall("edit", {
+              path: "node-todo/verify-exact.mjs",
+              startLine: 7,
+              endLine: 7,
+              replacement: '  console.log("ready");'
+            })
+          };
+          return;
+        }
+
+        if (toolName === "edit" && /node-todo\/verify-exact\.mjs/.test(summary)) {
+          yield {
+            delta: toolCall("shell", {
+              command: "node node-todo/verify-exact.mjs"
+            })
+          };
+          return;
+        }
+      }
+
+      yield { delta: "ok" };
+    }
+  }
+
+  const bus = new EventBus();
+  const transcriptStore = new TranscriptStore(transcriptPath);
+  const logStore = new LogStore(logsPath);
+  await transcriptStore.ensureInitialized();
+  await logStore.ensureInitialized();
+
+  const session = createDefaultSessionRecord(workspace, VERSION);
+  session.sessionId = sessionId;
+  session.model = "regression-stub";
+
+  const runtime = new AgentRuntime({
+    bus,
+    provider: new TerminalLoopApprovedProposalVerifierApprovalNewTaskProvider(),
+    tools: new InMemoryToolRegistry(),
+    session,
+    transcriptStore,
+    logStore
+  });
+  await runtime.start();
+
+  let heldApprovalId: string | undefined;
+  let approvalCount = 0;
+  bus.on("approval.requested", (event) => {
+    approvalCount += 1;
+
+    if (approvalCount < 3) {
+      bus.emit(createTerminalCommandInvokedEvent({
+        sessionId: event.sessionId,
+        content: `/approve ${event.payload.approvalId}`
+      }));
+      return;
+    }
+
+    if (!heldApprovalId) {
+      heldApprovalId = event.payload.approvalId;
+      return;
+    }
+
+    bus.emit(createTerminalCommandInvokedEvent({
+      sessionId: event.sessionId,
+      content: `/approve ${event.payload.approvalId}`
+    }));
+  });
+
+  const editor = new EditorController();
+  const panel = new TerminalPanelController();
+  const terminal = new TerminalEventLoop({
+    bus,
+    editor,
+    panel,
+    sessionId
+  });
+
+  const originalExit = process.exit;
+  const existingDataListeners = process.stdin.listeners("data") as Array<(...args: any[]) => void>;
+
+  (process as typeof process & {
+    exit: (code?: number) => never;
+  }).exit = ((code?: number) => {
+    throw new Error(`EXIT:${code ?? 0}`);
+  }) as typeof process.exit;
+
+  try {
+    terminal.start();
+
+    const proposalCompletion = waitForAssistantTaskCompletion(bus, sessionId);
+    process.stdin.emit("data", Buffer.from(`${proposalPrompt}\r`));
+    const proposalTask = await proposalCompletion;
+    assert.equal(proposalTask.payload.state, "completed");
+
+    const approvedCompletion = waitForAssistantTaskCompletion(bus, sessionId);
+    process.stdin.emit("data", Buffer.from("可以\r"));
+
+    await new Promise<void>((resolve) => {
+      let resolved = false;
+      const listener = (event: RuntimeEvent) => {
+        if (resolved) {
+          return;
+        }
+
+        if (
+          event.type === "approval.requested"
+          && event.sessionId === sessionId
+          && /verify-exact\.mjs/.test(JSON.stringify(event.payload.input))
+        ) {
+          resolved = true;
+          resolve();
+        }
+      };
+      bus.on("approval.requested", listener as never);
+    });
+
+    process.stdin.emit("data", "\u0003");
+
+    const cancelledTask = await approvedCompletion;
+    assert.equal(cancelledTask.payload.state, "cancelled");
+
+    const interruptedEvents = await transcriptStore.readEventsBySession(sessionId);
+    assert.ok(
+      interruptedEvents.some((event) =>
+        event.type === "tool.execution.completed"
+        && event.payload.summary.startsWith("node-todo/verify-exact.mjs:1-20")
+      ),
+      "interrupted verifier-approval task should preserve the narrowed verifier file before the explicit new task"
+    );
+    assert.equal(
+      interruptedEvents.some((event) =>
+        event.type === "tool.execution.completed"
+        && event.payload.summary.startsWith("node-todo/verify-exact.mjs:7-7 · updated")
+      ),
+      false,
+      "interrupted verifier-approval task should stop before the pending verifier edit is applied"
+    );
+    assert.ok(
+      interruptedEvents.some((event) =>
+        event.type === "approval.resolved"
+        && event.payload.approvalId === heldApprovalId
+        && !event.payload.approved
+      ),
+      "interrupting the verifier approval task should deny the held verifier approval"
+    );
+
+    const newTaskCompletion = waitForAssistantTaskCompletion(bus, sessionId);
+    process.stdin.emit("data", Buffer.from("Create new.txt with the content new-task.\r"));
+    const newTask = await newTaskCompletion;
+    const newTaskEvents = await transcriptStore.readEventsBySession(sessionId);
+    const newTaskAssistantText = collectAssistantText(newTaskEvents, newTask.taskId ?? "");
+    const newContent = await readFile(join(workspace, "new.txt"), "utf8");
+    const verifierContent = await readFile(join(workspace, "node-todo", "verify-exact.mjs"), "utf8");
+
+    assert.equal(newTask.payload.state, "completed");
+    assert.equal(editor.getState().value, "", "explicit new task after verifier-approval interruption should clear the editor buffer");
+    assert.equal(newContent, "new-task\n");
+    assert.doesNotMatch(verifierContent, /console\.log\("ready"\)/);
+    assert.match(newTaskAssistantText, /Created new\.txt|new task|已处理 `new\.txt`|已完成/u);
+    assert.ok(
+      newTaskEvents.some((event) =>
+        event.type === "tool.execution.completed"
+        && event.payload.summary.startsWith("new.txt · created")
+        && event.taskId === newTask.taskId
+      ),
+      "explicit new task should create new.txt instead of resuming the interrupted verifier approval chain"
+    );
+    assert.equal(
+      newTaskEvents.some((event) =>
+        event.type === "tool.execution.completed"
+        && (
+          event.payload.summary.startsWith("node-todo/verify-exact.mjs:1-20")
+          || event.payload.summary.startsWith("node-todo/verify-exact.mjs:7-7 · updated")
+          || event.payload.summary.startsWith("node node-todo/verify-exact.mjs · completed")
+        )
+        && event.taskId === newTask.taskId
+      ),
+      false,
+      "explicit new task should not continue any verifier approval repair steps"
     );
   } finally {
     process.exit = originalExit;
@@ -42832,11 +48181,30 @@ async function verifyTerminalLoopAutoContinuesAfterToolStepLimit() {
 }
 
 async function verifyTerminalLoopStopAndResumeStepLimitPendingFile() {
-  const root = await mkdtemp(join(tmpdir(), "selfme-agent-terminal-loop-step-limit-file-resume-"));
+  await verifyTerminalLoopStopAndResumeStepLimitPendingFileWithFollowUp("还能继续吗");
+}
+
+async function verifyTerminalLoopStopAndResumeStepLimitPendingFileAffirmativeContinueFollowUp() {
+  await verifyTerminalLoopStopAndResumeStepLimitPendingFileWithFollowUp("继续吧");
+}
+
+async function verifyTerminalLoopStopAndResumeStepLimitPendingFileBroadInspectionFollowUp() {
+  await verifyTerminalLoopStopAndResumeStepLimitPendingFileWithFollowUp("帮我看看项目");
+}
+
+async function verifyTerminalLoopStopAndResumeStepLimitPendingFileWithFollowUp(
+  followUpPrompt: "还能继续吗" | "继续吧" | "帮我看看项目"
+) {
+  const suffix = followUpPrompt === "还能继续吗"
+    ? "resume"
+    : followUpPrompt === "继续吧"
+      ? "affirmative"
+      : "inspect";
+  const root = await mkdtemp(join(tmpdir(), `selfme-agent-terminal-loop-step-limit-file-resume-${suffix}-`));
   const workspace = join(root, "workspace");
   const transcriptPath = join(root, "transcript.jsonl");
   const logsPath = join(root, "logs.jsonl");
-  const sessionId = "terminal-loop-step-limit-file-resume";
+  const sessionId = `terminal-loop-step-limit-file-resume-${suffix}`;
   const originalPrompt = "帮我看看整个项目";
   await mkdir(join(workspace, "demo-app", "src"), { recursive: true });
 
@@ -42936,7 +48304,7 @@ async function verifyTerminalLoopStopAndResumeStepLimitPendingFile() {
         return;
       }
 
-      if (input.content.startsWith('The user replied "还能继续吗" and wants to continue the most recent unfinished task.')) {
+      if (input.content.startsWith(`The user replied "${followUpPrompt}" and wants to continue the most recent unfinished task.`)) {
         assert.match(input.content, /Pending next step target: demo-app\/src\/file-15\.js/);
         assert.match(input.content, /Latest tool in context: files/);
         assert.match(input.content, /Latest tool summary in context: demo-app\/src\/file-14\.js:1-1/);
@@ -42951,7 +48319,7 @@ async function verifyTerminalLoopStopAndResumeStepLimitPendingFile() {
       }
 
       if (
-        input.content.startsWith('Original user request: The user replied "还能继续吗" and wants to continue the most recent unfinished task.')
+        input.content.startsWith(`Original user request: The user replied "${followUpPrompt}" and wants to continue the most recent unfinished task.`)
       ) {
         const toolName = extractLine(input.content, "Tool:") ?? extractLine(input.content, "Latest tool:");
         const summary = extractLine(input.content, "Summary:") ?? extractLine(input.content, "Latest summary:") ?? "";
@@ -43049,7 +48417,7 @@ async function verifyTerminalLoopStopAndResumeStepLimitPendingFile() {
     );
 
     const resumedCompletion = waitForAssistantTaskCompletion(bus, sessionId);
-    process.stdin.emit("data", Buffer.from("还能继续吗\r"));
+    process.stdin.emit("data", Buffer.from(`${followUpPrompt}\r`));
     const resumedTask = await resumedCompletion;
     const resumedEvents = await transcriptStore.readEventsBySession(sessionId);
     const resumedAssistantText = collectAssistantText(resumedEvents, resumedTask.taskId ?? "");
@@ -43428,11 +48796,22 @@ async function verifyTerminalLoopAutoContinuesAcrossVeryLongAdvancingToolStepSli
 }
 
 async function verifyTerminalLoopStopAndResumeAcrossVeryLongAdvancingToolStepSlices() {
-  const root = await mkdtemp(join(tmpdir(), "selfme-agent-terminal-loop-step-limit-advancing-very-long-resume-"));
+  await verifyTerminalLoopStopAndResumeAcrossVeryLongAdvancingToolStepSlicesWithFollowUp("还能继续吗");
+}
+
+async function verifyTerminalLoopStopAndResumeAcrossVeryLongAdvancingToolStepSlicesBroadOptimizationFollowUp() {
+  await verifyTerminalLoopStopAndResumeAcrossVeryLongAdvancingToolStepSlicesWithFollowUp("帮我优化下");
+}
+
+async function verifyTerminalLoopStopAndResumeAcrossVeryLongAdvancingToolStepSlicesWithFollowUp(
+  followUpPrompt: "还能继续吗" | "帮我优化下"
+) {
+  const suffix = followUpPrompt === "还能继续吗" ? "resume" : "opt";
+  const root = await mkdtemp(join(tmpdir(), `selfme-agent-terminal-loop-step-limit-advancing-very-long-resume-${suffix}-`));
   const workspace = join(root, "workspace");
   const transcriptPath = join(root, "transcript.jsonl");
   const logsPath = join(root, "logs.jsonl");
-  const sessionId = "terminal-loop-step-limit-advancing-very-long-resume";
+  const sessionId = `terminal-loop-step-limit-advancing-very-long-resume-${suffix}`;
   const originalPrompt = "Read every batch file from batch-very-long-resume/file-001.txt through batch-very-long-resume/file-209.txt, then answer BATCH-VERY-LONG-RESUME-DONE.";
   const filePaths = Array.from({ length: 209 }, (_, index) => `batch-very-long-resume/file-${String(index + 1).padStart(3, "0")}.txt`);
   const escapePattern = (value: string) => value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
@@ -43497,7 +48876,7 @@ async function verifyTerminalLoopStopAndResumeAcrossVeryLongAdvancingToolStepSli
         return;
       }
 
-      if (input.content.startsWith('The user replied "还能继续吗" and wants to continue the most recent unfinished task.')) {
+      if (input.content.startsWith(`The user replied "${followUpPrompt}" and wants to continue the most recent unfinished task.`)) {
         assert.ok(this.finalPendingTarget, "expected the very-long advancing step-limit resume target to be known before resume");
         assert.match(input.content, new RegExp(`Pending next step target: ${escapePattern(this.finalPendingTarget)}`));
         yield {
@@ -43626,7 +49005,7 @@ async function verifyTerminalLoopStopAndResumeAcrossVeryLongAdvancingToolStepSli
     );
 
     const resumedCompletion = waitForAssistantTaskCompletion(bus, sessionId);
-    process.stdin.emit("data", Buffer.from("还能继续吗\r"));
+    process.stdin.emit("data", Buffer.from(`${followUpPrompt}\r`));
     const resumedTask = await resumedCompletion;
     const resumedEvents = await transcriptStore.readEventsBySession(sessionId);
     const resumedAssistantText = collectAssistantText(resumedEvents, resumedTask.taskId ?? "");
@@ -43681,11 +49060,22 @@ async function verifyTerminalLoopStopAndResumeAcrossVeryLongAdvancingToolStepSli
 }
 
 async function verifyTerminalLoopStopAndResumeAcrossAdvancingToolStepSlices() {
-  const root = await mkdtemp(join(tmpdir(), "selfme-agent-terminal-loop-step-limit-advancing-multi-resume-"));
+  await verifyTerminalLoopStopAndResumeAcrossAdvancingToolStepSlicesWithFollowUp("还能继续吗");
+}
+
+async function verifyTerminalLoopStopAndResumeAcrossAdvancingToolStepSlicesBroadOptimizationFollowUp() {
+  await verifyTerminalLoopStopAndResumeAcrossAdvancingToolStepSlicesWithFollowUp("帮我优化下");
+}
+
+async function verifyTerminalLoopStopAndResumeAcrossAdvancingToolStepSlicesWithFollowUp(
+  followUpPrompt: "还能继续吗" | "帮我优化下"
+) {
+  const suffix = followUpPrompt === "还能继续吗" ? "resume" : "opt";
+  const root = await mkdtemp(join(tmpdir(), `selfme-agent-terminal-loop-step-limit-advancing-multi-resume-${suffix}-`));
   const workspace = join(root, "workspace");
   const transcriptPath = join(root, "transcript.jsonl");
   const logsPath = join(root, "logs.jsonl");
-  const sessionId = "terminal-loop-step-limit-advancing-multi-resume";
+  const sessionId = `terminal-loop-step-limit-advancing-multi-resume-${suffix}`;
   const originalPrompt = "Read every batch file from batch-long-resume/file-01.txt through batch-long-resume/file-68.txt, then answer BATCH-LONG-RESUME-DONE.";
   const filePaths = Array.from({ length: 68 }, (_, index) => `batch-long-resume/file-${String(index + 1).padStart(2, "0")}.txt`);
   const escapePattern = (value: string) => value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
@@ -43750,7 +49140,7 @@ async function verifyTerminalLoopStopAndResumeAcrossAdvancingToolStepSlices() {
         return;
       }
 
-      if (input.content.startsWith('The user replied "还能继续吗" and wants to continue the most recent unfinished task.')) {
+      if (input.content.startsWith(`The user replied "${followUpPrompt}" and wants to continue the most recent unfinished task.`)) {
         assert.ok(this.finalPendingTarget, "expected the advancing step-limit resume target to be known before resume");
         assert.match(input.content, new RegExp(`Pending next step target: ${escapePattern(this.finalPendingTarget)}`));
         yield {
@@ -43879,7 +49269,7 @@ async function verifyTerminalLoopStopAndResumeAcrossAdvancingToolStepSlices() {
     );
 
     const resumedCompletion = waitForAssistantTaskCompletion(bus, sessionId);
-    process.stdin.emit("data", Buffer.from("还能继续吗\r"));
+    process.stdin.emit("data", Buffer.from(`${followUpPrompt}\r`));
     const resumedTask = await resumedCompletion;
     const resumedEvents = await transcriptStore.readEventsBySession(sessionId);
     const resumedAssistantText = collectAssistantText(resumedEvents, resumedTask.taskId ?? "");
@@ -44135,11 +49525,266 @@ async function verifyTerminalLoopAutoContinuesAfterToolStepLimitBeforeCommandOnl
 }
 
 async function verifyTerminalLoopStopAndResumeStepLimitCommandOnlyShell() {
-  const root = await mkdtemp(join(tmpdir(), "selfme-agent-terminal-loop-step-limit-command-resume-"));
+  await verifyTerminalLoopStopAndResumeStepLimitCommandOnlyShellWithFollowUp("还能继续吗");
+}
+
+async function verifyTerminalLoopStopAndResumeStepLimitCommandOnlyShellBroadOptimizationFollowUp() {
+  await verifyTerminalLoopStopAndResumeStepLimitCommandOnlyShellWithFollowUp("帮我优化下");
+}
+
+async function verifyTerminalLoopExplicitNewTaskDoesNotResumeStepLimitCommandOnlyShell() {
+  const root = await mkdtemp(join(tmpdir(), "selfme-agent-terminal-loop-step-limit-command-new-task-"));
   const workspace = join(root, "workspace");
   const transcriptPath = join(root, "transcript.jsonl");
   const logsPath = join(root, "logs.jsonl");
-  const sessionId = "terminal-loop-step-limit-command-resume";
+  const sessionId = "terminal-loop-step-limit-command-new-task";
+  const originalPrompt = "Read beta-1.txt, beta-2.txt, beta-3.txt, beta-4.txt, beta-5.txt, beta-6.txt, beta-7.txt, and package.json, then run `npm test` before finishing.";
+  await mkdir(workspace, { recursive: true });
+
+  for (let index = 1; index <= 7; index += 1) {
+    await writeFile(join(workspace, `beta-${index}.txt`), `beta-${index}\n`, "utf8");
+  }
+
+  await writeFile(
+    join(workspace, "package.json"),
+    '{\n  "name": "terminal-step-limit-command-new-task",\n  "version": "1.0.0",\n  "scripts": {\n    "test": "node verify-terminal-commandless-step-limit-new-task.mjs"\n  }\n}\n',
+    "utf8"
+  );
+  await writeFile(join(workspace, "verify-terminal-commandless-step-limit-new-task.mjs"), 'console.log("ready");\n', "utf8");
+
+  class TerminalLoopStepLimitCommandNewTaskProvider implements ProviderClient {
+    readonly name = "terminal-loop-step-limit-command-new-task-provider";
+
+    async *streamResponse(input: ProviderStreamInput): AsyncIterable<ProviderStreamChunk> {
+      if (input.content === originalPrompt) {
+        yield {
+          delta: toolCall("files", {
+            path: "beta-1.txt",
+            startLine: 1,
+            endLine: 20
+          })
+        };
+        return;
+      }
+
+      if (input.content === "Create new.txt with the content new-task.") {
+        yield {
+          delta: toolCall("write", {
+            path: "new.txt",
+            content: "new-task\n"
+          })
+        };
+        return;
+      }
+
+      if (input.content.startsWith("The user replied ") && input.content.includes("wants to continue the most recent unfinished task.")) {
+        assert.fail("explicit new task should not be rewritten into a terminal step-limit command-only resume follow-up");
+      }
+
+      if (input.content.startsWith("Original user request: Create new.txt with the content new-task.")) {
+        yield { delta: "Created new.txt instead of resuming the interrupted terminal step-limit command-only chain." };
+        return;
+      }
+
+      if (input.content.startsWith(`Original user request: ${originalPrompt}`)) {
+        const toolName = extractLine(input.content, "Tool:") ?? extractLine(input.content, "Latest tool:");
+        const summary = extractLine(input.content, "Summary:") ?? extractLine(input.content, "Latest summary:") ?? "";
+
+        for (let index = 1; index <= 6; index += 1) {
+          if (toolName === "files" && new RegExp(`beta-${index}\\.txt`).test(summary)) {
+            yield {
+              delta: toolCall("files", {
+                path: `beta-${index + 1}.txt`,
+                startLine: 1,
+                endLine: 20
+              })
+            };
+            return;
+          }
+        }
+
+        if (toolName === "files" && /beta-7\.txt/.test(summary)) {
+          yield {
+            delta: toolCall("files", {
+              path: "package.json",
+              startLine: 1,
+              endLine: 20
+            })
+          };
+          return;
+        }
+      }
+
+      if (
+        !input.content.startsWith("Original user request:")
+        && input.content.includes("The current task hit the per-slice tool budget but still has unfinished work.")
+      ) {
+        assert.match(input.content, /Pending next step target: npm test/);
+        assert.match(input.content, /Latest tool in context: files/);
+        assert.match(input.content, /Latest tool summary in context: package\.json:1-6/);
+        yield { delta: "I already have package.json and will run npm test next." };
+        await waitForProviderDelay(input.signal, 10_000);
+        yield {
+          delta: toolCall("shell", {
+            command: "npm test"
+          })
+        };
+        return;
+      }
+
+      if (
+        input.content.startsWith("Original user request: The current task hit the per-slice tool budget but still has unfinished work.")
+      ) {
+        const toolName = extractLine(input.content, "Tool:") ?? extractLine(input.content, "Latest tool:");
+
+        if (toolName === "shell") {
+          yield { delta: "npm test completed and printed ready." };
+          return;
+        }
+      }
+
+      yield { delta: "ok" };
+    }
+  }
+
+  const bus = new EventBus();
+  const transcriptStore = new TranscriptStore(transcriptPath);
+  const logStore = new LogStore(logsPath);
+  await transcriptStore.ensureInitialized();
+  await logStore.ensureInitialized();
+
+  const session = createDefaultSessionRecord(workspace, VERSION);
+  session.sessionId = sessionId;
+  session.model = "regression-stub";
+
+  const runtime = new AgentRuntime({
+    bus,
+    provider: new TerminalLoopStepLimitCommandNewTaskProvider(),
+    tools: new InMemoryToolRegistry(),
+    session,
+    transcriptStore,
+    logStore
+  });
+  await runtime.start();
+
+  const editor = new EditorController();
+  const panel = new TerminalPanelController();
+  const terminal = new TerminalEventLoop({
+    bus,
+    editor,
+    panel,
+    sessionId
+  });
+
+  const originalExit = process.exit;
+  const existingDataListeners = process.stdin.listeners("data") as Array<(...args: any[]) => void>;
+
+  (process as typeof process & {
+    exit: (code?: number) => never;
+  }).exit = ((code?: number) => {
+    throw new Error(`EXIT:${code ?? 0}`);
+  }) as typeof process.exit;
+
+  try {
+    terminal.start();
+    const initialCompletion = waitForAssistantTaskCompletion(bus, sessionId);
+    const continuationSummary = waitForAssistantDeltaContaining(
+      bus,
+      sessionId,
+      /I already have package\.json and will run npm test next\./
+    );
+
+    process.stdin.emit("data", Buffer.from(`${originalPrompt}\r`));
+
+    await continuationSummary;
+    await waitForBusyPhase(bus, sessionId, "assistant");
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    process.stdin.emit("data", "\u001b");
+
+    const cancelledTask = await initialCompletion;
+    assert.equal(cancelledTask.payload.state, "cancelled");
+
+    const interruptedEvents = await transcriptStore.readEventsBySession(sessionId);
+    assert.equal(
+      interruptedEvents.filter((event) =>
+        event.type === "tool.execution.completed"
+        && event.payload.summary.startsWith("package.json:1-6")
+      ).length,
+      1,
+      "terminal explicit new task after step-limit command-only interruption should preserve the package read before stop"
+    );
+    assert.ok(
+      interruptedEvents.some((event) =>
+        event.type === "assistant.delta.received"
+        && /I already have package\.json and will run npm test next\./.test(event.payload.delta)
+      ),
+      "terminal explicit new task after step-limit command-only interruption should preserve the narrowed npm test handoff before stop"
+    );
+    assert.equal(
+      interruptedEvents.some((event) =>
+        event.type === "tool.execution.completed"
+        && event.payload.summary.startsWith("npm test · completed")
+      ),
+      false,
+      "terminal explicit new task after step-limit command-only interruption should stop before rerunning npm test"
+    );
+
+    const newTaskCompletion = waitForAssistantTaskCompletion(bus, sessionId);
+    process.stdin.emit("data", Buffer.from("Create new.txt with the content new-task.\r"));
+    const newTask = await newTaskCompletion;
+    const newTaskEvents = await transcriptStore.readEventsBySession(sessionId);
+    const newTaskAssistantText = collectAssistantText(newTaskEvents, newTask.taskId ?? "");
+    const newContent = await readFile(join(workspace, "new.txt"), "utf8");
+
+    assert.equal(newTask.payload.state, "completed");
+    assert.equal(editor.getState().value, "", "explicit new task after terminal step-limit command-only interruption should clear the editor buffer");
+    assert.equal(newContent, "new-task\n");
+    assert.match(newTaskAssistantText, /Created new\.txt|new task|已处理 `new\.txt`|已完成/u);
+    assert.ok(
+      newTaskEvents.some((event) =>
+        event.type === "tool.execution.completed"
+        && event.payload.summary.startsWith("new.txt · created")
+        && event.taskId === newTask.taskId
+      ),
+      "explicit new task should create new.txt instead of resuming the interrupted terminal step-limit command-only chain"
+    );
+    assert.equal(
+      newTaskEvents.some((event) =>
+        event.type === "tool.execution.completed"
+        && event.payload.summary.startsWith("npm test · completed")
+        && event.taskId === newTask.taskId
+      ),
+      false,
+      "explicit new task should not continue the interrupted terminal step-limit command-only verification command"
+    );
+  } finally {
+    process.exit = originalExit;
+    try {
+      bus.emit(createTerminalCommandInvokedEvent({
+        sessionId,
+        content: "/exit"
+      }));
+    } catch (error) {
+      assert.match(String(error), /EXIT:0/);
+    }
+
+    for (const listener of process.stdin.listeners("data") as Array<(...args: any[]) => void>) {
+      if (!existingDataListeners.includes(listener)) {
+        process.stdin.off("data", listener);
+      }
+    }
+  }
+}
+
+async function verifyTerminalLoopStopAndResumeStepLimitCommandOnlyShellWithFollowUp(
+  followUpPrompt: "还能继续吗" | "帮我优化下"
+) {
+  const suffix = followUpPrompt === "还能继续吗" ? "resume" : "opt";
+  const root = await mkdtemp(join(tmpdir(), `selfme-agent-terminal-loop-step-limit-command-resume-${suffix}-`));
+  const workspace = join(root, "workspace");
+  const transcriptPath = join(root, "transcript.jsonl");
+  const logsPath = join(root, "logs.jsonl");
+  const sessionId = `terminal-loop-step-limit-command-resume-${suffix}`;
   const originalPrompt = "Read beta-1.txt, beta-2.txt, beta-3.txt, beta-4.txt, beta-5.txt, beta-6.txt, beta-7.txt, and package.json, then run `npm test` before finishing.";
   await mkdir(workspace, { recursive: true });
 
@@ -44217,7 +49862,7 @@ async function verifyTerminalLoopStopAndResumeStepLimitCommandOnlyShell() {
         return;
       }
 
-      if (input.content.startsWith('The user replied "还能继续吗" and wants to continue the most recent unfinished task.')) {
+      if (input.content.startsWith(`The user replied "${followUpPrompt}" and wants to continue the most recent unfinished task.`)) {
         assert.match(input.content, /Pending next step target: npm test/);
         assert.match(input.content, /Latest tool in context: files/);
         assert.match(input.content, /Latest tool summary in context: package\.json:1-6/);
@@ -44230,7 +49875,7 @@ async function verifyTerminalLoopStopAndResumeStepLimitCommandOnlyShell() {
       }
 
       if (
-        input.content.startsWith('Original user request: The user replied "还能继续吗" and wants to continue the most recent unfinished task.')
+        input.content.startsWith(`Original user request: The user replied "${followUpPrompt}" and wants to continue the most recent unfinished task.`)
       ) {
         const toolName = extractLine(input.content, "Tool:") ?? extractLine(input.content, "Latest tool:");
 
@@ -44328,7 +49973,7 @@ async function verifyTerminalLoopStopAndResumeStepLimitCommandOnlyShell() {
     );
 
     const resumedCompletion = waitForAssistantTaskCompletion(bus, sessionId);
-    process.stdin.emit("data", Buffer.from("还能继续吗\r"));
+    process.stdin.emit("data", Buffer.from(`${followUpPrompt}\r`));
     const resumedTask = await resumedCompletion;
     const resumedEvents = await transcriptStore.readEventsBySession(sessionId);
     const resumedAssistantText = collectAssistantText(resumedEvents, resumedTask.taskId ?? "");
@@ -44620,11 +50265,22 @@ async function verifyTerminalLoopAutoContinuesAfterAssistantPassLimit() {
 }
 
 async function verifyTerminalLoopStopAndResumeAssistantPassPendingFile() {
-  const root = await mkdtemp(join(tmpdir(), "selfme-agent-terminal-loop-assistant-pass-file-resume-"));
+  await verifyTerminalLoopStopAndResumeAssistantPassPendingFileWithFollowUp("还能继续吗");
+}
+
+async function verifyTerminalLoopStopAndResumeAssistantPassPendingFileBroadOptimizationFollowUp() {
+  await verifyTerminalLoopStopAndResumeAssistantPassPendingFileWithFollowUp("帮我优化下");
+}
+
+async function verifyTerminalLoopStopAndResumeAssistantPassPendingFileWithFollowUp(
+  followUpPrompt: "还能继续吗" | "帮我优化下"
+) {
+  const suffix = followUpPrompt === "还能继续吗" ? "resume" : "opt";
+  const root = await mkdtemp(join(tmpdir(), `selfme-agent-terminal-loop-assistant-pass-file-resume-${suffix}-`));
   const workspace = join(root, "workspace");
   const transcriptPath = join(root, "transcript.jsonl");
   const logsPath = join(root, "logs.jsonl");
-  const sessionId = "terminal-loop-assistant-pass-file-resume";
+  const sessionId = `terminal-loop-assistant-pass-file-resume-${suffix}`;
   const originalPrompt = "Read app.config.json and fix terminal-assistant-pass-resume-report.mjs so running `node terminal-assistant-pass-resume-report.mjs` prints exactly `SelfMe:3000` on one line. Keep working until the output is exact.";
   await mkdir(workspace, { recursive: true });
   await writeFile(join(workspace, "app.config.json"), '{\n  "name": "SelfMe",\n  "port": 3000\n}\n', "utf8");
@@ -44695,7 +50351,7 @@ async function verifyTerminalLoopStopAndResumeAssistantPassPendingFile() {
         return;
       }
 
-      if (input.content.startsWith('The user replied "还能继续吗" and wants to continue the most recent unfinished task.')) {
+      if (input.content.startsWith(`The user replied "${followUpPrompt}" and wants to continue the most recent unfinished task.`)) {
         assert.match(input.content, /terminal-assistant-pass-resume-report\.mjs|Pending next step target: terminal-assistant-pass-resume-report\.mjs/);
         yield {
           delta: toolCall("files", {
@@ -44708,7 +50364,7 @@ async function verifyTerminalLoopStopAndResumeAssistantPassPendingFile() {
       }
 
       if (
-        input.content.startsWith('Original user request: The user replied "还能继续吗" and wants to continue the most recent unfinished task.')
+        input.content.startsWith(`Original user request: The user replied "${followUpPrompt}" and wants to continue the most recent unfinished task.`)
       ) {
         const toolName = extractLine(input.content, "Tool:") ?? extractLine(input.content, "Latest tool:");
         const summary = extractLine(input.content, "Summary:") ?? extractLine(input.content, "Latest summary:") ?? "";
@@ -44841,7 +50497,7 @@ async function verifyTerminalLoopStopAndResumeAssistantPassPendingFile() {
     );
 
     const resumedCompletion = waitForAssistantTaskCompletion(bus, sessionId);
-    process.stdin.emit("data", Buffer.from("还能继续吗\r"));
+    process.stdin.emit("data", Buffer.from(`${followUpPrompt}\r`));
     const resumedTask = await resumedCompletion;
     const resumedEvents = await transcriptStore.readEventsBySession(sessionId);
     const resumedAssistantText = collectAssistantText(resumedEvents, resumedTask.taskId ?? "");
@@ -45153,11 +50809,22 @@ async function verifyTerminalLoopAutoContinuesAcrossMultipleAssistantPassSlices(
 }
 
 async function verifyTerminalLoopStopAndResumeAcrossMultipleAssistantPassSlices() {
-  const root = await mkdtemp(join(tmpdir(), "selfme-agent-terminal-loop-assistant-pass-multi-resume-"));
+  await verifyTerminalLoopStopAndResumeAcrossMultipleAssistantPassSlicesWithFollowUp("还能继续吗");
+}
+
+async function verifyTerminalLoopStopAndResumeAcrossMultipleAssistantPassSlicesBroadOptimizationFollowUp() {
+  await verifyTerminalLoopStopAndResumeAcrossMultipleAssistantPassSlicesWithFollowUp("帮我优化下");
+}
+
+async function verifyTerminalLoopStopAndResumeAcrossMultipleAssistantPassSlicesWithFollowUp(
+  followUpPrompt: "还能继续吗" | "帮我优化下"
+) {
+  const suffix = followUpPrompt === "还能继续吗" ? "resume" : "opt";
+  const root = await mkdtemp(join(tmpdir(), `selfme-agent-terminal-loop-assistant-pass-multi-resume-${suffix}-`));
   const workspace = join(root, "workspace");
   const transcriptPath = join(root, "transcript.jsonl");
   const logsPath = join(root, "logs.jsonl");
-  const sessionId = "terminal-loop-assistant-pass-multi-resume";
+  const sessionId = `terminal-loop-assistant-pass-multi-resume-${suffix}`;
   const originalPrompt = "Read app.config.json and fix terminal-assistant-pass-multi-resume-report.mjs so running `node terminal-assistant-pass-multi-resume-report.mjs` prints exactly `SelfMe:3000` on one line. Keep working until the output is exact.";
   await mkdir(workspace, { recursive: true });
   await writeFile(join(workspace, "app.config.json"), '{\n  "name": "SelfMe",\n  "port": 3000\n}\n', "utf8");
@@ -45273,7 +50940,7 @@ async function verifyTerminalLoopStopAndResumeAcrossMultipleAssistantPassSlices(
         }
       }
 
-      if (input.content.startsWith('The user replied "还能继续吗" and wants to continue the most recent unfinished task.')) {
+      if (input.content.startsWith(`The user replied "${followUpPrompt}" and wants to continue the most recent unfinished task.`)) {
         assert.match(input.content, /terminal-assistant-pass-multi-resume-report\.mjs|Pending next step target: terminal-assistant-pass-multi-resume-report\.mjs/);
         yield {
           delta: toolCall("edit", {
@@ -45287,7 +50954,7 @@ async function verifyTerminalLoopStopAndResumeAcrossMultipleAssistantPassSlices(
       }
 
       if (
-        input.content.startsWith('Original user request: The user replied "还能继续吗" and wants to continue the most recent unfinished task.')
+        input.content.startsWith(`Original user request: The user replied "${followUpPrompt}" and wants to continue the most recent unfinished task.`)
       ) {
         const toolName = extractLine(input.content, "Tool:") ?? extractLine(input.content, "Latest tool:");
         const summary = extractLine(input.content, "Summary:") ?? extractLine(input.content, "Latest summary:") ?? "";
@@ -45414,7 +51081,7 @@ async function verifyTerminalLoopStopAndResumeAcrossMultipleAssistantPassSlices(
     );
 
     const resumedCompletion = waitForAssistantTaskCompletion(bus, sessionId);
-    process.stdin.emit("data", Buffer.from("还能继续吗\r"));
+    process.stdin.emit("data", Buffer.from(`${followUpPrompt}\r`));
     const resumedTask = await resumedCompletion;
     const resumedEvents = await transcriptStore.readEventsBySession(sessionId);
     const resumedAssistantText = collectAssistantText(resumedEvents, resumedTask.taskId ?? "");
@@ -45478,11 +51145,22 @@ async function verifyTerminalLoopStopAndResumeAcrossMultipleAssistantPassSlices(
 }
 
 async function verifyTerminalLoopStopAndResumeToolRecoveryPendingFile() {
-  const root = await mkdtemp(join(tmpdir(), "selfme-agent-terminal-loop-tool-recovery-file-resume-"));
+  await verifyTerminalLoopStopAndResumeToolRecoveryPendingFileWithFollowUp("还能继续吗");
+}
+
+async function verifyTerminalLoopStopAndResumeToolRecoveryPendingFileBroadOptimizationFollowUp() {
+  await verifyTerminalLoopStopAndResumeToolRecoveryPendingFileWithFollowUp("帮我优化下");
+}
+
+async function verifyTerminalLoopStopAndResumeToolRecoveryPendingFileWithFollowUp(
+  followUpPrompt: "还能继续吗" | "帮我优化下"
+) {
+  const suffix = followUpPrompt === "还能继续吗" ? "resume" : "opt";
+  const root = await mkdtemp(join(tmpdir(), `selfme-agent-terminal-loop-tool-recovery-file-resume-${suffix}-`));
   const workspace = join(root, "workspace");
   const transcriptPath = join(root, "transcript.jsonl");
   const logsPath = join(root, "logs.jsonl");
-  const sessionId = "terminal-loop-tool-recovery-file-resume";
+  const sessionId = `terminal-loop-tool-recovery-file-resume-${suffix}`;
   const originalPrompt = "Fix terminal-tool-recovery-file-resume-report.mjs so running `node terminal-tool-recovery-file-resume-report.mjs` prints exactly `ready`. Verify it before finishing, even if your edit tool input keeps coming out invalid.";
   await mkdir(workspace, { recursive: true });
   await writeFile(join(workspace, "terminal-tool-recovery-file-resume-report.mjs"), 'console.log("pending");\n', "utf8");
@@ -45535,7 +51213,7 @@ async function verifyTerminalLoopStopAndResumeToolRecoveryPendingFile() {
         return;
       }
 
-      if (input.content.startsWith('The user replied "还能继续吗" and wants to continue the most recent unfinished task.')) {
+      if (input.content.startsWith(`The user replied "${followUpPrompt}" and wants to continue the most recent unfinished task.`)) {
         assert.match(input.content, /terminal-tool-recovery-file-resume-report\.mjs|Pending next step target: terminal-tool-recovery-file-resume-report\.mjs/);
         yield {
           delta: toolCall("files", {
@@ -45548,7 +51226,7 @@ async function verifyTerminalLoopStopAndResumeToolRecoveryPendingFile() {
       }
 
       if (
-        input.content.startsWith('Original user request: The user replied "还能继续吗" and wants to continue the most recent unfinished task.')
+        input.content.startsWith(`Original user request: The user replied "${followUpPrompt}" and wants to continue the most recent unfinished task.`)
       ) {
         const toolName = extractLine(input.content, "Tool:") ?? extractLine(input.content, "Latest tool:");
         const summary = extractLine(input.content, "Summary:") ?? extractLine(input.content, "Latest summary:") ?? "";
@@ -45672,7 +51350,7 @@ async function verifyTerminalLoopStopAndResumeToolRecoveryPendingFile() {
     );
 
     const resumedCompletion = waitForAssistantTaskCompletion(bus, sessionId);
-    process.stdin.emit("data", Buffer.from("还能继续吗\r"));
+    process.stdin.emit("data", Buffer.from(`${followUpPrompt}\r`));
     const resumedTask = await resumedCompletion;
     const resumedEvents = await transcriptStore.readEventsBySession(sessionId);
     const resumedAssistantText = collectAssistantText(resumedEvents, resumedTask.taskId ?? "");
@@ -46416,11 +52094,22 @@ async function verifyTerminalLoopAutoContinuesAcrossMultipleToolRecoverySlices()
 }
 
 async function verifyTerminalLoopStopAndResumeAcrossMultipleToolRecoverySlices() {
-  const root = await mkdtemp(join(tmpdir(), "selfme-agent-terminal-loop-tool-recovery-multi-resume-"));
+  await verifyTerminalLoopStopAndResumeAcrossMultipleToolRecoverySlicesWithFollowUp("还能继续吗");
+}
+
+async function verifyTerminalLoopStopAndResumeAcrossMultipleToolRecoverySlicesBroadOptimizationFollowUp() {
+  await verifyTerminalLoopStopAndResumeAcrossMultipleToolRecoverySlicesWithFollowUp("帮我优化下");
+}
+
+async function verifyTerminalLoopStopAndResumeAcrossMultipleToolRecoverySlicesWithFollowUp(
+  followUpPrompt: "还能继续吗" | "帮我优化下"
+) {
+  const suffix = followUpPrompt === "还能继续吗" ? "resume" : "opt";
+  const root = await mkdtemp(join(tmpdir(), `selfme-agent-terminal-loop-tool-recovery-multi-resume-${suffix}-`));
   const workspace = join(root, "workspace");
   const transcriptPath = join(root, "transcript.jsonl");
   const logsPath = join(root, "logs.jsonl");
-  const sessionId = "terminal-loop-tool-recovery-multi-resume";
+  const sessionId = `terminal-loop-tool-recovery-multi-resume-${suffix}`;
   const originalPrompt = "Fix terminal-multi-tool-recovery-resume-report.mjs so running `node terminal-multi-tool-recovery-resume-report.mjs` prints exactly `ready`. Verify it before finishing, even if your edit tool input keeps coming out invalid.";
   await mkdir(workspace, { recursive: true });
   await writeFile(join(workspace, "terminal-multi-tool-recovery-resume-report.mjs"), 'console.log("pending");\n', "utf8");
@@ -46483,7 +52172,7 @@ async function verifyTerminalLoopStopAndResumeAcrossMultipleToolRecoverySlices()
         assert.fail(`unexpected terminal tool-recovery multi-resume continuation prompt ${this.continuationPromptCount}`);
       }
 
-      if (input.content.startsWith('The user replied "还能继续吗" and wants to continue the most recent unfinished task.')) {
+      if (input.content.startsWith(`The user replied "${followUpPrompt}" and wants to continue the most recent unfinished task.`)) {
         assert.match(input.content, /terminal-multi-tool-recovery-resume-report\.mjs|Pending next step target: terminal-multi-tool-recovery-resume-report\.mjs/);
         yield {
           delta: toolCall("files", {
@@ -46496,7 +52185,7 @@ async function verifyTerminalLoopStopAndResumeAcrossMultipleToolRecoverySlices()
       }
 
       if (
-        input.content.startsWith('Original user request: The user replied "还能继续吗" and wants to continue the most recent unfinished task.')
+        input.content.startsWith(`Original user request: The user replied "${followUpPrompt}" and wants to continue the most recent unfinished task.`)
       ) {
         const toolName = extractLine(input.content, "Tool:") ?? extractLine(input.content, "Latest tool:");
         const summary = extractLine(input.content, "Summary:") ?? extractLine(input.content, "Latest summary:") ?? "";
@@ -46653,7 +52342,7 @@ async function verifyTerminalLoopStopAndResumeAcrossMultipleToolRecoverySlices()
     );
 
     const resumedCompletion = waitForAssistantTaskCompletion(bus, sessionId);
-    process.stdin.emit("data", Buffer.from("还能继续吗\r"));
+    process.stdin.emit("data", Buffer.from(`${followUpPrompt}\r`));
     const resumedTask = await resumedCompletion;
     const resumedEvents = await transcriptStore.readEventsBySession(sessionId);
     const resumedAssistantText = collectAssistantText(resumedEvents, resumedTask.taskId ?? "");
@@ -46962,11 +52651,22 @@ async function verifyTerminalLoopAutoContinuesAcrossToolRecoveryAndRepeatedStall
 }
 
 async function verifyTerminalLoopStopAndResumeToolRecoveryAndRepeatedStallPendingFile() {
-  const root = await mkdtemp(join(tmpdir(), "selfme-agent-terminal-loop-tool-recovery-stall-file-resume-"));
+  await verifyTerminalLoopStopAndResumeToolRecoveryAndRepeatedStallPendingFileWithFollowUp("还能继续吗");
+}
+
+async function verifyTerminalLoopStopAndResumeToolRecoveryAndRepeatedStallPendingFileBroadOptimizationFollowUp() {
+  await verifyTerminalLoopStopAndResumeToolRecoveryAndRepeatedStallPendingFileWithFollowUp("帮我优化下");
+}
+
+async function verifyTerminalLoopStopAndResumeToolRecoveryAndRepeatedStallPendingFileWithFollowUp(
+  followUpPrompt: "还能继续吗" | "帮我优化下"
+) {
+  const suffix = followUpPrompt === "还能继续吗" ? "resume" : "opt";
+  const root = await mkdtemp(join(tmpdir(), `selfme-agent-terminal-loop-tool-recovery-stall-file-resume-${suffix}-`));
   const workspace = join(root, "workspace");
   const transcriptPath = join(root, "transcript.jsonl");
   const logsPath = join(root, "logs.jsonl");
-  const sessionId = "terminal-loop-tool-recovery-stall-file-resume";
+  const sessionId = `terminal-loop-tool-recovery-stall-file-resume-${suffix}`;
   const originalPrompt = "Fix terminal-tool-recovery-stall-file-resume-report.mjs so running `node terminal-tool-recovery-stall-file-resume-report.mjs` prints exactly `ready`. Verify it before finishing, even if your edit tool input is invalid before you hit a repeated shell stall.";
   await mkdir(workspace, { recursive: true });
   await writeFile(join(workspace, "terminal-tool-recovery-stall-file-resume-report.mjs"), 'console.log("pending");\n', "utf8");
@@ -47069,7 +52769,7 @@ async function verifyTerminalLoopStopAndResumeToolRecoveryAndRepeatedStallPendin
         return;
       }
 
-      if (input.content.startsWith('The user replied "还能继续吗" and wants to continue the most recent unfinished task.')) {
+      if (input.content.startsWith(`The user replied "${followUpPrompt}" and wants to continue the most recent unfinished task.`)) {
         assert.match(input.content, /terminal-tool-recovery-stall-file-resume-report\.mjs|Pending next step target: terminal-tool-recovery-stall-file-resume-report\.mjs/);
         yield {
           delta: toolCall("edit", {
@@ -47083,7 +52783,7 @@ async function verifyTerminalLoopStopAndResumeToolRecoveryAndRepeatedStallPendin
       }
 
       if (
-        input.content.startsWith('Original user request: The user replied "还能继续吗" and wants to continue the most recent unfinished task.')
+        input.content.startsWith(`Original user request: The user replied "${followUpPrompt}" and wants to continue the most recent unfinished task.`)
       ) {
         const toolName = extractLine(input.content, "Tool:") ?? extractLine(input.content, "Latest tool:");
         const summary = extractLine(input.content, "Summary:") ?? extractLine(input.content, "Latest summary:") ?? "";
@@ -47228,7 +52928,7 @@ async function verifyTerminalLoopStopAndResumeToolRecoveryAndRepeatedStallPendin
     );
 
     const resumedCompletion = waitForAssistantTaskCompletion(bus, sessionId);
-    process.stdin.emit("data", Buffer.from("还能继续吗\r"));
+    process.stdin.emit("data", Buffer.from(`${followUpPrompt}\r`));
     const resumedTask = await resumedCompletion;
     const resumedEvents = await transcriptStore.readEventsBySession(sessionId);
     const resumedAssistantText = collectAssistantText(resumedEvents, resumedTask.taskId ?? "");
@@ -47565,11 +53265,22 @@ async function verifyTerminalLoopAutoContinuesAcrossMultipleRepeatedStallSlicesP
 }
 
 async function verifyTerminalLoopStopAndResumeAcrossMultipleRepeatedStallSlicesPendingFile() {
-  const root = await mkdtemp(join(tmpdir(), "selfme-agent-terminal-loop-tool-recovery-stall-file-multi-resume-"));
+  await verifyTerminalLoopStopAndResumeAcrossMultipleRepeatedStallSlicesPendingFileWithFollowUp("还能继续吗");
+}
+
+async function verifyTerminalLoopStopAndResumeAcrossMultipleRepeatedStallSlicesPendingFileBroadOptimizationFollowUp() {
+  await verifyTerminalLoopStopAndResumeAcrossMultipleRepeatedStallSlicesPendingFileWithFollowUp("帮我优化下");
+}
+
+async function verifyTerminalLoopStopAndResumeAcrossMultipleRepeatedStallSlicesPendingFileWithFollowUp(
+  followUpPrompt: "还能继续吗" | "帮我优化下"
+) {
+  const suffix = followUpPrompt === "还能继续吗" ? "resume" : "opt";
+  const root = await mkdtemp(join(tmpdir(), `selfme-agent-terminal-loop-tool-recovery-stall-file-multi-resume-${suffix}-`));
   const workspace = join(root, "workspace");
   const transcriptPath = join(root, "transcript.jsonl");
   const logsPath = join(root, "logs.jsonl");
-  const sessionId = "terminal-loop-tool-recovery-stall-file-multi-resume";
+  const sessionId = `terminal-loop-tool-recovery-stall-file-multi-resume-${suffix}`;
   const originalPrompt = "Fix terminal-tool-recovery-stall-file-multi-resume-report.mjs so running `node terminal-tool-recovery-stall-file-multi-resume-report.mjs` prints exactly `ready`. Verify it before finishing, even if your edit tool input is invalid before you hit a repeated shell stall.";
   await mkdir(workspace, { recursive: true });
   await writeFile(join(workspace, "terminal-tool-recovery-stall-file-multi-resume-report.mjs"), 'console.log("pending");\n', "utf8");
@@ -47687,7 +53398,7 @@ async function verifyTerminalLoopStopAndResumeAcrossMultipleRepeatedStallSlicesP
         assert.fail(`unexpected terminal file-repair repeated-stall multi-resume continuation prompt ${this.continuationPromptCount}`);
       }
 
-      if (input.content.startsWith('The user replied "还能继续吗" and wants to continue the most recent unfinished task.')) {
+      if (input.content.startsWith(`The user replied "${followUpPrompt}" and wants to continue the most recent unfinished task.`)) {
         assert.match(
           input.content,
           /terminal-tool-recovery-stall-file-multi-resume-report\.mjs|Pending next step target: terminal-tool-recovery-stall-file-multi-resume-report\.mjs/
@@ -47704,7 +53415,7 @@ async function verifyTerminalLoopStopAndResumeAcrossMultipleRepeatedStallSlicesP
       }
 
       if (
-        input.content.startsWith('Original user request: The user replied "还能继续吗" and wants to continue the most recent unfinished task.')
+        input.content.startsWith(`Original user request: The user replied "${followUpPrompt}" and wants to continue the most recent unfinished task.`)
       ) {
         const toolName = extractLine(input.content, "Tool:") ?? extractLine(input.content, "Latest tool:");
         const summary = extractLine(input.content, "Summary:") ?? extractLine(input.content, "Latest summary:") ?? "";
@@ -47862,7 +53573,7 @@ async function verifyTerminalLoopStopAndResumeAcrossMultipleRepeatedStallSlicesP
     );
 
     const resumedCompletion = waitForAssistantTaskCompletion(bus, sessionId);
-    process.stdin.emit("data", Buffer.from("还能继续吗\r"));
+    process.stdin.emit("data", Buffer.from(`${followUpPrompt}\r`));
     const resumedTask = await resumedCompletion;
     const resumedEvents = await transcriptStore.readEventsBySession(sessionId);
     const resumedAssistantText = collectAssistantText(resumedEvents, resumedTask.taskId ?? "");
@@ -48132,11 +53843,268 @@ async function verifyTerminalLoopAutoContinuesAfterAssistantPassLimitBeforeComma
 }
 
 async function verifyTerminalLoopStopAndResumeAssistantPassCommandOnlyShell() {
-  const root = await mkdtemp(join(tmpdir(), "selfme-agent-terminal-loop-assistant-pass-command-resume-"));
+  await verifyTerminalLoopStopAndResumeAssistantPassCommandOnlyShellWithFollowUp("还能继续吗");
+}
+
+async function verifyTerminalLoopStopAndResumeAssistantPassCommandOnlyShellBroadOptimizationFollowUp() {
+  await verifyTerminalLoopStopAndResumeAssistantPassCommandOnlyShellWithFollowUp("帮我优化下");
+}
+
+async function verifyTerminalLoopExplicitNewTaskDoesNotResumeAssistantPassCommandOnlyShell() {
+  const root = await mkdtemp(join(tmpdir(), "selfme-agent-terminal-loop-assistant-pass-command-new-task-"));
   const workspace = join(root, "workspace");
   const transcriptPath = join(root, "transcript.jsonl");
   const logsPath = join(root, "logs.jsonl");
-  const sessionId = "terminal-loop-assistant-pass-command-resume";
+  const sessionId = "terminal-loop-assistant-pass-command-new-task";
+  const originalPrompt = "Read beta-a.txt, beta-b.txt, and package.json, then run `npm test` before finishing.";
+  await mkdir(workspace, { recursive: true });
+  await writeFile(join(workspace, "beta-a.txt"), "beta-a\n", "utf8");
+  await writeFile(join(workspace, "beta-b.txt"), "beta-b\n", "utf8");
+  await writeFile(
+    join(workspace, "package.json"),
+    '{\n  "name": "terminal-assistant-pass-command-new-task",\n  "version": "1.0.0",\n  "scripts": {\n    "test": "node verify-terminal-assistant-pass-command-new-task.mjs"\n  }\n}\n',
+    "utf8"
+  );
+  await writeFile(join(workspace, "verify-terminal-assistant-pass-command-new-task.mjs"), 'console.log("ready");\n', "utf8");
+
+  class TerminalLoopAssistantPassCommandNewTaskProvider implements ProviderClient {
+    readonly name = "terminal-loop-assistant-pass-command-new-task-provider";
+    private loopReplyCount = 0;
+
+    async *streamResponse(input: ProviderStreamInput): AsyncIterable<ProviderStreamChunk> {
+      if (input.content === originalPrompt) {
+        yield {
+          delta: toolCall("files", {
+            path: "beta-a.txt",
+            startLine: 1,
+            endLine: 20
+          })
+        };
+        return;
+      }
+
+      if (input.content === "Create new.txt with the content new-task.") {
+        yield {
+          delta: toolCall("write", {
+            path: "new.txt",
+            content: "new-task\n"
+          })
+        };
+        return;
+      }
+
+      if (input.content.startsWith("The user replied ") && input.content.includes("wants to continue the most recent unfinished task.")) {
+        assert.fail("explicit new task should not be rewritten into a terminal assistant-pass command-only resume follow-up");
+      }
+
+      if (input.content.startsWith("Original user request: Create new.txt with the content new-task.")) {
+        yield { delta: "Created new.txt instead of resuming the interrupted terminal assistant-pass command-only chain." };
+        return;
+      }
+
+      if (input.content.startsWith(`Original user request: ${originalPrompt}`)) {
+        const toolName = extractLine(input.content, "Tool:") ?? extractLine(input.content, "Latest tool:");
+        const summary = extractLine(input.content, "Summary:") ?? extractLine(input.content, "Latest summary:") ?? "";
+
+        if (toolName === "files" && /beta-a\.txt/.test(summary)) {
+          yield {
+            delta: toolCall("files", {
+              path: "beta-b.txt",
+              startLine: 1,
+              endLine: 20
+            })
+          };
+          return;
+        }
+
+        if (toolName === "files" && /beta-b\.txt/.test(summary)) {
+          yield {
+            delta: toolCall("files", {
+              path: "package.json",
+              startLine: 1,
+              endLine: 20
+            })
+          };
+          return;
+        }
+
+        if (toolName === "files" && /package\.json/.test(summary)) {
+          this.loopReplyCount += 1;
+          yield {
+            delta: `Terminal assistant-pass command-only loop marker ${this.loopReplyCount} stays focused on the pending npm test step, the package.json read is already complete, this intentionally verbose sentence avoids short progress classification, and a concrete verification command still has to run before the task can finish.`
+          };
+          return;
+        }
+      }
+
+      if (
+        !input.content.startsWith("Original user request:")
+        && input.content.includes("The current task used up its assistant pass budget but still has unfinished work.")
+      ) {
+        assert.match(input.content, /Pending next step target: npm test/);
+        assert.match(input.content, /Latest tool in context: files/);
+        assert.match(input.content, /Latest tool summary in context: package\.json:1-6/);
+        yield {
+          delta: toolCall("shell", {
+            command: "npm test"
+          })
+        };
+        return;
+      }
+
+      if (
+        input.content.startsWith("Original user request: The current task used up its assistant pass budget but still has unfinished work.")
+      ) {
+        const toolName = extractLine(input.content, "Tool:") ?? extractLine(input.content, "Latest tool:");
+
+        if (toolName === "shell") {
+          yield { delta: "npm test completed and printed ready." };
+          return;
+        }
+      }
+
+      yield { delta: "ok" };
+    }
+  }
+
+  const bus = new EventBus();
+  const transcriptStore = new TranscriptStore(transcriptPath);
+  const logStore = new LogStore(logsPath);
+  await transcriptStore.ensureInitialized();
+  await logStore.ensureInitialized();
+
+  const session = createDefaultSessionRecord(workspace, VERSION);
+  session.sessionId = sessionId;
+  session.model = "regression-stub";
+
+  const runtime = new AgentRuntime({
+    bus,
+    provider: new TerminalLoopAssistantPassCommandNewTaskProvider(),
+    tools: new InMemoryToolRegistry(),
+    session,
+    transcriptStore,
+    logStore
+  });
+  await runtime.start();
+
+  const editor = new EditorController();
+  const panel = new TerminalPanelController();
+  const terminal = new TerminalEventLoop({
+    bus,
+    editor,
+    panel,
+    sessionId
+  });
+
+  const originalExit = process.exit;
+  const existingDataListeners = process.stdin.listeners("data") as Array<(...args: any[]) => void>;
+
+  (process as typeof process & {
+    exit: (code?: number) => never;
+  }).exit = ((code?: number) => {
+    throw new Error(`EXIT:${code ?? 0}`);
+  }) as typeof process.exit;
+
+  try {
+    terminal.start();
+    const initialCompletion = waitForAssistantTaskCompletion(bus, sessionId);
+    const continuationSummary = waitForAssistantDeltaContaining(
+      bus,
+      sessionId,
+      /Terminal assistant-pass command-only loop marker \d+ stays focused on the pending npm test step/i
+    );
+
+    process.stdin.emit("data", Buffer.from(`${originalPrompt}\r`));
+
+    await continuationSummary;
+    await waitForBusyPhase(bus, sessionId, "assistant");
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    process.stdin.emit("data", "\u001b");
+
+    const cancelledTask = await initialCompletion;
+    assert.equal(cancelledTask.payload.state, "cancelled");
+
+    const interruptedEvents = await transcriptStore.readEventsBySession(sessionId);
+    assert.equal(
+      interruptedEvents.filter((event) =>
+        event.type === "tool.execution.completed"
+        && event.payload.summary.startsWith("package.json:1-6")
+      ).length,
+      1,
+      "terminal explicit new task after assistant-pass command-only interruption should preserve the package read before stop"
+    );
+    assert.ok(
+      interruptedEvents.some((event) =>
+        event.type === "assistant.delta.received"
+        && /Terminal assistant-pass command-only loop marker \d+ stays focused on the pending npm test step/i.test(event.payload.delta)
+      ),
+      "terminal explicit new task after assistant-pass command-only interruption should preserve the narrowed npm test handoff before stop"
+    );
+    assert.equal(
+      interruptedEvents.some((event) =>
+        event.type === "tool.execution.completed"
+        && event.payload.summary.startsWith("npm test · completed")
+      ),
+      false,
+      "terminal explicit new task after assistant-pass command-only interruption should stop before rerunning npm test"
+    );
+
+    const newTaskCompletion = waitForAssistantTaskCompletion(bus, sessionId);
+    process.stdin.emit("data", Buffer.from("Create new.txt with the content new-task.\r"));
+    const newTask = await newTaskCompletion;
+    const newTaskEvents = await transcriptStore.readEventsBySession(sessionId);
+    const newTaskAssistantText = collectAssistantText(newTaskEvents, newTask.taskId ?? "");
+    const newContent = await readFile(join(workspace, "new.txt"), "utf8");
+
+    assert.equal(newTask.payload.state, "completed");
+    assert.equal(editor.getState().value, "", "explicit new task after terminal assistant-pass command-only interruption should clear the editor buffer");
+    assert.equal(newContent, "new-task\n");
+    assert.match(newTaskAssistantText, /Created new\.txt|new task|已处理 `new\.txt`|已完成/u);
+    assert.ok(
+      newTaskEvents.some((event) =>
+        event.type === "tool.execution.completed"
+        && event.payload.summary.startsWith("new.txt · created")
+        && event.taskId === newTask.taskId
+      ),
+      "explicit new task should create new.txt instead of resuming the interrupted terminal assistant-pass command-only chain"
+    );
+    assert.equal(
+      newTaskEvents.some((event) =>
+        event.type === "tool.execution.completed"
+        && event.payload.summary.startsWith("npm test · completed")
+        && event.taskId === newTask.taskId
+      ),
+      false,
+      "explicit new task should not continue the interrupted terminal assistant-pass command-only verification command"
+    );
+  } finally {
+    process.exit = originalExit;
+    try {
+      bus.emit(createTerminalCommandInvokedEvent({
+        sessionId,
+        content: "/exit"
+      }));
+    } catch (error) {
+      assert.match(String(error), /EXIT:0/);
+    }
+
+    for (const listener of process.stdin.listeners("data") as Array<(...args: any[]) => void>) {
+      if (!existingDataListeners.includes(listener)) {
+        process.stdin.off("data", listener);
+      }
+    }
+  }
+}
+
+async function verifyTerminalLoopStopAndResumeAssistantPassCommandOnlyShellWithFollowUp(
+  followUpPrompt: "还能继续吗" | "帮我优化下"
+) {
+  const suffix = followUpPrompt === "还能继续吗" ? "resume" : "opt";
+  const root = await mkdtemp(join(tmpdir(), `selfme-agent-terminal-loop-assistant-pass-command-resume-${suffix}-`));
+  const workspace = join(root, "workspace");
+  const transcriptPath = join(root, "transcript.jsonl");
+  const logsPath = join(root, "logs.jsonl");
+  const sessionId = `terminal-loop-assistant-pass-command-resume-${suffix}`;
   const originalPrompt = "Read beta-a.txt, beta-b.txt, and package.json, then run `npm test` before finishing.";
   await mkdir(workspace, { recursive: true });
   await writeFile(join(workspace, "beta-a.txt"), "beta-a\n", "utf8");
@@ -48218,7 +54186,7 @@ async function verifyTerminalLoopStopAndResumeAssistantPassCommandOnlyShell() {
         return;
       }
 
-      if (input.content.startsWith('The user replied "还能继续吗" and wants to continue the most recent unfinished task.')) {
+      if (input.content.startsWith(`The user replied "${followUpPrompt}" and wants to continue the most recent unfinished task.`)) {
         assert.match(input.content, /Pending next step target: npm test/);
         assert.match(input.content, /Latest tool in context: files/);
         assert.match(input.content, /Latest tool summary in context: package\.json:1-6/);
@@ -48231,7 +54199,7 @@ async function verifyTerminalLoopStopAndResumeAssistantPassCommandOnlyShell() {
       }
 
       if (
-        input.content.startsWith('Original user request: The user replied "还能继续吗" and wants to continue the most recent unfinished task.')
+        input.content.startsWith(`Original user request: The user replied "${followUpPrompt}" and wants to continue the most recent unfinished task.`)
       ) {
         const toolName = extractLine(input.content, "Tool:") ?? extractLine(input.content, "Latest tool:");
 
@@ -48329,7 +54297,7 @@ async function verifyTerminalLoopStopAndResumeAssistantPassCommandOnlyShell() {
     );
 
     const resumedCompletion = waitForAssistantTaskCompletion(bus, sessionId);
-    process.stdin.emit("data", Buffer.from("还能继续吗\r"));
+    process.stdin.emit("data", Buffer.from(`${followUpPrompt}\r`));
     const resumedTask = await resumedCompletion;
     const resumedEvents = await transcriptStore.readEventsBySession(sessionId);
     const resumedAssistantText = collectAssistantText(resumedEvents, resumedTask.taskId ?? "");
@@ -48392,11 +54360,22 @@ async function verifyTerminalLoopStopAndResumeAssistantPassCommandOnlyShell() {
 }
 
 async function verifyTerminalLoopStopAndResumeAssistantPassToolRecoveryPendingFile() {
-  const root = await mkdtemp(join(tmpdir(), "selfme-agent-terminal-loop-assistant-pass-tool-recovery-file-resume-"));
+  await verifyTerminalLoopStopAndResumeAssistantPassToolRecoveryPendingFileWithFollowUp("还能继续吗");
+}
+
+async function verifyTerminalLoopStopAndResumeAssistantPassToolRecoveryPendingFileBroadOptimizationFollowUp() {
+  await verifyTerminalLoopStopAndResumeAssistantPassToolRecoveryPendingFileWithFollowUp("帮我优化下");
+}
+
+async function verifyTerminalLoopStopAndResumeAssistantPassToolRecoveryPendingFileWithFollowUp(
+  followUpPrompt: "还能继续吗" | "帮我优化下"
+) {
+  const suffix = followUpPrompt === "还能继续吗" ? "resume" : "opt";
+  const root = await mkdtemp(join(tmpdir(), `selfme-agent-terminal-loop-assistant-pass-tool-recovery-file-resume-${suffix}-`));
   const workspace = join(root, "workspace");
   const transcriptPath = join(root, "transcript.jsonl");
   const logsPath = join(root, "logs.jsonl");
-  const sessionId = "terminal-loop-assistant-pass-tool-recovery-file-resume";
+  const sessionId = `terminal-loop-assistant-pass-tool-recovery-file-resume-${suffix}`;
   const originalPrompt = "Read app.config.json and fix terminal-assistant-pass-tool-recovery-file-resume-report.mjs so running `node terminal-assistant-pass-tool-recovery-file-resume-report.mjs` prints exactly `SelfMe:3000` on one line. Keep working until the output is exact, even if you first burn passes on progress replies and later send invalid edit input.";
   await mkdir(workspace, { recursive: true });
   await writeFile(join(workspace, "app.config.json"), '{\n  "name": "SelfMe",\n  "port": 3000\n}\n', "utf8");
@@ -48496,7 +54475,7 @@ async function verifyTerminalLoopStopAndResumeAssistantPassToolRecoveryPendingFi
         return;
       }
 
-      if (input.content.startsWith('The user replied "还能继续吗" and wants to continue the most recent unfinished task.')) {
+      if (input.content.startsWith(`The user replied "${followUpPrompt}" and wants to continue the most recent unfinished task.`)) {
         assert.match(input.content, /terminal-assistant-pass-tool-recovery-file-resume-report\.mjs|Pending next step target: terminal-assistant-pass-tool-recovery-file-resume-report\.mjs/);
         yield {
           delta: toolCall("files", {
@@ -48509,7 +54488,7 @@ async function verifyTerminalLoopStopAndResumeAssistantPassToolRecoveryPendingFi
       }
 
       if (
-        input.content.startsWith('Original user request: The user replied "还能继续吗" and wants to continue the most recent unfinished task.')
+        input.content.startsWith(`Original user request: The user replied "${followUpPrompt}" and wants to continue the most recent unfinished task.`)
       ) {
         const toolName = extractLine(input.content, "Tool:") ?? extractLine(input.content, "Latest tool:");
         const summary = extractLine(input.content, "Summary:") ?? extractLine(input.content, "Latest summary:") ?? "";
@@ -48653,7 +54632,7 @@ async function verifyTerminalLoopStopAndResumeAssistantPassToolRecoveryPendingFi
     );
 
     const resumedCompletion = waitForAssistantTaskCompletion(bus, sessionId);
-    process.stdin.emit("data", Buffer.from("还能继续吗\r"));
+    process.stdin.emit("data", Buffer.from(`${followUpPrompt}\r`));
     const resumedTask = await resumedCompletion;
     const resumedEvents = await transcriptStore.readEventsBySession(sessionId);
     const resumedAssistantText = collectAssistantText(resumedEvents, resumedTask.taskId ?? "");
@@ -48998,11 +54977,22 @@ async function verifyTerminalLoopAutoContinuesAcrossAssistantPassAndMultipleTool
 }
 
 async function verifyTerminalLoopStopAndResumeAssistantPassMultipleToolRecoveryPendingFile() {
-  const root = await mkdtemp(join(tmpdir(), "selfme-agent-terminal-loop-assistant-pass-tool-recovery-file-multi-resume-"));
+  await verifyTerminalLoopStopAndResumeAssistantPassMultipleToolRecoveryPendingFileWithFollowUp("还能继续吗");
+}
+
+async function verifyTerminalLoopStopAndResumeAssistantPassMultipleToolRecoveryPendingFileBroadOptimizationFollowUp() {
+  await verifyTerminalLoopStopAndResumeAssistantPassMultipleToolRecoveryPendingFileWithFollowUp("帮我优化下");
+}
+
+async function verifyTerminalLoopStopAndResumeAssistantPassMultipleToolRecoveryPendingFileWithFollowUp(
+  followUpPrompt: "还能继续吗" | "帮我优化下"
+) {
+  const suffix = followUpPrompt === "还能继续吗" ? "resume" : "opt";
+  const root = await mkdtemp(join(tmpdir(), `selfme-agent-terminal-loop-assistant-pass-tool-recovery-file-multi-resume-${suffix}-`));
   const workspace = join(root, "workspace");
   const transcriptPath = join(root, "transcript.jsonl");
   const logsPath = join(root, "logs.jsonl");
-  const sessionId = "terminal-loop-assistant-pass-tool-recovery-file-multi-resume";
+  const sessionId = `terminal-loop-assistant-pass-tool-recovery-file-multi-resume-${suffix}`;
   const originalPrompt = "Read app.config.json and fix terminal-assistant-pass-tool-recovery-file-multi-resume-report.mjs so running `node terminal-assistant-pass-tool-recovery-file-multi-resume-report.mjs` prints exactly `SelfMe:3000` on one line. Keep working until the output is exact, even if you first burn passes on progress replies and later send invalid edit input across multiple tool-recovery slices.";
   await mkdir(workspace, { recursive: true });
   await writeFile(join(workspace, "app.config.json"), '{\n  "name": "SelfMe",\n  "port": 3000\n}\n', "utf8");
@@ -49112,7 +55102,7 @@ async function verifyTerminalLoopStopAndResumeAssistantPassMultipleToolRecoveryP
         assert.fail(`unexpected terminal assistant-pass multi tool-recovery resume continuation prompt ${this.toolRecoveryContinuationCount}`);
       }
 
-      if (input.content.startsWith('The user replied "还能继续吗" and wants to continue the most recent unfinished task.')) {
+      if (input.content.startsWith(`The user replied "${followUpPrompt}" and wants to continue the most recent unfinished task.`)) {
         assert.match(
           input.content,
           /terminal-assistant-pass-tool-recovery-file-multi-resume-report\.mjs|Pending next step target: terminal-assistant-pass-tool-recovery-file-multi-resume-report\.mjs/
@@ -49128,7 +55118,7 @@ async function verifyTerminalLoopStopAndResumeAssistantPassMultipleToolRecoveryP
       }
 
       if (
-        input.content.startsWith('Original user request: The user replied "还能继续吗" and wants to continue the most recent unfinished task.')
+        input.content.startsWith(`Original user request: The user replied "${followUpPrompt}" and wants to continue the most recent unfinished task.`)
       ) {
         const toolName = extractLine(input.content, "Tool:") ?? extractLine(input.content, "Latest tool:");
         const summary = extractLine(input.content, "Summary:") ?? extractLine(input.content, "Latest summary:") ?? "";
@@ -49305,7 +55295,7 @@ async function verifyTerminalLoopStopAndResumeAssistantPassMultipleToolRecoveryP
     );
 
     const resumedCompletion = waitForAssistantTaskCompletion(bus, sessionId);
-    process.stdin.emit("data", Buffer.from("还能继续吗\r"));
+    process.stdin.emit("data", Buffer.from(`${followUpPrompt}\r`));
     const resumedTask = await resumedCompletion;
     const resumedEvents = await transcriptStore.readEventsBySession(sessionId);
     const resumedAssistantText = collectAssistantText(resumedEvents, resumedTask.taskId ?? "");
@@ -49682,11 +55672,340 @@ async function verifyTerminalLoopAutoContinuesAcrossAssistantPassAndToolRecovery
 }
 
 async function verifyTerminalLoopStopAndResumeAssistantPassToolRecoveryCommandOnlyShell() {
-  const root = await mkdtemp(join(tmpdir(), "selfme-agent-terminal-loop-assistant-pass-tool-recovery-command-resume-"));
+  await verifyTerminalLoopStopAndResumeAssistantPassToolRecoveryCommandOnlyShellWithFollowUp("还能继续吗");
+}
+
+async function verifyTerminalLoopStopAndResumeAssistantPassToolRecoveryCommandOnlyShellBroadOptimizationFollowUp() {
+  await verifyTerminalLoopStopAndResumeAssistantPassToolRecoveryCommandOnlyShellWithFollowUp("帮我优化下");
+}
+
+async function verifyTerminalLoopExplicitNewTaskDoesNotResumeAssistantPassToolRecoveryCommandOnlyShell() {
+  const root = await mkdtemp(join(tmpdir(), "selfme-agent-terminal-loop-assistant-pass-tool-recovery-command-new-task-"));
   const workspace = join(root, "workspace");
   const transcriptPath = join(root, "transcript.jsonl");
   const logsPath = join(root, "logs.jsonl");
-  const sessionId = "terminal-loop-assistant-pass-tool-recovery-command-resume";
+  const sessionId = "terminal-loop-assistant-pass-tool-recovery-command-new-task";
+  const originalPrompt = "Read beta-a.txt, beta-b.txt, and package.json, then run `npm test` until it prints exactly `ready`, fixing whatever is needed before finishing, even if you first burn passes on progress replies and later your edit tool input comes out invalid.";
+  await mkdir(workspace, { recursive: true });
+  await writeFile(join(workspace, "beta-a.txt"), "beta-a\n", "utf8");
+  await writeFile(join(workspace, "beta-b.txt"), "beta-b\n", "utf8");
+  await writeFile(
+    join(workspace, "package.json"),
+    '{\n  "name": "terminal-assistant-pass-tool-recovery-command-new-task",\n  "version": "1.0.0",\n  "scripts": {\n    "test": "node verify-terminal-assistant-pass-tool-recovery-command-new-task.mjs"\n  }\n}\n',
+    "utf8"
+  );
+  await writeFile(join(workspace, "verify-terminal-assistant-pass-tool-recovery-command-new-task.mjs"), 'console.log("pending");\n', "utf8");
+
+  class TerminalLoopAssistantPassToolRecoveryCommandNewTaskProvider implements ProviderClient {
+    readonly name = "terminal-loop-assistant-pass-tool-recovery-command-new-task-provider";
+    private loopReplyCount = 0;
+    private invalidEditAttemptCount = 0;
+    private recoveredShellCount = 0;
+
+    private buildInvalidEditToolCall() {
+      return toolCall("edit", {
+        startLine: 1,
+        endLine: 1,
+        replacement: 'console.log("ready");'
+      });
+    }
+
+    async *streamResponse(input: ProviderStreamInput): AsyncIterable<ProviderStreamChunk> {
+      if (input.content === originalPrompt) {
+        yield {
+          delta: toolCall("files", {
+            path: "beta-a.txt",
+            startLine: 1,
+            endLine: 20
+          })
+        };
+        return;
+      }
+
+      if (input.content === "Create new.txt with the content new-task.") {
+        yield {
+          delta: toolCall("write", {
+            path: "new.txt",
+            content: "new-task\n"
+          })
+        };
+        return;
+      }
+
+      if (input.content.startsWith("The user replied ") && input.content.includes("wants to continue the most recent unfinished task.")) {
+        assert.fail("explicit new task should not be rewritten into a terminal assistant-pass tool-recovery command resume follow-up");
+      }
+
+      if (input.content.startsWith("Original user request: Create new.txt with the content new-task.")) {
+        yield { delta: "Created new.txt instead of resuming the interrupted terminal assistant-pass tool-recovery command chain." };
+        return;
+      }
+
+      if (input.content.startsWith(`Original user request: ${originalPrompt}`)) {
+        const toolName = extractLine(input.content, "Tool:") ?? extractLine(input.content, "Latest tool:");
+        const summary = extractLine(input.content, "Summary:") ?? extractLine(input.content, "Latest summary:") ?? "";
+
+        if (toolName === "files" && /beta-a\.txt/.test(summary)) {
+          yield {
+            delta: toolCall("files", {
+              path: "beta-b.txt",
+              startLine: 1,
+              endLine: 20
+            })
+          };
+          return;
+        }
+
+        if (toolName === "files" && /beta-b\.txt/.test(summary)) {
+          yield {
+            delta: toolCall("files", {
+              path: "package.json",
+              startLine: 1,
+              endLine: 20
+            })
+          };
+          return;
+        }
+
+        if (toolName === "files" && /package\.json/.test(summary)) {
+          this.loopReplyCount += 1;
+          yield {
+            delta: `Terminal assistant-pass tool-recovery command-only loop marker ${this.loopReplyCount} stays focused on the pending npm test step, the package.json read is already complete, this intentionally verbose sentence avoids short progress classification, and there is still a concrete verification command left to run before the task can finish.`
+          };
+          return;
+        }
+      }
+
+      if (
+        !input.content.startsWith("Original user request:")
+        && input.content.includes("The current task used up its assistant pass budget but still has unfinished work.")
+      ) {
+        assert.match(input.content, /Pending next step target: npm test/);
+        assert.match(input.content, /Latest tool in context: files/);
+        assert.match(input.content, /Latest tool summary in context: package\.json:1-6/);
+        yield { delta: this.buildInvalidEditToolCall() };
+        return;
+      }
+
+      if (
+        input.content.startsWith("Original user request: The current task used up its assistant pass budget but still has unfinished work.")
+      ) {
+        this.invalidEditAttemptCount += 1;
+
+        if (this.invalidEditAttemptCount <= 2) {
+          yield { delta: this.buildInvalidEditToolCall() };
+          return;
+        }
+      }
+
+      if (
+        !input.content.startsWith("Original user request:")
+        && input.content.includes("The task hit repeated tool-recovery failures but the task context is still actionable.")
+      ) {
+        assert.match(input.content, /Pending next step target: npm test/);
+        assert.match(input.content, /Latest tool in context: files/);
+        assert.match(input.content, /Latest tool summary in context: package\.json:1-6/);
+        yield {
+          delta: toolCall("shell", {
+            command: "npm test"
+          })
+        };
+        return;
+      }
+
+      if (
+        input.content.startsWith("Original user request: The task hit repeated tool-recovery failures but the task context is still actionable.")
+      ) {
+        const toolName = extractLine(input.content, "Tool:") ?? extractLine(input.content, "Latest tool:");
+        const summary = extractLine(input.content, "Summary:") ?? extractLine(input.content, "Latest summary:") ?? "";
+
+        if (toolName === "shell" && /npm test/.test(summary) && this.recoveredShellCount === 0) {
+          this.recoveredShellCount += 1;
+          yield {
+            delta: toolCall("files", {
+              path: "verify-terminal-assistant-pass-tool-recovery-command-new-task.mjs",
+              startLine: 1,
+              endLine: 20
+            })
+          };
+          return;
+        }
+
+        if (toolName === "files" && /verify-terminal-assistant-pass-tool-recovery-command-new-task\.mjs/.test(summary)) {
+          yield {
+            delta: toolCall("edit", {
+              path: "verify-terminal-assistant-pass-tool-recovery-command-new-task.mjs",
+              startLine: 1,
+              endLine: 1,
+              replacement: 'console.log("ready");'
+            })
+          };
+          return;
+        }
+
+        if (toolName === "edit" && /verify-terminal-assistant-pass-tool-recovery-command-new-task\.mjs/.test(summary)) {
+          yield {
+            delta: toolCall("shell", {
+              command: "npm test"
+            })
+          };
+          return;
+        }
+
+        if (toolName === "shell" && /npm test/.test(summary) && this.recoveredShellCount === 1) {
+          this.recoveredShellCount += 1;
+          yield { delta: "npm test now prints ready after the terminal assistant-pass and tool-recovery command-only continuation chain." };
+          return;
+        }
+      }
+
+      yield { delta: "ok" };
+    }
+  }
+
+  const bus = new EventBus();
+  const transcriptStore = new TranscriptStore(transcriptPath);
+  const logStore = new LogStore(logsPath);
+  await transcriptStore.ensureInitialized();
+  await logStore.ensureInitialized();
+
+  const session = createDefaultSessionRecord(workspace, VERSION);
+  session.sessionId = sessionId;
+  session.model = "regression-stub";
+
+  const runtime = new AgentRuntime({
+    bus,
+    provider: new TerminalLoopAssistantPassToolRecoveryCommandNewTaskProvider(),
+    tools: new InMemoryToolRegistry(),
+    session,
+    transcriptStore,
+    logStore
+  });
+  await runtime.start();
+
+  const editor = new EditorController();
+  const panel = new TerminalPanelController();
+  const terminal = new TerminalEventLoop({
+    bus,
+    editor,
+    panel,
+    sessionId
+  });
+
+  const originalExit = process.exit;
+  const existingDataListeners = process.stdin.listeners("data") as Array<(...args: any[]) => void>;
+
+  (process as typeof process & {
+    exit: (code?: number) => never;
+  }).exit = ((code?: number) => {
+    throw new Error(`EXIT:${code ?? 0}`);
+  }) as typeof process.exit;
+
+  try {
+    terminal.start();
+    const initialCompletion = waitForAssistantTaskCompletion(bus, sessionId);
+    const continuationSummary = waitForToolExecutionCompleted(
+      bus,
+      sessionId,
+      (summary) => summary.startsWith("verify-terminal-assistant-pass-tool-recovery-command-new-task.mjs:1-1")
+    );
+
+    process.stdin.emit("data", Buffer.from(`${originalPrompt}\r`));
+
+    await continuationSummary;
+    await waitForBusyPhase(bus, sessionId, "assistant");
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    process.stdin.emit("data", "\u001b");
+
+    const cancelledTask = await initialCompletion;
+    assert.equal(cancelledTask.payload.state, "cancelled");
+
+    const interruptedEvents = await transcriptStore.readEventsBySession(sessionId);
+    assert.equal(
+      interruptedEvents.filter((event) =>
+        event.type === "tool.execution.completed"
+        && event.payload.summary.startsWith("package.json:1-6")
+      ).length,
+      1,
+      "terminal explicit new task after assistant-pass tool-recovery command interruption should preserve the package read before stop"
+    );
+    assert.ok(
+      interruptedEvents.some((event) =>
+        event.type === "tool.execution.completed"
+        && event.payload.summary.startsWith("verify-terminal-assistant-pass-tool-recovery-command-new-task.mjs:1-1")
+      ),
+      "terminal explicit new task after assistant-pass tool-recovery command interruption should preserve the narrowed hidden verifier handoff before stop"
+    );
+    assert.equal(
+      interruptedEvents.some((event) =>
+        event.type === "tool.execution.completed"
+        && event.payload.summary.startsWith("verify-terminal-assistant-pass-tool-recovery-command-new-task.mjs:1-1 · updated")
+      ),
+      false,
+      "terminal explicit new task after assistant-pass tool-recovery command interruption should stop before applying the hidden verifier repair"
+    );
+
+    const newTaskCompletion = waitForAssistantTaskCompletion(bus, sessionId);
+    process.stdin.emit("data", Buffer.from("Create new.txt with the content new-task.\r"));
+    const newTask = await newTaskCompletion;
+    const newTaskEvents = await transcriptStore.readEventsBySession(sessionId);
+    const newTaskAssistantText = collectAssistantText(newTaskEvents, newTask.taskId ?? "");
+    const newContent = await readFile(join(workspace, "new.txt"), "utf8");
+    const verifyContent = await readFile(join(workspace, "verify-terminal-assistant-pass-tool-recovery-command-new-task.mjs"), "utf8");
+
+    assert.equal(newTask.payload.state, "completed");
+    assert.equal(editor.getState().value, "", "explicit new task after terminal assistant-pass tool-recovery command interruption should clear the editor buffer");
+    assert.equal(newContent, "new-task\n");
+    assert.doesNotMatch(verifyContent, /ready/);
+    assert.match(newTaskAssistantText, /Created new\.txt|new task|已处理 `new\.txt`|已完成/u);
+    assert.ok(
+      newTaskEvents.some((event) =>
+        event.type === "tool.execution.completed"
+        && event.payload.summary.startsWith("new.txt · created")
+        && event.taskId === newTask.taskId
+      ),
+      "explicit new task should create new.txt instead of resuming the interrupted terminal assistant-pass tool-recovery command chain"
+    );
+    assert.equal(
+      newTaskEvents.some((event) =>
+        event.type === "tool.execution.completed"
+        && (
+          event.payload.summary.startsWith("verify-terminal-assistant-pass-tool-recovery-command-new-task.mjs:1-1 · updated")
+          || event.payload.summary.startsWith("npm test · completed")
+        )
+        && event.taskId === newTask.taskId
+      ),
+      false,
+      "explicit new task should not continue the interrupted terminal assistant-pass tool-recovery command repair chain"
+    );
+  } finally {
+    process.exit = originalExit;
+    try {
+      bus.emit(createTerminalCommandInvokedEvent({
+        sessionId,
+        content: "/exit"
+      }));
+    } catch (error) {
+      assert.match(String(error), /EXIT:0/);
+    }
+
+    for (const listener of process.stdin.listeners("data") as Array<(...args: any[]) => void>) {
+      if (!existingDataListeners.includes(listener)) {
+        process.stdin.off("data", listener);
+      }
+    }
+  }
+}
+
+async function verifyTerminalLoopStopAndResumeAssistantPassToolRecoveryCommandOnlyShellWithFollowUp(
+  followUpPrompt: "还能继续吗" | "帮我优化下"
+) {
+  const suffix = followUpPrompt === "还能继续吗" ? "resume" : "opt";
+  const root = await mkdtemp(join(tmpdir(), `selfme-agent-terminal-loop-assistant-pass-tool-recovery-command-resume-${suffix}-`));
+  const workspace = join(root, "workspace");
+  const transcriptPath = join(root, "transcript.jsonl");
+  const logsPath = join(root, "logs.jsonl");
+  const sessionId = `terminal-loop-assistant-pass-tool-recovery-command-resume-${suffix}`;
   const originalPrompt = "Read beta-a.txt, beta-b.txt, and package.json, then run `npm test` until it prints exactly `ready`, fixing whatever is needed before finishing, even if you first burn passes on progress replies and later your edit tool input comes out invalid.";
   await mkdir(workspace, { recursive: true });
   await writeFile(join(workspace, "beta-a.txt"), "beta-a\n", "utf8");
@@ -49819,7 +56138,7 @@ async function verifyTerminalLoopStopAndResumeAssistantPassToolRecoveryCommandOn
         }
       }
 
-      if (input.content.startsWith('The user replied "还能继续吗" and wants to continue the most recent unfinished task.')) {
+      if (input.content.startsWith(`The user replied "${followUpPrompt}" and wants to continue the most recent unfinished task.`)) {
         assert.match(input.content, /verify-terminal-assistant-pass-tool-recovery-command-resume\.mjs|Pending next step target: npm test/);
         yield {
           delta: toolCall("files", {
@@ -49832,7 +56151,7 @@ async function verifyTerminalLoopStopAndResumeAssistantPassToolRecoveryCommandOn
       }
 
       if (
-        input.content.startsWith('Original user request: The user replied "还能继续吗" and wants to continue the most recent unfinished task.')
+        input.content.startsWith(`Original user request: The user replied "${followUpPrompt}" and wants to continue the most recent unfinished task.`)
       ) {
         const toolName = extractLine(input.content, "Tool:") ?? extractLine(input.content, "Latest tool:");
         const summary = extractLine(input.content, "Summary:") ?? extractLine(input.content, "Latest summary:") ?? "";
@@ -49952,7 +56271,7 @@ async function verifyTerminalLoopStopAndResumeAssistantPassToolRecoveryCommandOn
     );
 
     const resumedCompletion = waitForAssistantTaskCompletion(bus, sessionId);
-    process.stdin.emit("data", Buffer.from("还能继续吗\r"));
+    process.stdin.emit("data", Buffer.from(`${followUpPrompt}\r`));
     const resumedTask = await resumedCompletion;
     const resumedEvents = await transcriptStore.readEventsBySession(sessionId);
     const resumedAssistantText = collectAssistantText(resumedEvents, resumedTask.taskId ?? "");
@@ -50355,11 +56674,22 @@ async function verifyTerminalLoopAutoContinuesAcrossAssistantPassAndMultipleTool
 }
 
 async function verifyTerminalLoopStopAndResumeAssistantPassMultipleToolRecoveryCommandOnlyShell() {
-  const root = await mkdtemp(join(tmpdir(), "selfme-agent-terminal-loop-assistant-pass-tool-recovery-command-multi-resume-"));
+  await verifyTerminalLoopStopAndResumeAssistantPassMultipleToolRecoveryCommandOnlyShellWithFollowUp("还能继续吗");
+}
+
+async function verifyTerminalLoopStopAndResumeAssistantPassMultipleToolRecoveryCommandOnlyShellBroadOptimizationFollowUp() {
+  await verifyTerminalLoopStopAndResumeAssistantPassMultipleToolRecoveryCommandOnlyShellWithFollowUp("帮我优化下");
+}
+
+async function verifyTerminalLoopStopAndResumeAssistantPassMultipleToolRecoveryCommandOnlyShellWithFollowUp(
+  followUpPrompt: "还能继续吗" | "帮我优化下"
+) {
+  const suffix = followUpPrompt === "还能继续吗" ? "resume" : "opt";
+  const root = await mkdtemp(join(tmpdir(), `selfme-agent-terminal-loop-assistant-pass-tool-recovery-command-multi-resume-${suffix}-`));
   const workspace = join(root, "workspace");
   const transcriptPath = join(root, "transcript.jsonl");
   const logsPath = join(root, "logs.jsonl");
-  const sessionId = "terminal-loop-assistant-pass-tool-recovery-command-multi-resume";
+  const sessionId = `terminal-loop-assistant-pass-tool-recovery-command-multi-resume-${suffix}`;
   const originalPrompt = "Read beta-a.txt, beta-b.txt, and package.json, then run `npm test` until it prints exactly `ready`, fixing whatever is needed before finishing, even if you first burn passes on progress replies and later your edit tool input comes out invalid across multiple tool-recovery slices.";
   await mkdir(workspace, { recursive: true });
   await writeFile(join(workspace, "beta-a.txt"), "beta-a\n", "utf8");
@@ -50504,7 +56834,7 @@ async function verifyTerminalLoopStopAndResumeAssistantPassMultipleToolRecoveryC
         }
       }
 
-      if (input.content.startsWith('The user replied "还能继续吗" and wants to continue the most recent unfinished task.')) {
+      if (input.content.startsWith(`The user replied "${followUpPrompt}" and wants to continue the most recent unfinished task.`)) {
         assert.match(
           input.content,
           /verify-terminal-assistant-pass-tool-recovery-command-multi-resume\.mjs|Pending next step target: npm test/
@@ -50520,7 +56850,7 @@ async function verifyTerminalLoopStopAndResumeAssistantPassMultipleToolRecoveryC
       }
 
       if (
-        input.content.startsWith('Original user request: The user replied "还能继续吗" and wants to continue the most recent unfinished task.')
+        input.content.startsWith(`Original user request: The user replied "${followUpPrompt}" and wants to continue the most recent unfinished task.`)
       ) {
         const toolName = extractLine(input.content, "Tool:") ?? extractLine(input.content, "Latest tool:");
         const summary = extractLine(input.content, "Summary:") ?? extractLine(input.content, "Latest summary:") ?? "";
@@ -50640,7 +56970,7 @@ async function verifyTerminalLoopStopAndResumeAssistantPassMultipleToolRecoveryC
     );
 
     const resumedCompletion = waitForAssistantTaskCompletion(bus, sessionId);
-    process.stdin.emit("data", Buffer.from("还能继续吗\r"));
+    process.stdin.emit("data", Buffer.from(`${followUpPrompt}\r`));
     const resumedTask = await resumedCompletion;
     const resumedEvents = await transcriptStore.readEventsBySession(sessionId);
     const resumedAssistantText = collectAssistantText(resumedEvents, resumedTask.taskId ?? "");
@@ -51071,11 +57401,22 @@ async function verifyTerminalLoopAutoContinuesAcrossAssistantPassToolRecoveryAnd
 }
 
 async function verifyTerminalLoopStopAndResumeAssistantPassToolRecoveryRepeatedStallCommandOnlyShell() {
-  const root = await mkdtemp(join(tmpdir(), "selfme-agent-terminal-loop-assistant-pass-tool-recovery-stall-command-resume-"));
+  await verifyTerminalLoopStopAndResumeAssistantPassToolRecoveryRepeatedStallCommandOnlyShellWithFollowUp("还能继续吗");
+}
+
+async function verifyTerminalLoopStopAndResumeAssistantPassToolRecoveryRepeatedStallCommandOnlyShellBroadOptimizationFollowUp() {
+  await verifyTerminalLoopStopAndResumeAssistantPassToolRecoveryRepeatedStallCommandOnlyShellWithFollowUp("帮我优化下");
+}
+
+async function verifyTerminalLoopStopAndResumeAssistantPassToolRecoveryRepeatedStallCommandOnlyShellWithFollowUp(
+  followUpPrompt: "还能继续吗" | "帮我优化下"
+) {
+  const suffix = followUpPrompt === "还能继续吗" ? "resume" : "opt";
+  const root = await mkdtemp(join(tmpdir(), `selfme-agent-terminal-loop-assistant-pass-tool-recovery-stall-command-resume-${suffix}-`));
   const workspace = join(root, "workspace");
   const transcriptPath = join(root, "transcript.jsonl");
   const logsPath = join(root, "logs.jsonl");
-  const sessionId = "terminal-loop-assistant-pass-tool-recovery-stall-command-resume";
+  const sessionId = `terminal-loop-assistant-pass-tool-recovery-stall-command-resume-${suffix}`;
   const originalPrompt = "Read beta-a.txt, beta-b.txt, and package.json, then run `npm test` until it prints exactly `ready`, fixing whatever is needed before finishing, even if you first burn passes on progress replies, then your edit tool input comes out invalid, and later you repeat the same verification command result.";
   await mkdir(workspace, { recursive: true });
   await writeFile(join(workspace, "beta-a.txt"), "beta-a\n", "utf8");
@@ -51226,7 +57567,7 @@ async function verifyTerminalLoopStopAndResumeAssistantPassToolRecoveryRepeatedS
         return;
       }
 
-      if (input.content.startsWith('The user replied "还能继续吗" and wants to continue the most recent unfinished task.')) {
+      if (input.content.startsWith(`The user replied "${followUpPrompt}" and wants to continue the most recent unfinished task.`)) {
         assert.match(input.content, /verify-terminal-assistant-pass-tool-recovery-stall-command-resume\.mjs|Pending next step target: npm test/);
         yield {
           delta: toolCall("files", {
@@ -51239,7 +57580,7 @@ async function verifyTerminalLoopStopAndResumeAssistantPassToolRecoveryRepeatedS
       }
 
       if (
-        input.content.startsWith('Original user request: The user replied "还能继续吗" and wants to continue the most recent unfinished task.')
+        input.content.startsWith(`Original user request: The user replied "${followUpPrompt}" and wants to continue the most recent unfinished task.`)
       ) {
         const toolName = extractLine(input.content, "Tool:") ?? extractLine(input.content, "Latest tool:");
         const summary = extractLine(input.content, "Summary:") ?? extractLine(input.content, "Latest summary:") ?? "";
@@ -51366,7 +57707,7 @@ async function verifyTerminalLoopStopAndResumeAssistantPassToolRecoveryRepeatedS
     );
 
     const resumedCompletion = waitForAssistantTaskCompletion(bus, sessionId);
-    process.stdin.emit("data", Buffer.from("还能继续吗\r"));
+    process.stdin.emit("data", Buffer.from(`${followUpPrompt}\r`));
     const resumedTask = await resumedCompletion;
     const resumedEvents = await transcriptStore.readEventsBySession(sessionId);
     const resumedAssistantText = collectAssistantText(resumedEvents, resumedTask.taskId ?? "");
@@ -51826,11 +58167,22 @@ async function verifyTerminalLoopAutoContinuesAcrossAssistantPassToolRecoveryAnd
 }
 
 async function verifyTerminalLoopStopAndResumeAssistantPassToolRecoveryMultipleRepeatedStallCommandOnlyShell() {
-  const root = await mkdtemp(join(tmpdir(), "selfme-agent-terminal-loop-assistant-pass-tool-recovery-stall-command-multi-resume-"));
+  await verifyTerminalLoopStopAndResumeAssistantPassToolRecoveryMultipleRepeatedStallCommandOnlyShellWithFollowUp("还能继续吗");
+}
+
+async function verifyTerminalLoopStopAndResumeAssistantPassToolRecoveryMultipleRepeatedStallCommandOnlyShellBroadOptimizationFollowUp() {
+  await verifyTerminalLoopStopAndResumeAssistantPassToolRecoveryMultipleRepeatedStallCommandOnlyShellWithFollowUp("帮我优化下");
+}
+
+async function verifyTerminalLoopStopAndResumeAssistantPassToolRecoveryMultipleRepeatedStallCommandOnlyShellWithFollowUp(
+  followUpPrompt: "还能继续吗" | "帮我优化下"
+) {
+  const suffix = followUpPrompt === "还能继续吗" ? "resume" : "opt";
+  const root = await mkdtemp(join(tmpdir(), `selfme-agent-terminal-loop-assistant-pass-tool-recovery-stall-command-multi-resume-${suffix}-`));
   const workspace = join(root, "workspace");
   const transcriptPath = join(root, "transcript.jsonl");
   const logsPath = join(root, "logs.jsonl");
-  const sessionId = "terminal-loop-assistant-pass-tool-recovery-stall-command-multi-resume";
+  const sessionId = `terminal-loop-assistant-pass-tool-recovery-stall-command-multi-resume-${suffix}`;
   const originalPrompt = "Read beta-a.txt, beta-b.txt, and package.json, then run `npm test` until it prints exactly `ready`, fixing whatever is needed before finishing, even if you first burn passes on progress replies, then your edit tool input comes out invalid, and later you repeat the same verification command result across multiple stalled continuation slices.";
   await mkdir(workspace, { recursive: true });
   await writeFile(join(workspace, "beta-a.txt"), "beta-a\n", "utf8");
@@ -52018,7 +58370,7 @@ async function verifyTerminalLoopStopAndResumeAssistantPassToolRecoveryMultipleR
         }
       }
 
-      if (input.content.startsWith('The user replied "还能继续吗" and wants to continue the most recent unfinished task.')) {
+      if (input.content.startsWith(`The user replied "${followUpPrompt}" and wants to continue the most recent unfinished task.`)) {
         assert.match(
           input.content,
           /verify-terminal-assistant-pass-tool-recovery-stall-command-multi-resume\.mjs|Pending next step target: npm test/
@@ -52034,7 +58386,7 @@ async function verifyTerminalLoopStopAndResumeAssistantPassToolRecoveryMultipleR
       }
 
       if (
-        input.content.startsWith('Original user request: The user replied "还能继续吗" and wants to continue the most recent unfinished task.')
+        input.content.startsWith(`Original user request: The user replied "${followUpPrompt}" and wants to continue the most recent unfinished task.`)
       ) {
         const toolName = extractLine(input.content, "Tool:") ?? extractLine(input.content, "Latest tool:");
         const summary = extractLine(input.content, "Summary:") ?? extractLine(input.content, "Latest summary:") ?? "";
@@ -52161,7 +58513,7 @@ async function verifyTerminalLoopStopAndResumeAssistantPassToolRecoveryMultipleR
     );
 
     const resumedCompletion = waitForAssistantTaskCompletion(bus, sessionId);
-    process.stdin.emit("data", Buffer.from("还能继续吗\r"));
+    process.stdin.emit("data", Buffer.from(`${followUpPrompt}\r`));
     const resumedTask = await resumedCompletion;
     const resumedEvents = await transcriptStore.readEventsBySession(sessionId);
     const resumedAssistantText = collectAssistantText(resumedEvents, resumedTask.taskId ?? "");
@@ -52501,11 +58853,22 @@ async function verifyTerminalLoopAutoContinuesAfterRepeatedStallBeforeCommandOnl
 }
 
 async function verifyTerminalLoopStopAndResumeRepeatedStallCommandOnlyShell() {
-  const root = await mkdtemp(join(tmpdir(), "selfme-agent-terminal-loop-command-only-stall-resume-"));
+  await verifyTerminalLoopStopAndResumeRepeatedStallCommandOnlyShellWithFollowUp("还能继续吗");
+}
+
+async function verifyTerminalLoopStopAndResumeRepeatedStallCommandOnlyShellBroadOptimizationFollowUp() {
+  await verifyTerminalLoopStopAndResumeRepeatedStallCommandOnlyShellWithFollowUp("帮我优化下");
+}
+
+async function verifyTerminalLoopStopAndResumeRepeatedStallCommandOnlyShellWithFollowUp(
+  followUpPrompt: "还能继续吗" | "帮我优化下"
+) {
+  const suffix = followUpPrompt === "还能继续吗" ? "resume" : "opt";
+  const root = await mkdtemp(join(tmpdir(), `selfme-agent-terminal-loop-command-only-stall-resume-${suffix}-`));
   const workspace = join(root, "workspace");
   const transcriptPath = join(root, "transcript.jsonl");
   const logsPath = join(root, "logs.jsonl");
-  const sessionId = "terminal-loop-command-only-stall-resume";
+  const sessionId = `terminal-loop-command-only-stall-resume-${suffix}`;
   const originalPrompt = "Read beta-a.txt, beta-b.txt, and package.json, then run `npm test` until it prints exactly `ready`, fixing whatever is needed before finishing.";
   await mkdir(workspace, { recursive: true });
   await writeFile(join(workspace, "beta-a.txt"), "beta-a\n", "utf8");
@@ -52602,7 +58965,7 @@ async function verifyTerminalLoopStopAndResumeRepeatedStallCommandOnlyShell() {
         return;
       }
 
-      if (input.content.startsWith('The user replied "还能继续吗" and wants to continue the most recent unfinished task.')) {
+      if (input.content.startsWith(`The user replied "${followUpPrompt}" and wants to continue the most recent unfinished task.`)) {
         assert.match(input.content, /Pending next step target: npm test/);
         assert.match(input.content, /Latest tool in context: shell/);
         yield {
@@ -52616,7 +58979,7 @@ async function verifyTerminalLoopStopAndResumeRepeatedStallCommandOnlyShell() {
       }
 
       if (
-        input.content.startsWith('Original user request: The user replied "还能继续吗" and wants to continue the most recent unfinished task.')
+        input.content.startsWith(`Original user request: The user replied "${followUpPrompt}" and wants to continue the most recent unfinished task.`)
       ) {
         const toolName = extractLine(input.content, "Tool:") ?? extractLine(input.content, "Latest tool:");
         const summary = extractLine(input.content, "Summary:") ?? extractLine(input.content, "Latest summary:") ?? "";
@@ -52736,7 +59099,7 @@ async function verifyTerminalLoopStopAndResumeRepeatedStallCommandOnlyShell() {
     );
 
     const resumedCompletion = waitForAssistantTaskCompletion(bus, sessionId);
-    process.stdin.emit("data", Buffer.from("还能继续吗\r"));
+    process.stdin.emit("data", Buffer.from(`${followUpPrompt}\r`));
     const resumedTask = await resumedCompletion;
     const resumedEvents = await transcriptStore.readEventsBySession(sessionId);
     const resumedAssistantText = collectAssistantText(resumedEvents, resumedTask.taskId ?? "");
@@ -53111,11 +59474,22 @@ async function verifyTerminalLoopAutoContinuesAcrossMultipleRepeatedStallSlicesB
 }
 
 async function verifyTerminalLoopStopAndResumeRepeatedStallAcrossMultipleSlicesBeforeCommandOnlyShell() {
-  const root = await mkdtemp(join(tmpdir(), "selfme-agent-terminal-loop-command-only-stall-multi-resume-"));
+  await verifyTerminalLoopStopAndResumeRepeatedStallAcrossMultipleSlicesBeforeCommandOnlyShellWithFollowUp("还能继续吗");
+}
+
+async function verifyTerminalLoopStopAndResumeRepeatedStallAcrossMultipleSlicesBeforeCommandOnlyShellBroadOptimizationFollowUp() {
+  await verifyTerminalLoopStopAndResumeRepeatedStallAcrossMultipleSlicesBeforeCommandOnlyShellWithFollowUp("帮我优化下");
+}
+
+async function verifyTerminalLoopStopAndResumeRepeatedStallAcrossMultipleSlicesBeforeCommandOnlyShellWithFollowUp(
+  followUpPrompt: "还能继续吗" | "帮我优化下"
+) {
+  const suffix = followUpPrompt === "还能继续吗" ? "resume" : "opt";
+  const root = await mkdtemp(join(tmpdir(), `selfme-agent-terminal-loop-command-only-stall-multi-resume-${suffix}-`));
   const workspace = join(root, "workspace");
   const transcriptPath = join(root, "transcript.jsonl");
   const logsPath = join(root, "logs.jsonl");
-  const sessionId = "terminal-loop-command-only-stall-multi-resume";
+  const sessionId = `terminal-loop-command-only-stall-multi-resume-${suffix}`;
   const originalPrompt = "Read beta-a.txt, beta-b.txt, and package.json, then run `npm test` until it prints exactly `ready`, fixing whatever is needed before finishing.";
   await mkdir(workspace, { recursive: true });
   await writeFile(join(workspace, "beta-a.txt"), "beta-a\n", "utf8");
@@ -53230,7 +59604,7 @@ async function verifyTerminalLoopStopAndResumeRepeatedStallAcrossMultipleSlicesB
         assert.fail(`unexpected terminal command-only repeated-stall multi-resume continuation prompt ${this.continuationPromptCount}`);
       }
 
-      if (input.content.startsWith('The user replied "还能继续吗" and wants to continue the most recent unfinished task.')) {
+      if (input.content.startsWith(`The user replied "${followUpPrompt}" and wants to continue the most recent unfinished task.`)) {
         assert.match(input.content, /verify-terminal-commandless-stall-multi-resume\.mjs|Pending next step target: npm test/);
         yield {
           delta: toolCall("files", {
@@ -53243,7 +59617,7 @@ async function verifyTerminalLoopStopAndResumeRepeatedStallAcrossMultipleSlicesB
       }
 
       if (
-        input.content.startsWith('Original user request: The user replied "还能继续吗" and wants to continue the most recent unfinished task.')
+        input.content.startsWith(`Original user request: The user replied "${followUpPrompt}" and wants to continue the most recent unfinished task.`)
       ) {
         const toolName = extractLine(input.content, "Tool:") ?? extractLine(input.content, "Latest tool:");
         const summary = extractLine(input.content, "Summary:") ?? extractLine(input.content, "Latest summary:") ?? "";
@@ -53413,7 +59787,7 @@ async function verifyTerminalLoopStopAndResumeRepeatedStallAcrossMultipleSlicesB
     );
 
     const resumedCompletion = waitForAssistantTaskCompletion(bus, sessionId);
-    process.stdin.emit("data", Buffer.from("还能继续吗\r"));
+    process.stdin.emit("data", Buffer.from(`${followUpPrompt}\r`));
     const resumedTask = await resumedCompletion;
     const resumedEvents = await transcriptStore.readEventsBySession(sessionId);
     const resumedAssistantText = collectAssistantText(resumedEvents, resumedTask.taskId ?? "");
@@ -53697,11 +60071,22 @@ async function verifyTerminalLoopContinuesAfterExplanationOnlyReply() {
 }
 
 async function verifyTerminalLoopStopAndResumeExplanationOnlyReply() {
-  const root = await mkdtemp(join(tmpdir(), "selfme-agent-terminal-loop-explanation-resume-"));
+  await verifyTerminalLoopStopAndResumeExplanationOnlyReplyWithFollowUp("还能继续吗");
+}
+
+async function verifyTerminalLoopStopAndResumeExplanationOnlyReplyBroadOptimizationFollowUp() {
+  await verifyTerminalLoopStopAndResumeExplanationOnlyReplyWithFollowUp("帮我优化下");
+}
+
+async function verifyTerminalLoopStopAndResumeExplanationOnlyReplyWithFollowUp(
+  followUpPrompt: "还能继续吗" | "帮我优化下"
+) {
+  const suffix = followUpPrompt === "还能继续吗" ? "resume" : "opt";
+  const root = await mkdtemp(join(tmpdir(), `selfme-agent-terminal-loop-explanation-resume-${suffix}-`));
   const workspace = join(root, "workspace");
   const transcriptPath = join(root, "transcript.jsonl");
   const logsPath = join(root, "logs.jsonl");
-  const sessionId = "terminal-loop-explanation-resume";
+  const sessionId = `terminal-loop-explanation-resume-${suffix}`;
   const originalPrompt = "Read app.config.json and fix terminal-converge-resume-report.mjs so running `node terminal-converge-resume-report.mjs` prints exactly `SelfMe:3000` on one line. Keep working until the output is exact.";
   await mkdir(workspace, { recursive: true });
   await writeFile(join(workspace, "app.config.json"), '{\n  "name": "SelfMe",\n  "port": 3000\n}\n', "utf8");
@@ -53747,7 +60132,7 @@ async function verifyTerminalLoopStopAndResumeExplanationOnlyReply() {
         }
       }
 
-      if (input.content.startsWith('The user replied "还能继续吗" and wants to continue the most recent unfinished task.')) {
+      if (input.content.startsWith(`The user replied "${followUpPrompt}" and wants to continue the most recent unfinished task.`)) {
         assert.match(input.content, /terminal-converge-resume-report\.mjs|Pending next step target: terminal-converge-resume-report\.mjs/);
         yield {
           delta: toolCall("files", {
@@ -53760,7 +60145,7 @@ async function verifyTerminalLoopStopAndResumeExplanationOnlyReply() {
       }
 
       if (
-        input.content.startsWith('Original user request: The user replied "还能继续吗" and wants to continue the most recent unfinished task.')
+        input.content.startsWith(`Original user request: The user replied "${followUpPrompt}" and wants to continue the most recent unfinished task.`)
       ) {
         const toolName = extractLine(input.content, "Tool:") ?? extractLine(input.content, "Latest tool:");
         const summary = extractLine(input.content, "Summary:") ?? extractLine(input.content, "Latest summary:") ?? "";
@@ -53894,7 +60279,7 @@ async function verifyTerminalLoopStopAndResumeExplanationOnlyReply() {
     );
 
     const resumedCompletion = waitForAssistantTaskCompletion(bus, sessionId);
-    process.stdin.emit("data", Buffer.from("还能继续吗\r"));
+    process.stdin.emit("data", Buffer.from(`${followUpPrompt}\r`));
     const resumedTask = await resumedCompletion;
     const resumedEvents = await transcriptStore.readEventsBySession(sessionId);
     const resumedAssistantText = collectAssistantText(resumedEvents, resumedTask.taskId ?? "");
@@ -54190,11 +60575,22 @@ async function verifyTerminalLoopRecoversAfterRepeatedAssistantStall() {
 }
 
 async function verifyTerminalLoopStopAndResumeRepeatedAssistantStall() {
-  const root = await mkdtemp(join(tmpdir(), "selfme-agent-terminal-loop-assistant-stall-resume-"));
+  await verifyTerminalLoopStopAndResumeRepeatedAssistantStallWithFollowUp("还能继续吗");
+}
+
+async function verifyTerminalLoopStopAndResumeRepeatedAssistantStallBroadOptimizationFollowUp() {
+  await verifyTerminalLoopStopAndResumeRepeatedAssistantStallWithFollowUp("帮我优化下");
+}
+
+async function verifyTerminalLoopStopAndResumeRepeatedAssistantStallWithFollowUp(
+  followUpPrompt: "还能继续吗" | "帮我优化下"
+) {
+  const suffix = followUpPrompt === "还能继续吗" ? "resume" : "opt";
+  const root = await mkdtemp(join(tmpdir(), `selfme-agent-terminal-loop-assistant-stall-resume-${suffix}-`));
   const workspace = join(root, "workspace");
   const transcriptPath = join(root, "transcript.jsonl");
   const logsPath = join(root, "logs.jsonl");
-  const sessionId = "terminal-loop-assistant-stall-resume";
+  const sessionId = `terminal-loop-assistant-stall-resume-${suffix}`;
   const originalPrompt = "Read app.config.json and fix terminal-assistant-stall-resume-report.mjs so running `node terminal-assistant-stall-resume-report.mjs` prints exactly `SelfMe:3000` on one line. Keep working until the output is exact.";
   await mkdir(workspace, { recursive: true });
   await writeFile(join(workspace, "app.config.json"), '{\n  "name": "SelfMe",\n  "port": 3000\n}\n', "utf8");
@@ -54266,7 +60662,7 @@ async function verifyTerminalLoopStopAndResumeRepeatedAssistantStall() {
         return;
       }
 
-      if (input.content.startsWith('The user replied "还能继续吗" and wants to continue the most recent unfinished task.')) {
+      if (input.content.startsWith(`The user replied "${followUpPrompt}" and wants to continue the most recent unfinished task.`)) {
         assert.match(input.content, /terminal-assistant-stall-resume-report\.mjs|Pending next step target: terminal-assistant-stall-resume-report\.mjs/);
         yield {
           delta: toolCall("files", {
@@ -54279,7 +60675,7 @@ async function verifyTerminalLoopStopAndResumeRepeatedAssistantStall() {
       }
 
       if (
-        input.content.startsWith('Original user request: The user replied "还能继续吗" and wants to continue the most recent unfinished task.')
+        input.content.startsWith(`Original user request: The user replied "${followUpPrompt}" and wants to continue the most recent unfinished task.`)
       ) {
         const toolName = extractLine(input.content, "Tool:") ?? extractLine(input.content, "Latest tool:");
         const summary = extractLine(input.content, "Summary:") ?? extractLine(input.content, "Latest summary:") ?? "";
@@ -54413,7 +60809,7 @@ async function verifyTerminalLoopStopAndResumeRepeatedAssistantStall() {
     );
 
     const resumedCompletion = waitForAssistantTaskCompletion(bus, sessionId);
-    process.stdin.emit("data", Buffer.from("还能继续吗\r"));
+    process.stdin.emit("data", Buffer.from(`${followUpPrompt}\r`));
     const resumedTask = await resumedCompletion;
     const resumedEvents = await transcriptStore.readEventsBySession(sessionId);
     const resumedAssistantText = collectAssistantText(resumedEvents, resumedTask.taskId ?? "");
@@ -54730,11 +61126,22 @@ async function verifyTerminalLoopRecoversAfterRepeatedAssistantStallAcrossMultip
 }
 
 async function verifyTerminalLoopStopAndResumeRepeatedAssistantStallAcrossMultipleSlices() {
-  const root = await mkdtemp(join(tmpdir(), "selfme-agent-terminal-loop-assistant-stall-multi-resume-"));
+  await verifyTerminalLoopStopAndResumeRepeatedAssistantStallAcrossMultipleSlicesWithFollowUp("还能继续吗");
+}
+
+async function verifyTerminalLoopStopAndResumeRepeatedAssistantStallAcrossMultipleSlicesBroadOptimizationFollowUp() {
+  await verifyTerminalLoopStopAndResumeRepeatedAssistantStallAcrossMultipleSlicesWithFollowUp("帮我优化下");
+}
+
+async function verifyTerminalLoopStopAndResumeRepeatedAssistantStallAcrossMultipleSlicesWithFollowUp(
+  followUpPrompt: "还能继续吗" | "帮我优化下"
+) {
+  const suffix = followUpPrompt === "还能继续吗" ? "resume" : "opt";
+  const root = await mkdtemp(join(tmpdir(), `selfme-agent-terminal-loop-assistant-stall-multi-resume-${suffix}-`));
   const workspace = join(root, "workspace");
   const transcriptPath = join(root, "transcript.jsonl");
   const logsPath = join(root, "logs.jsonl");
-  const sessionId = "terminal-loop-assistant-stall-multi-resume";
+  const sessionId = `terminal-loop-assistant-stall-multi-resume-${suffix}`;
   const originalPrompt = "Read app.config.json and fix terminal-assistant-stall-multi-resume-report.mjs so running `node terminal-assistant-stall-multi-resume-report.mjs` prints exactly `SelfMe:3000` on one line. Keep working until the output is exact.";
   await mkdir(workspace, { recursive: true });
   await writeFile(join(workspace, "app.config.json"), '{\n  "name": "SelfMe",\n  "port": 3000\n}\n', "utf8");
@@ -54823,7 +61230,7 @@ async function verifyTerminalLoopStopAndResumeRepeatedAssistantStallAcrossMultip
         assert.fail(`unexpected terminal repeated-assistant-stall resume continuation prompt ${this.continuationPromptCount}`);
       }
 
-      if (input.content.startsWith('The user replied "还能继续吗" and wants to continue the most recent unfinished task.')) {
+      if (input.content.startsWith(`The user replied "${followUpPrompt}" and wants to continue the most recent unfinished task.`)) {
         assert.match(input.content, /terminal-assistant-stall-multi-resume-report\.mjs|Pending next step target: terminal-assistant-stall-multi-resume-report\.mjs/);
         yield {
           delta: toolCall("edit", {
@@ -54837,7 +61244,7 @@ async function verifyTerminalLoopStopAndResumeRepeatedAssistantStallAcrossMultip
       }
 
       if (
-        input.content.startsWith('Original user request: The user replied "还能继续吗" and wants to continue the most recent unfinished task.')
+        input.content.startsWith(`Original user request: The user replied "${followUpPrompt}" and wants to continue the most recent unfinished task.`)
       ) {
         const toolName = extractLine(input.content, "Tool:") ?? extractLine(input.content, "Latest tool:");
         const summary = extractLine(input.content, "Summary:") ?? extractLine(input.content, "Latest summary:") ?? "";
@@ -54995,7 +61402,7 @@ async function verifyTerminalLoopStopAndResumeRepeatedAssistantStallAcrossMultip
     );
 
     const resumedCompletion = waitForAssistantTaskCompletion(bus, sessionId);
-    process.stdin.emit("data", Buffer.from("还能继续吗\r"));
+    process.stdin.emit("data", Buffer.from(`${followUpPrompt}\r`));
     const resumedTask = await resumedCompletion;
     const resumedEvents = await transcriptStore.readEventsBySession(sessionId);
     const resumedAssistantText = collectAssistantText(resumedEvents, resumedTask.taskId ?? "");
@@ -55059,11 +61466,22 @@ async function verifyTerminalLoopStopAndResumeRepeatedAssistantStallAcrossMultip
 }
 
 async function verifyTerminalLoopStopAndResumeCommandStageTask() {
-  const root = await mkdtemp(join(tmpdir(), "selfme-agent-terminal-loop-command-stage-resume-"));
+  await verifyTerminalLoopStopAndResumeCommandStageTaskWithFollowUp("还能继续吗");
+}
+
+async function verifyTerminalLoopStopAndResumeCommandStageTaskBroadOptimizationFollowUp() {
+  await verifyTerminalLoopStopAndResumeCommandStageTaskWithFollowUp("帮我优化下");
+}
+
+async function verifyTerminalLoopStopAndResumeCommandStageTaskWithFollowUp(
+  followUpPrompt: "还能继续吗" | "帮我优化下"
+) {
+  const suffix = followUpPrompt === "还能继续吗" ? "resume" : "opt";
+  const root = await mkdtemp(join(tmpdir(), `selfme-agent-terminal-loop-command-stage-resume-${suffix}-`));
   const workspace = join(root, "workspace");
   const transcriptPath = join(root, "transcript.jsonl");
   const logsPath = join(root, "logs.jsonl");
-  const sessionId = "terminal-loop-command-stage-resume";
+  const sessionId = `terminal-loop-command-stage-resume-${suffix}`;
   await mkdir(workspace, { recursive: true });
   await mkdir(join(workspace, "node-todo"), { recursive: true });
 
@@ -55166,7 +61584,7 @@ async function verifyTerminalLoopStopAndResumeCommandStageTask() {
         }
       }
 
-      if (input.content.startsWith('The user replied "还能继续吗" and wants to continue the most recent unfinished task.')) {
+      if (input.content.startsWith(`The user replied "${followUpPrompt}" and wants to continue the most recent unfinished task.`)) {
         assert.match(input.content, /Original task: 看看项目，然后直接优化 node-todo/);
         assert.match(input.content, /Pending next step target: node node-todo\/verify-setup\.mjs/);
         assert.match(input.content, /Latest tool in context: edit/);
@@ -55179,7 +61597,7 @@ async function verifyTerminalLoopStopAndResumeCommandStageTask() {
         return;
       }
 
-      if (input.content.startsWith('Original user request: The user replied "还能继续吗" and wants to continue the most recent unfinished task.')) {
+      if (input.content.startsWith(`Original user request: The user replied "${followUpPrompt}" and wants to continue the most recent unfinished task.`)) {
         const toolName = extractLine(input.content, "Tool:") ?? extractLine(input.content, "Latest tool:");
 
         if (toolName === "shell") {
@@ -55282,7 +61700,7 @@ async function verifyTerminalLoopStopAndResumeCommandStageTask() {
     );
 
     const resumedCompletion = waitForAssistantTaskCompletion(bus, sessionId);
-    process.stdin.emit("data", Buffer.from("还能继续吗\r"));
+    process.stdin.emit("data", Buffer.from(`${followUpPrompt}\r`));
     const resumedTask = await resumedCompletion;
     const resumedEvents = await transcriptStore.readEventsBySession(sessionId);
     const resumedAssistantText = collectAssistantText(resumedEvents, resumedTask.taskId ?? "");
@@ -55346,6 +61764,280 @@ async function verifyTerminalLoopCommandStageBroadOptimizationFollowUp() {
 
 async function verifyTerminalLoopCommandStageBroadInspectionFollowUp() {
   await verifyTerminalLoopCommandStageBroadFollowUp("帮我看看项目");
+}
+
+async function verifyTerminalLoopExplicitNewTaskDoesNotResumeCommandStageTask() {
+  const root = await mkdtemp(join(tmpdir(), "selfme-agent-terminal-loop-command-stage-new-task-"));
+  const workspace = join(root, "workspace");
+  const transcriptPath = join(root, "transcript.jsonl");
+  const logsPath = join(root, "logs.jsonl");
+  const sessionId = "terminal-loop-command-stage-new-task";
+  const originalPrompt = "看看项目，然后直接优化 node-todo：把 node-todo/app.js 的端口改成 process.env.PORT，并运行 `node node-todo/verify-setup.mjs` 验证，直到输出 exactly `ready`。";
+  await mkdir(workspace, { recursive: true });
+  await mkdir(join(workspace, "node-todo"), { recursive: true });
+
+  await writeFile(
+    join(workspace, "node-todo", "package.json"),
+    '{\n  "name": "node-todo",\n  "version": "1.0.0",\n  "scripts": {\n    "start": "node app.js"\n  }\n}\n',
+    "utf8"
+  );
+  await writeFile(
+    join(workspace, "node-todo", "app.js"),
+    'const express = require("express");\nconst app = express();\nconst PORT = 3000;\napp.listen(PORT, () => {\n  console.log(`Todo app is running at http://localhost:${PORT}`);\n});\n',
+    "utf8"
+  );
+  await writeFile(
+    join(workspace, "node-todo", "verify-setup.mjs"),
+    [
+      'import { readFileSync } from "node:fs";',
+      'const app = readFileSync(new URL("./app.js", import.meta.url), "utf8");',
+      'console.log(/process\\.env\\.PORT/.test(app) ? "ready" : "pending");'
+    ].join("\n") + "\n",
+    "utf8"
+  );
+
+  class TerminalLoopCommandStageNewTaskProvider implements ProviderClient {
+    readonly name = "terminal-loop-command-stage-new-task-provider";
+
+    async *streamResponse(input: ProviderStreamInput): AsyncIterable<ProviderStreamChunk> {
+      if (input.content === originalPrompt) {
+        yield {
+          delta: toolCall("shell", {
+            command: "pwd && ls -la && find . -maxdepth 2 -type f | sed 's#^./##' | sort | head -200"
+          })
+        };
+        return;
+      }
+
+      if (input.content === "Create new.txt with the content new-task.") {
+        yield {
+          delta: toolCall("write", {
+            path: "new.txt",
+            content: "new-task\n"
+          })
+        };
+        return;
+      }
+
+      if (input.content.startsWith("The user replied ") && input.content.includes("wants to continue the most recent unfinished task.")) {
+        assert.fail("explicit new task should not be rewritten into a terminal command-stage resume follow-up");
+      }
+
+      if (input.content.startsWith("Original user request: Create new.txt with the content new-task.")) {
+        yield { delta: "Created new.txt for the new task without resuming the interrupted terminal command-stage chain." };
+        return;
+      }
+
+      if (input.content.startsWith(`Original user request: ${originalPrompt}`)) {
+        const toolName = extractLine(input.content, "Tool:") ?? extractLine(input.content, "Latest tool:");
+        const summary = extractLine(input.content, "Summary:") ?? extractLine(input.content, "Latest summary:") ?? "";
+
+        if (toolName === "shell") {
+          if (/You are in the middle of a concrete project inspection request\./.test(input.content)) {
+            yield {
+              delta: toolCall("files", {
+                path: "node-todo/package.json",
+                startLine: 1,
+                endLine: 20
+              })
+            };
+            return;
+          }
+
+          assert.match(input.content, /ready/);
+          yield { delta: "Completed the terminal command-stage chain and verified the final output is ready." };
+          return;
+        }
+
+        if (toolName === "files" && /node-todo\/package\.json/.test(summary)) {
+          yield {
+            delta: toolCall("files", {
+              path: "node-todo/app.js",
+              startLine: 1,
+              endLine: 20
+            })
+          };
+          return;
+        }
+
+        if (toolName === "files" && /node-todo\/app\.js/.test(summary)) {
+          yield {
+            delta: toolCall("edit", {
+              path: "node-todo/app.js",
+              startLine: 3,
+              endLine: 3,
+              replacement: "const PORT = Number(process.env.PORT || 3000);"
+            })
+          };
+          return;
+        }
+
+        if (toolName === "edit" && /node-todo\/app\.js/.test(summary)) {
+          if (
+            /You are already inside the execution phase of a concrete task\./.test(input.content)
+            || /You are still inside the same multi-step task\./.test(input.content)
+          ) {
+            yield {
+              delta: toolCall("shell", {
+                command: "node node-todo/verify-setup.mjs"
+              })
+            };
+            return;
+          }
+
+          yield {
+            delta: "I updated node-todo/app.js and will rerun node node-todo/verify-setup.mjs next."
+          };
+          return;
+        }
+      }
+
+      yield { delta: "ok" };
+    }
+  }
+
+  const bus = new EventBus();
+  const transcriptStore = new TranscriptStore(transcriptPath);
+  const logStore = new LogStore(logsPath);
+  await transcriptStore.ensureInitialized();
+  await logStore.ensureInitialized();
+
+  const session = createDefaultSessionRecord(workspace, VERSION);
+  session.sessionId = sessionId;
+  session.model = "regression-stub";
+
+  const runtime = new AgentRuntime({
+    bus,
+    provider: new TerminalLoopCommandStageNewTaskProvider(),
+    tools: new InMemoryToolRegistry(),
+    session,
+    transcriptStore,
+    logStore
+  });
+  await runtime.start();
+
+  let approvalCount = 0;
+  bus.on("approval.requested", (event) => {
+    approvalCount += 1;
+    bus.emit(createTerminalCommandInvokedEvent({
+      sessionId: event.sessionId,
+      content: `/approve ${event.payload.approvalId}`
+    }));
+  });
+
+  const editor = new EditorController();
+  const panel = new TerminalPanelController();
+  const terminal = new TerminalEventLoop({
+    bus,
+    editor,
+    panel,
+    sessionId
+  });
+
+  const originalExit = process.exit;
+  const existingDataListeners = process.stdin.listeners("data") as Array<(...args: any[]) => void>;
+
+  (process as typeof process & {
+    exit: (code?: number) => never;
+  }).exit = ((code?: number) => {
+    throw new Error(`EXIT:${code ?? 0}`);
+  }) as typeof process.exit;
+
+  try {
+    terminal.start();
+    const initialCompletion = waitForAssistantTaskCompletion(bus, sessionId);
+    const stageSummaryPromise = waitForAssistantDeltaContaining(
+      bus,
+      sessionId,
+      /I updated node-todo\/app\.js and will rerun node node-todo\/verify-setup\.mjs next\./
+    );
+
+    process.stdin.emit("data", Buffer.from(`${originalPrompt}\r`));
+
+    await stageSummaryPromise;
+    await waitForBusyPhase(bus, sessionId, "assistant");
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    process.stdin.emit("data", "\u001b");
+
+    const cancelledTask = await initialCompletion;
+    assert.equal(cancelledTask.payload.state, "cancelled");
+
+    const interruptedEvents = await transcriptStore.readEventsBySession(sessionId);
+    assert.ok(
+      interruptedEvents.some((event) =>
+        event.type === "tool.execution.completed"
+        && event.payload.summary.startsWith("node-todo/app.js:3-3 · updated")
+      ),
+      "terminal explicit new task after command-stage interruption should preserve the app.js edit before stop"
+    );
+    assert.ok(
+      interruptedEvents.some((event) =>
+        event.type === "assistant.delta.received"
+        && /I updated node-todo\/app\.js and will rerun node node-todo\/verify-setup\.mjs next\./.test(event.payload.delta)
+      ),
+      "terminal explicit new task after command-stage interruption should preserve the command-stage summary before stop"
+    );
+    assert.equal(
+      interruptedEvents.some((event) =>
+        event.type === "tool.execution.completed"
+        && event.payload.summary.startsWith("node node-todo/verify-setup.mjs · completed")
+      ),
+      false,
+      "terminal explicit new task after command-stage interruption should stop before rerunning the verification command"
+    );
+
+    const newTaskCompletion = waitForAssistantTaskCompletion(bus, sessionId);
+    process.stdin.emit("data", Buffer.from("Create new.txt with the content new-task.\r"));
+    const newTask = await newTaskCompletion;
+    const newTaskEvents = await transcriptStore.readEventsBySession(sessionId);
+    const newTaskAssistantText = collectAssistantText(newTaskEvents, newTask.taskId ?? "");
+    const newContent = await readFile(join(workspace, "new.txt"), "utf8");
+    const appContent = await readFile(join(workspace, "node-todo", "app.js"), "utf8");
+
+    assert.equal(newTask.payload.state, "completed");
+    assert.equal(editor.getState().value, "", "explicit new task after terminal command-stage interruption should clear the editor buffer");
+    assert.equal(newContent, "new-task\n");
+    assert.match(appContent, /process\.env\.PORT/);
+    assert.match(newTaskAssistantText, /Created new\.txt|new task|已处理 `new\.txt`|已完成/u);
+    assert.ok(
+      newTaskEvents.some((event) =>
+        event.type === "tool.execution.completed"
+        && event.payload.summary.startsWith("new.txt · created")
+        && event.taskId === newTask.taskId
+      ),
+      "explicit new task should create new.txt instead of resuming the interrupted terminal command-stage chain"
+    );
+    assert.equal(
+      newTaskEvents.some((event) =>
+        event.type === "tool.execution.completed"
+        && event.payload.summary.startsWith("node node-todo/verify-setup.mjs · completed")
+        && event.taskId === newTask.taskId
+      ),
+      false,
+      "explicit new task should not continue the interrupted terminal command-stage verification command"
+    );
+    assert.equal(
+      approvalCount,
+      1,
+      "terminal command-stage explicit new-task interruption should only need the original edit approval"
+    );
+  } finally {
+    process.exit = originalExit;
+    try {
+      bus.emit(createTerminalCommandInvokedEvent({
+        sessionId,
+        content: "/exit"
+      }));
+    } catch (error) {
+      assert.match(String(error), /EXIT:0/);
+    }
+
+    for (const listener of process.stdin.listeners("data") as Array<(...args: any[]) => void>) {
+      if (!existingDataListeners.includes(listener)) {
+        process.stdin.off("data", listener);
+      }
+    }
+  }
 }
 
 async function verifyTerminalLoopCommandStageBroadFollowUp(
@@ -56077,6 +62769,330 @@ async function verifyTerminalLoopVerifierShiftApprovalWaitBroadFollowUp(
   }
 }
 
+async function verifyTerminalLoopExplicitNewTaskDoesNotResumeVerifierApproval() {
+  const root = await mkdtemp(join(tmpdir(), "selfme-agent-terminal-loop-verifier-approval-new-task-"));
+  const workspace = join(root, "workspace");
+  const transcriptPath = join(root, "transcript.jsonl");
+  const logsPath = join(root, "logs.jsonl");
+  const sessionId = "terminal-loop-verifier-approval-new-task";
+  const originalPrompt = "看看项目，然后直接优化 node-todo：把 node-todo/app.js 的端口改成 process.env.PORT，再给 node-todo/views/index.ejs 的 title input 加上 maxlength 100，并运行 `node node-todo/verify-exact.mjs` 验证，直到输出 exactly `ready`。";
+  await mkdir(join(workspace, "node-todo", "views"), { recursive: true });
+
+  await writeFile(join(workspace, "node-todo", "package.json"), '{\n  "name": "node-todo",\n  "version": "1.0.0"\n}\n', "utf8");
+  await writeFile(join(workspace, "node-todo", "app.js"), 'const PORT = 3000;\nconsole.log(PORT);\n', "utf8");
+  await writeFile(join(workspace, "node-todo", "views", "index.ejs"), '<input name="title" />\n', "utf8");
+  await writeFile(
+    join(workspace, "node-todo", "verify-exact.mjs"),
+    [
+      'import { readFileSync } from "node:fs";',
+      'const app = readFileSync(new URL("./app.js", import.meta.url), "utf8");',
+      'const view = readFileSync(new URL("./views/index.ejs", import.meta.url), "utf8");',
+      'const appReady = /process\\.env\\.PORT/.test(app);',
+      'const viewReady = /maxlength="100"/.test(view);',
+      'if (appReady && viewReady) {',
+      '  console.log("ready!");',
+      '} else if (appReady) {',
+      '  console.log("app-only");',
+      '} else if (viewReady) {',
+      '  console.log("view-only");',
+      '} else {',
+      '  console.log("not-ready");',
+      '}'
+    ].join("\n") + "\n",
+    "utf8"
+  );
+
+  class TerminalLoopVerifierApprovalNewTaskProvider implements ProviderClient {
+    readonly name = "terminal-loop-verifier-approval-new-task-provider";
+
+    async *streamResponse(input: ProviderStreamInput): AsyncIterable<ProviderStreamChunk> {
+      if (input.content === originalPrompt) {
+        yield {
+          delta: toolCall("shell", {
+            command: "pwd && ls -la && find . -maxdepth 2 -type f | sed 's#^./##' | sort | head -200"
+          })
+        };
+        return;
+      }
+
+      if (input.content === "Create new.txt with the content new-task.") {
+        yield {
+          delta: toolCall("write", {
+            path: "new.txt",
+            content: "new-task\n"
+          })
+        };
+        return;
+      }
+
+      if (input.content.startsWith("The user replied ") && input.content.includes("wants to continue the most recent unfinished task.")) {
+        assert.fail("explicit new task should not be rewritten into a verifier-approval resume follow-up");
+      }
+
+      if (input.content.startsWith("Original user request: Create new.txt with the content new-task.")) {
+        yield { delta: "Created new.txt instead of resuming the interrupted verifier-approval chain." };
+        return;
+      }
+
+      if (input.content.startsWith(`Original user request: ${originalPrompt}`)) {
+        const toolName = extractLine(input.content, "Tool:") ?? extractLine(input.content, "Latest tool:");
+        const summary = extractLine(input.content, "Summary:") ?? extractLine(input.content, "Latest summary:") ?? "";
+
+        if (toolName === "shell") {
+          if (/You are in the middle of a concrete project inspection request\./.test(input.content)) {
+            yield {
+              delta: toolCall("files", {
+                path: "node-todo/package.json",
+                startLine: 1,
+                endLine: 20
+              })
+            };
+            return;
+          }
+
+          if (/app-only/.test(input.content)) {
+            yield {
+              delta: toolCall("files", {
+                path: "node-todo/views/index.ejs",
+                startLine: 1,
+                endLine: 3
+              })
+            };
+            return;
+          }
+
+          if (/ready!/.test(input.content)) {
+            yield {
+              delta: toolCall("files", {
+                path: "node-todo/verify-exact.mjs",
+                startLine: 1,
+                endLine: 20
+              })
+            };
+            return;
+          }
+
+          assert.match(input.content, /\bready\b/);
+          yield { delta: "Completed the terminal-loop verifier-approval chain." };
+          return;
+        }
+
+        if (toolName === "files" && /node-todo\/package\.json/.test(summary)) {
+          yield {
+            delta: toolCall("files", {
+              path: "node-todo/app.js",
+              startLine: 1,
+              endLine: 5
+            })
+          };
+          return;
+        }
+
+        if (toolName === "files" && /node-todo\/app\.js/.test(summary)) {
+          yield {
+            delta: toolCall("edit", {
+              path: "node-todo/app.js",
+              startLine: 1,
+              endLine: 1,
+              replacement: "const PORT = Number(process.env.PORT || 3000);"
+            })
+          };
+          return;
+        }
+
+        if (toolName === "edit" && /node-todo\/app\.js/.test(summary)) {
+          yield {
+            delta: toolCall("shell", {
+              command: "node node-todo/verify-exact.mjs"
+            })
+          };
+          return;
+        }
+
+        if (toolName === "files" && /node-todo\/views\/index\.ejs/.test(summary)) {
+          yield {
+            delta: toolCall("edit", {
+              path: "node-todo/views/index.ejs",
+              startLine: 1,
+              endLine: 1,
+              replacement: '<input name="title" maxlength="100" />'
+            })
+          };
+          return;
+        }
+
+        if (toolName === "edit" && /node-todo\/views\/index\.ejs/.test(summary)) {
+          yield {
+            delta: toolCall("shell", {
+              command: "node node-todo/verify-exact.mjs"
+            })
+          };
+          return;
+        }
+
+        if (toolName === "files" && /node-todo\/verify-exact\.mjs/.test(summary)) {
+          yield {
+            delta: toolCall("edit", {
+              path: "node-todo/verify-exact.mjs",
+              startLine: 7,
+              endLine: 7,
+              replacement: '  console.log("ready");'
+            })
+          };
+          return;
+        }
+      }
+
+      yield { delta: "ok" };
+    }
+  }
+
+  const bus = new EventBus();
+  const transcriptStore = new TranscriptStore(transcriptPath);
+  const logStore = new LogStore(logsPath);
+  await transcriptStore.ensureInitialized();
+  await logStore.ensureInitialized();
+
+  const session = createDefaultSessionRecord(workspace, VERSION);
+  session.sessionId = sessionId;
+  session.model = "regression-stub";
+
+  const runtime = new AgentRuntime({
+    bus,
+    provider: new TerminalLoopVerifierApprovalNewTaskProvider(),
+    tools: new InMemoryToolRegistry(),
+    session,
+    transcriptStore,
+    logStore
+  });
+  await runtime.start();
+
+  let approvalCount = 0;
+  let heldApprovalId: string | undefined;
+  const thirdApprovalPromise = new Promise<Extract<RuntimeEvent, { type: "approval.requested" }>>((resolve) => {
+    bus.on("approval.requested", (event) => {
+      approvalCount += 1;
+
+      if (approvalCount < 3) {
+        bus.emit(createTerminalCommandInvokedEvent({
+          sessionId: event.sessionId,
+          content: `/approve ${event.payload.approvalId}`
+        }));
+        return;
+      }
+
+      heldApprovalId = event.payload.approvalId;
+      resolve(event);
+    });
+  });
+
+  const editor = new EditorController();
+  const panel = new TerminalPanelController();
+  const terminal = new TerminalEventLoop({
+    bus,
+    editor,
+    panel,
+    sessionId
+  });
+
+  const originalExit = process.exit;
+  const existingDataListeners = process.stdin.listeners("data") as Array<(...args: any[]) => void>;
+
+  (process as typeof process & {
+    exit: (code?: number) => never;
+  }).exit = ((code?: number) => {
+    throw new Error(`EXIT:${code ?? 0}`);
+  }) as typeof process.exit;
+
+  try {
+    terminal.start();
+    const initialCompletion = waitForAssistantTaskCompletion(bus, sessionId);
+    process.stdin.emit("data", Buffer.from(`${originalPrompt}\r`));
+
+    const pendingApproval = await thirdApprovalPromise;
+    assert.equal(pendingApproval.payload.toolName, "edit");
+    assert.match(JSON.stringify(pendingApproval.payload.input), /console\.log\("ready"\)/);
+    process.stdin.emit("data", "\u0003");
+
+    const cancelledTask = await initialCompletion;
+    assert.equal(cancelledTask.payload.state, "cancelled");
+
+    const interruptedEvents = await transcriptStore.readEventsBySession(sessionId);
+    assert.ok(
+      interruptedEvents.some((event) =>
+        event.type === "tool.execution.completed" && event.payload.summary.startsWith("node-todo/verify-exact.mjs:1-20")
+      ),
+      "interrupted verifier-approval task should preserve the narrowed verifier file before the explicit new task"
+    );
+    assert.equal(
+      interruptedEvents.some((event) =>
+        event.type === "tool.execution.completed" && event.payload.summary.startsWith("node-todo/verify-exact.mjs:7-7 · updated")
+      ),
+      false,
+      "interrupted verifier-approval task should stop before the pending verifier edit is applied"
+    );
+    assert.ok(
+      interruptedEvents.some((event) =>
+        event.type === "approval.resolved"
+        && event.payload.approvalId === heldApprovalId
+        && !event.payload.approved
+      ),
+      "interrupting the verifier-approval task should deny the held verifier approval"
+    );
+
+    const newTaskCompletion = waitForAssistantTaskCompletion(bus, sessionId);
+    process.stdin.emit("data", Buffer.from("Create new.txt with the content new-task.\r"));
+    const newTask = await newTaskCompletion;
+    const newTaskEvents = await transcriptStore.readEventsBySession(sessionId);
+    const newTaskAssistantText = collectAssistantText(newTaskEvents, newTask.taskId ?? "");
+    const newContent = await readFile(join(workspace, "new.txt"), "utf8");
+    const verifierContent = await readFile(join(workspace, "node-todo", "verify-exact.mjs"), "utf8");
+
+    assert.equal(newTask.payload.state, "completed");
+    assert.equal(editor.getState().value, "", "explicit new task after verifier-approval interruption should clear the editor buffer");
+    assert.equal(newContent, "new-task\n");
+    assert.match(verifierContent, /console\.log\("ready!"\)/);
+    assert.match(newTaskAssistantText, /Created new\.txt|new task|已处理 `new\.txt`|已完成/u);
+    assert.ok(
+      newTaskEvents.some((event) =>
+        event.type === "tool.execution.completed"
+        && event.payload.summary.startsWith("new.txt · created")
+        && event.taskId === newTask.taskId
+      ),
+      "explicit new task should create new.txt instead of resuming the interrupted verifier-approval chain"
+    );
+    assert.equal(
+      newTaskEvents.some((event) =>
+        event.type === "tool.execution.completed"
+        && (
+          event.payload.summary.startsWith("node-todo/verify-exact.mjs:1-20")
+          || event.payload.summary.startsWith("node-todo/verify-exact.mjs:7-7 · updated")
+          || event.payload.summary.startsWith("node node-todo/verify-exact.mjs · completed")
+        )
+        && event.taskId === newTask.taskId
+      ),
+      false,
+      "explicit new task should not continue any verifier-approval repair steps"
+    );
+  } finally {
+    process.exit = originalExit;
+    try {
+      bus.emit(createTerminalCommandInvokedEvent({
+        sessionId,
+        content: "/exit"
+      }));
+    } catch (error) {
+      assert.match(String(error), /EXIT:0/);
+    }
+
+    for (const listener of process.stdin.listeners("data") as Array<(...args: any[]) => void>) {
+      if (!existingDataListeners.includes(listener)) {
+        process.stdin.off("data", listener);
+      }
+    }
+  }
+}
+
 async function verifyTerminalLoopVerifierShiftBroadFollowUp(
   followUpPrompt: "帮我优化下" | "帮我看看项目"
 ) {
@@ -56480,12 +63496,338 @@ async function verifyTerminalLoopVerifierShiftBroadFollowUp(
   }
 }
 
-async function verifyTerminalLoopStopAndResumeApprovalWaitTask() {
-  const root = await mkdtemp(join(tmpdir(), "selfme-agent-terminal-loop-approval-resume-"));
+async function verifyTerminalLoopExplicitNewTaskDoesNotResumeVerifierShift() {
+  const root = await mkdtemp(join(tmpdir(), "selfme-agent-terminal-loop-verifier-shift-new-task-"));
   const workspace = join(root, "workspace");
   const transcriptPath = join(root, "transcript.jsonl");
   const logsPath = join(root, "logs.jsonl");
-  const sessionId = "terminal-loop-approval-resume";
+  const sessionId = "terminal-loop-verifier-shift-new-task";
+  const originalPrompt = "看看项目，然后直接优化 node-todo：把 node-todo/app.js 的端口改成 process.env.PORT，再给 node-todo/views/index.ejs 的 title input 加上 maxlength 100，并运行 `node node-todo/verify-exact.mjs` 验证，直到输出 exactly `ready`。";
+  await mkdir(join(workspace, "node-todo", "views"), { recursive: true });
+
+  await writeFile(join(workspace, "node-todo", "package.json"), '{\n  "name": "node-todo",\n  "version": "1.0.0"\n}\n', "utf8");
+  await writeFile(join(workspace, "node-todo", "app.js"), 'const PORT = 3000;\nconsole.log(PORT);\n', "utf8");
+  await writeFile(join(workspace, "node-todo", "views", "index.ejs"), '<input name="title" />\n', "utf8");
+  await writeFile(
+    join(workspace, "node-todo", "verify-exact.mjs"),
+    [
+      'import { readFileSync } from "node:fs";',
+      'const app = readFileSync(new URL("./app.js", import.meta.url), "utf8");',
+      'const view = readFileSync(new URL("./views/index.ejs", import.meta.url), "utf8");',
+      'const appReady = /process\\.env\\.PORT/.test(app);',
+      'const viewReady = /maxlength="100"/.test(view);',
+      'if (appReady && viewReady) {',
+      '  console.log("ready!");',
+      '} else if (appReady) {',
+      '  console.log("app-only");',
+      '} else if (viewReady) {',
+      '  console.log("view-only");',
+      '} else {',
+      '  console.log("not-ready");',
+      '}'
+    ].join("\n") + "\n",
+    "utf8"
+  );
+
+  class TerminalLoopVerifierShiftNewTaskProvider implements ProviderClient {
+    readonly name = "terminal-loop-verifier-shift-new-task-provider";
+
+    async *streamResponse(input: ProviderStreamInput): AsyncIterable<ProviderStreamChunk> {
+      if (input.content === originalPrompt) {
+        yield {
+          delta: toolCall("shell", {
+            command: "pwd && ls -la && find . -maxdepth 2 -type f | sed 's#^./##' | sort | head -200"
+          })
+        };
+        return;
+      }
+
+      if (input.content === "Create new.txt with the content new-task.") {
+        yield {
+          delta: toolCall("write", {
+            path: "new.txt",
+            content: "new-task\n"
+          })
+        };
+        return;
+      }
+
+      if (input.content.startsWith("The user replied ") && input.content.includes("wants to continue the most recent unfinished task.")) {
+        assert.fail("explicit new task should not be rewritten into a verifier-shift resume follow-up");
+      }
+
+      if (input.content.startsWith("Original user request: Create new.txt with the content new-task.")) {
+        yield { delta: "Created new.txt instead of resuming the interrupted verifier-shift chain." };
+        return;
+      }
+
+      if (input.content.startsWith(`Original user request: ${originalPrompt}`)) {
+        const toolName = extractLine(input.content, "Tool:") ?? extractLine(input.content, "Latest tool:");
+        const summary = extractLine(input.content, "Summary:") ?? extractLine(input.content, "Latest summary:") ?? "";
+
+        if (toolName === "shell") {
+          if (/You are in the middle of a concrete project inspection request\./.test(input.content)) {
+            yield {
+              delta: toolCall("files", {
+                path: "node-todo/package.json",
+                startLine: 1,
+                endLine: 20
+              })
+            };
+            return;
+          }
+
+          if (/app-only/.test(input.content)) {
+            yield {
+              delta: toolCall("files", {
+                path: "node-todo/views/index.ejs",
+                startLine: 1,
+                endLine: 3
+              })
+            };
+            return;
+          }
+
+          if (/ready!/.test(input.content)) {
+            yield {
+              delta: "I already finished the app and view work; the only remaining exact-output gap is in node-todo/verify-exact.mjs."
+            };
+            await waitForProviderDelay(input.signal, 10_000);
+            yield {
+              delta: toolCall("files", {
+                path: "node-todo/verify-exact.mjs",
+                startLine: 1,
+                endLine: 20
+              })
+            };
+            return;
+          }
+
+          assert.match(input.content, /\bready\b/);
+          yield { delta: "Completed the terminal-loop verifier-shift chain from the latest failure point." };
+          return;
+        }
+
+        if (toolName === "files" && /node-todo\/package\.json/.test(summary)) {
+          yield {
+            delta: toolCall("files", {
+              path: "node-todo/app.js",
+              startLine: 1,
+              endLine: 5
+            })
+          };
+          return;
+        }
+
+        if (toolName === "files" && /node-todo\/app\.js/.test(summary)) {
+          yield {
+            delta: toolCall("edit", {
+              path: "node-todo/app.js",
+              startLine: 1,
+              endLine: 1,
+              replacement: "const PORT = Number(process.env.PORT || 3000);"
+            })
+          };
+          return;
+        }
+
+        if (toolName === "edit" && /node-todo\/app\.js/.test(summary)) {
+          yield {
+            delta: toolCall("shell", {
+              command: "node node-todo/verify-exact.mjs"
+            })
+          };
+          return;
+        }
+
+        if (toolName === "files" && /node-todo\/views\/index\.ejs/.test(summary)) {
+          yield {
+            delta: toolCall("edit", {
+              path: "node-todo/views/index.ejs",
+              startLine: 1,
+              endLine: 1,
+              replacement: '<input name="title" maxlength="100" />'
+            })
+          };
+          return;
+        }
+
+        if (toolName === "edit" && /node-todo\/views\/index\.ejs/.test(summary)) {
+          yield {
+            delta: toolCall("shell", {
+              command: "node node-todo/verify-exact.mjs"
+            })
+          };
+          return;
+        }
+      }
+
+      yield { delta: "ok" };
+    }
+  }
+
+  const bus = new EventBus();
+  const transcriptStore = new TranscriptStore(transcriptPath);
+  const logStore = new LogStore(logsPath);
+  await transcriptStore.ensureInitialized();
+  await logStore.ensureInitialized();
+
+  const session = createDefaultSessionRecord(workspace, VERSION);
+  session.sessionId = sessionId;
+  session.model = "regression-stub";
+
+  const runtime = new AgentRuntime({
+    bus,
+    provider: new TerminalLoopVerifierShiftNewTaskProvider(),
+    tools: new InMemoryToolRegistry(),
+    session,
+    transcriptStore,
+    logStore
+  });
+  await runtime.start();
+
+  bus.on("approval.requested", (event) => {
+    bus.emit(createTerminalCommandInvokedEvent({
+      sessionId: event.sessionId,
+      content: `/approve ${event.payload.approvalId}`
+    }));
+  });
+
+  const editor = new EditorController();
+  const panel = new TerminalPanelController();
+  const terminal = new TerminalEventLoop({
+    bus,
+    editor,
+    panel,
+    sessionId
+  });
+
+  const originalExit = process.exit;
+  const existingDataListeners = process.stdin.listeners("data") as Array<(...args: any[]) => void>;
+
+  (process as typeof process & {
+    exit: (code?: number) => never;
+  }).exit = ((code?: number) => {
+    throw new Error(`EXIT:${code ?? 0}`);
+  }) as typeof process.exit;
+
+  try {
+    terminal.start();
+    const initialCompletion = waitForAssistantTaskCompletion(bus, sessionId);
+    const continuationSummary = waitForAssistantDeltaContaining(
+      bus,
+      sessionId,
+      /I already finished the app and view work; the only remaining exact-output gap is in node-todo\/verify-exact\.mjs\./
+    );
+
+    process.stdin.emit("data", Buffer.from(`${originalPrompt}\r`));
+
+    await continuationSummary;
+    await waitForBusyPhase(bus, sessionId, "assistant");
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    process.stdin.emit("data", "\u001b");
+
+    const cancelledTask = await initialCompletion;
+    assert.equal(cancelledTask.payload.state, "cancelled");
+
+    const interruptedEvents = await transcriptStore.readEventsBySession(sessionId);
+    assert.ok(
+      interruptedEvents.some((event) =>
+        event.type === "tool.execution.completed" && event.payload.summary.startsWith("node-todo/app.js:1-1 · updated")
+      ),
+      "interrupted verifier-shift task should preserve the app.js edit before the explicit new task"
+    );
+    assert.ok(
+      interruptedEvents.some((event) =>
+        event.type === "tool.execution.completed" && event.payload.summary.startsWith("node-todo/views/index.ejs:1-1 · updated")
+      ),
+      "interrupted verifier-shift task should preserve the view edit before the explicit new task"
+    );
+    assert.ok(
+      interruptedEvents.some((event) =>
+        event.type === "assistant.delta.received"
+        && /remaining exact-output gap is now in node-todo\/verify-exact\.mjs/.test(event.payload.delta)
+      ),
+      "interrupted verifier-shift task should preserve the narrowed verifier handoff before the explicit new task"
+    );
+    assert.equal(
+      interruptedEvents.some((event) =>
+        event.type === "tool.execution.completed" && event.payload.summary.startsWith("node-todo/verify-exact.mjs:1-")
+      ),
+      false,
+      "interrupted verifier-shift task should stop before reading the verifier file"
+    );
+
+    const newTaskCompletion = waitForAssistantTaskCompletion(bus, sessionId);
+    process.stdin.emit("data", Buffer.from("Create new.txt with the content new-task.\r"));
+    const newTask = await newTaskCompletion;
+    const newTaskEvents = await transcriptStore.readEventsBySession(sessionId);
+    const newTaskAssistantText = collectAssistantText(newTaskEvents, newTask.taskId ?? "");
+    const newContent = await readFile(join(workspace, "new.txt"), "utf8");
+    const verifierContent = await readFile(join(workspace, "node-todo", "verify-exact.mjs"), "utf8");
+
+    assert.equal(newTask.payload.state, "completed");
+    assert.equal(editor.getState().value, "", "explicit new task after verifier-shift interruption should clear the editor buffer");
+    assert.equal(newContent, "new-task\n");
+    assert.match(verifierContent, /console\.log\("ready!"\)/);
+    assert.match(newTaskAssistantText, /Created new\.txt|new task|已处理 `new\.txt`|已完成/u);
+    assert.ok(
+      newTaskEvents.some((event) =>
+        event.type === "tool.execution.completed"
+        && event.payload.summary.startsWith("new.txt · created")
+        && event.taskId === newTask.taskId
+      ),
+      "explicit new task should create new.txt instead of resuming the interrupted verifier-shift chain"
+    );
+    assert.equal(
+      newTaskEvents.some((event) =>
+        event.type === "tool.execution.completed"
+        && (
+          event.payload.summary.startsWith("node-todo/verify-exact.mjs:1-")
+          || event.payload.summary.startsWith("node-todo/verify-exact.mjs:7-7 · updated")
+          || event.payload.summary.startsWith("node node-todo/verify-exact.mjs · completed")
+        )
+        && event.taskId === newTask.taskId
+      ),
+      false,
+      "explicit new task should not continue any verifier-shift repair steps"
+    );
+  } finally {
+    process.exit = originalExit;
+    try {
+      bus.emit(createTerminalCommandInvokedEvent({
+        sessionId,
+        content: "/exit"
+      }));
+    } catch (error) {
+      assert.match(String(error), /EXIT:0/);
+    }
+
+    for (const listener of process.stdin.listeners("data") as Array<(...args: any[]) => void>) {
+      if (!existingDataListeners.includes(listener)) {
+        process.stdin.off("data", listener);
+      }
+    }
+  }
+}
+
+async function verifyTerminalLoopStopAndResumeApprovalWaitTask() {
+  await verifyTerminalLoopStopAndResumeApprovalWaitTaskWithFollowUp("还能继续吗");
+}
+
+async function verifyTerminalLoopStopAndResumeApprovalWaitTaskBroadOptimizationFollowUp() {
+  await verifyTerminalLoopStopAndResumeApprovalWaitTaskWithFollowUp("帮我优化下");
+}
+
+async function verifyTerminalLoopStopAndResumeApprovalWaitTaskWithFollowUp(
+  followUpPrompt: "还能继续吗" | "帮我优化下"
+) {
+  const suffix = followUpPrompt === "还能继续吗" ? "resume" : "opt";
+  const root = await mkdtemp(join(tmpdir(), `selfme-agent-terminal-loop-approval-resume-${suffix}-`));
+  const workspace = join(root, "workspace");
+  const transcriptPath = join(root, "transcript.jsonl");
+  const logsPath = join(root, "logs.jsonl");
+  const sessionId = `terminal-loop-approval-resume-${suffix}`;
   await mkdir(workspace, { recursive: true });
   await mkdir(join(workspace, "node-todo"), { recursive: true });
   await mkdir(join(workspace, "node-todo", "views"), { recursive: true });
@@ -56627,7 +63969,7 @@ async function verifyTerminalLoopStopAndResumeApprovalWaitTask() {
         }
       }
 
-      if (input.content.startsWith('The user replied "还能继续吗" and wants to continue the most recent unfinished task.')) {
+      if (input.content.startsWith(`The user replied "${followUpPrompt}" and wants to continue the most recent unfinished task.`)) {
         assert.match(input.content, /Original task: 看看项目，然后直接优化 node-todo/);
         assert.match(input.content, /Latest tool in context: files/);
         assert.match(input.content, /Latest tool summary in context: node-todo\/views\/index\.ejs:1-4/);
@@ -56643,7 +63985,7 @@ async function verifyTerminalLoopStopAndResumeApprovalWaitTask() {
         return;
       }
 
-      if (input.content.startsWith('Original user request: The user replied "还能继续吗" and wants to continue the most recent unfinished task.')) {
+      if (input.content.startsWith(`Original user request: The user replied "${followUpPrompt}" and wants to continue the most recent unfinished task.`)) {
         const toolName = extractLine(input.content, "Tool:") ?? extractLine(input.content, "Latest tool:");
         const summary = extractLine(input.content, "Summary:") ?? extractLine(input.content, "Latest summary:") ?? "";
 
@@ -56771,7 +64113,7 @@ async function verifyTerminalLoopStopAndResumeApprovalWaitTask() {
 
     phaseTwo = true;
     const resumedCompletion = waitForAssistantTaskCompletion(bus, sessionId);
-    process.stdin.emit("data", Buffer.from("还能继续吗\r"));
+    process.stdin.emit("data", Buffer.from(`${followUpPrompt}\r`));
     const resumedTask = await resumedCompletion;
     const resumedEvents = await transcriptStore.readEventsBySession(sessionId);
     const resumedAssistantText = collectAssistantText(resumedEvents, resumedTask.taskId ?? "");
@@ -56828,6 +64170,313 @@ async function verifyTerminalLoopStopAndResumeApprovalWaitTask() {
       approvalCount,
       3,
       "terminal-loop approval resume should need one original approval, one denied held approval, and one fresh resumed approval"
+    );
+  } finally {
+    process.exit = originalExit;
+    try {
+      bus.emit(createTerminalCommandInvokedEvent({
+        sessionId,
+        content: "/exit"
+      }));
+    } catch (error) {
+      assert.match(String(error), /EXIT:0/);
+    }
+
+    for (const listener of process.stdin.listeners("data") as Array<(...args: any[]) => void>) {
+      if (!existingDataListeners.includes(listener)) {
+        process.stdin.off("data", listener);
+      }
+    }
+  }
+}
+
+async function verifyTerminalLoopExplicitNewTaskDoesNotResumeApprovalWaitTask() {
+  const root = await mkdtemp(join(tmpdir(), "selfme-agent-terminal-loop-approval-wait-new-task-"));
+  const workspace = join(root, "workspace");
+  const transcriptPath = join(root, "transcript.jsonl");
+  const logsPath = join(root, "logs.jsonl");
+  const sessionId = "terminal-loop-approval-wait-new-task";
+  await mkdir(workspace, { recursive: true });
+  await mkdir(join(workspace, "node-todo"), { recursive: true });
+  await mkdir(join(workspace, "node-todo", "views"), { recursive: true });
+
+  await writeFile(
+    join(workspace, "node-todo", "package.json"),
+    '{\n  "name": "node-todo",\n  "version": "1.0.0",\n  "scripts": {\n    "start": "node app.js"\n  }\n}\n',
+    "utf8"
+  );
+  await writeFile(
+    join(workspace, "node-todo", "app.js"),
+    'const express = require("express");\nconst app = express();\nconst PORT = 3000;\napp.listen(PORT, () => {\n  console.log(`Todo app is running at http://localhost:${PORT}`);\n});\n',
+    "utf8"
+  );
+  await writeFile(
+    join(workspace, "node-todo", "views", "index.ejs"),
+    '<!DOCTYPE html>\n<form action="/add" method="post">\n  <input name="title" />\n</form>\n',
+    "utf8"
+  );
+  await writeFile(
+    join(workspace, "node-todo", "verify-setup.mjs"),
+    [
+      'import { readFileSync } from "node:fs";',
+      'const app = readFileSync(new URL("./app.js", import.meta.url), "utf8");',
+      'const view = readFileSync(new URL("./views/index.ejs", import.meta.url), "utf8");',
+      'const appReady = /process\\.env\\.PORT/.test(app);',
+      'const viewReady = /maxlength="100"/.test(view);',
+      'if (appReady && viewReady) {',
+      '  console.log("ready");',
+      '} else if (appReady) {',
+      '  console.log("app-only");',
+      '} else if (viewReady) {',
+      '  console.log("view-only");',
+      '} else {',
+      '  console.log("not-ready");',
+      '}'
+    ].join("\n") + "\n",
+    "utf8"
+  );
+
+  class TerminalLoopApprovalWaitNewTaskProvider implements ProviderClient {
+    readonly name = "terminal-loop-approval-wait-new-task-provider";
+
+    async *streamResponse(input: ProviderStreamInput): AsyncIterable<ProviderStreamChunk> {
+      const originalPrompt = "看看项目，然后直接优化 node-todo：把 node-todo/app.js 的端口改成 process.env.PORT，再给 node-todo/views/index.ejs 的 title input 加上 maxlength 100，并运行 `node node-todo/verify-setup.mjs` 验证，直到输出 exactly `ready`。";
+
+      if (input.content === originalPrompt) {
+        yield {
+          delta: toolCall("shell", {
+            command: "pwd && ls -la && find . -maxdepth 2 -type f | sed 's#^./##' | sort | head -200"
+          })
+        };
+        return;
+      }
+
+      if (input.content === "Create new.txt with the content new-task.") {
+        yield {
+          delta: toolCall("write", {
+            path: "new.txt",
+            content: "new-task\n"
+          })
+        };
+        return;
+      }
+
+      if (input.content.startsWith("The user replied ") && input.content.includes("wants to continue the most recent unfinished task.")) {
+        assert.fail("explicit new task should not be rewritten into an approval-wait resume follow-up");
+      }
+
+      if (input.content.startsWith("Original user request: Create new.txt with the content new-task.")) {
+        yield { delta: "Created new.txt instead of resuming the interrupted approval-wait chain." };
+        return;
+      }
+
+      if (input.content.startsWith(`Original user request: ${originalPrompt}`)) {
+        const toolName = extractLine(input.content, "Tool:") ?? extractLine(input.content, "Latest tool:");
+        const summary = extractLine(input.content, "Summary:") ?? extractLine(input.content, "Latest summary:") ?? "";
+
+        if (toolName === "shell") {
+          if (/You are in the middle of a concrete project inspection request\./.test(input.content)) {
+            yield {
+              delta: toolCall("files", {
+                path: "node-todo/package.json",
+                startLine: 1,
+                endLine: 20
+              })
+            };
+            return;
+          }
+
+          if (/app-only/.test(input.content)) {
+            yield {
+              delta: toolCall("files", {
+                path: "node-todo/views/index.ejs",
+                startLine: 1,
+                endLine: 4
+              })
+            };
+            return;
+          }
+
+          assert.match(input.content, /ready/);
+          yield { delta: "Completed the terminal-loop approval-wait chain." };
+          return;
+        }
+
+        if (toolName === "files" && /node-todo\/package\.json/.test(summary)) {
+          yield {
+            delta: toolCall("files", {
+              path: "node-todo/app.js",
+              startLine: 1,
+              endLine: 20
+            })
+          };
+          return;
+        }
+
+        if (toolName === "files" && /node-todo\/app\.js/.test(summary)) {
+          yield {
+            delta: toolCall("edit", {
+              path: "node-todo/app.js",
+              startLine: 3,
+              endLine: 3,
+              replacement: "const PORT = Number(process.env.PORT || 3000);"
+            })
+          };
+          return;
+        }
+
+        if (toolName === "edit" && /node-todo\/app\.js/.test(summary)) {
+          yield {
+            delta: toolCall("shell", {
+              command: "node node-todo/verify-setup.mjs"
+            })
+          };
+          return;
+        }
+
+        if (toolName === "files" && /node-todo\/views\/index\.ejs/.test(summary)) {
+          yield {
+            delta: toolCall("edit", {
+              path: "node-todo/views/index.ejs",
+              startLine: 3,
+              endLine: 3,
+              replacement: '  <input name="title" maxlength="100" />'
+            })
+          };
+          return;
+        }
+      }
+
+      yield { delta: "ok" };
+    }
+  }
+
+  const bus = new EventBus();
+  const transcriptStore = new TranscriptStore(transcriptPath);
+  const logStore = new LogStore(logsPath);
+  await transcriptStore.ensureInitialized();
+  await logStore.ensureInitialized();
+
+  const session = createDefaultSessionRecord(workspace, VERSION);
+  session.sessionId = sessionId;
+  session.model = "regression-stub";
+
+  const runtime = new AgentRuntime({
+    bus,
+    provider: new TerminalLoopApprovalWaitNewTaskProvider(),
+    tools: new InMemoryToolRegistry(),
+    session,
+    transcriptStore,
+    logStore
+  });
+  await runtime.start();
+
+  let approvalCount = 0;
+  let heldApprovalId: string | undefined;
+  const secondApprovalPromise = new Promise<Extract<RuntimeEvent, { type: "approval.requested" }>>((resolve) => {
+    bus.on("approval.requested", (event) => {
+      approvalCount += 1;
+
+      if (approvalCount === 1) {
+        bus.emit(createTerminalCommandInvokedEvent({
+          sessionId: event.sessionId,
+          content: `/approve ${event.payload.approvalId}`
+        }));
+        return;
+      }
+
+      heldApprovalId = event.payload.approvalId;
+      resolve(event);
+    });
+  });
+
+  const editor = new EditorController();
+  const panel = new TerminalPanelController();
+  const terminal = new TerminalEventLoop({
+    bus,
+    editor,
+    panel,
+    sessionId
+  });
+
+  const originalExit = process.exit;
+  const existingDataListeners = process.stdin.listeners("data") as Array<(...args: any[]) => void>;
+
+  (process as typeof process & {
+    exit: (code?: number) => never;
+  }).exit = ((code?: number) => {
+    throw new Error(`EXIT:${code ?? 0}`);
+  }) as typeof process.exit;
+
+  try {
+    terminal.start();
+    const initialCompletion = waitForAssistantTaskCompletion(bus, sessionId);
+    process.stdin.emit("data", Buffer.from("看看项目，然后直接优化 node-todo：把 node-todo/app.js 的端口改成 process.env.PORT，再给 node-todo/views/index.ejs 的 title input 加上 maxlength 100，并运行 `node node-todo/verify-setup.mjs` 验证，直到输出 exactly `ready`。\r"));
+
+    const pendingApproval = await secondApprovalPromise;
+    assert.equal(pendingApproval.payload.toolName, "edit");
+    assert.match(JSON.stringify(pendingApproval.payload.input), /maxlength="100"/);
+    process.stdin.emit("data", "\u0003");
+
+    const cancelledTask = await initialCompletion;
+    assert.equal(cancelledTask.payload.state, "cancelled");
+
+    const interruptedEvents = await transcriptStore.readEventsBySession(sessionId);
+    assert.ok(
+      interruptedEvents.some((event) =>
+        event.type === "tool.execution.completed" && event.payload.summary.startsWith("node-todo/views/index.ejs:1-4")
+      ),
+      "interrupted approval-wait task should preserve the narrowed pending view file before the explicit new task"
+    );
+    assert.equal(
+      interruptedEvents.some((event) =>
+        event.type === "tool.execution.completed" && event.payload.summary.startsWith("node-todo/views/index.ejs:3-3 · updated")
+      ),
+      false,
+      "interrupted approval-wait task should stop before the pending approved edit is applied"
+    );
+    assert.ok(
+      interruptedEvents.some((event) =>
+        event.type === "approval.resolved"
+        && event.payload.approvalId === heldApprovalId
+        && !event.payload.approved
+      ),
+      "interrupting the approval-wait task should deny the held approval"
+    );
+
+    const newTaskCompletion = waitForAssistantTaskCompletion(bus, sessionId);
+    process.stdin.emit("data", Buffer.from("Create new.txt with the content new-task.\r"));
+    const newTask = await newTaskCompletion;
+    const newTaskEvents = await transcriptStore.readEventsBySession(sessionId);
+    const newTaskAssistantText = collectAssistantText(newTaskEvents, newTask.taskId ?? "");
+    const newContent = await readFile(join(workspace, "new.txt"), "utf8");
+    const viewContent = await readFile(join(workspace, "node-todo", "views", "index.ejs"), "utf8");
+
+    assert.equal(newTask.payload.state, "completed");
+    assert.equal(editor.getState().value, "", "explicit new task after approval-wait interruption should clear the editor buffer");
+    assert.equal(newContent, "new-task\n");
+    assert.doesNotMatch(viewContent, /maxlength="100"/);
+    assert.match(newTaskAssistantText, /Created new\.txt|new task|已处理 `new\.txt`|已完成/u);
+    assert.ok(
+      newTaskEvents.some((event) =>
+        event.type === "tool.execution.completed"
+        && event.payload.summary.startsWith("new.txt · created")
+        && event.taskId === newTask.taskId
+      ),
+      "explicit new task should create new.txt instead of resuming the interrupted approval-wait chain"
+    );
+    assert.equal(
+      newTaskEvents.some((event) =>
+        event.type === "tool.execution.completed"
+        && (
+          event.payload.summary.startsWith("node-todo/views/index.ejs:1-4")
+          || event.payload.summary.startsWith("node-todo/views/index.ejs:3-3 · updated")
+          || event.payload.summary.startsWith("node node-todo/verify-setup.mjs · completed")
+        )
+        && event.taskId === newTask.taskId
+      ),
+      false,
+      "explicit new task should not continue any approval-wait repair steps"
     );
   } finally {
     process.exit = originalExit;
@@ -58631,6 +66280,557 @@ function verifyContextCompactionDropsOlderPendingNextStepAfterNewRequest() {
   assert.doesNotMatch(recentTaskStateMessage, /node-todo\/views\/index\.ejs/);
 }
 
+function verifyContextCompactionDropsInterruptedUnderlyingTaskAfterExplicitNewRequest() {
+  const sessionId = "compaction-drop-interrupted-underlying-task-after-new-request-session";
+  const events: RuntimeEvent[] = [];
+
+  events.push(createUserMessageSubmittedEvent({
+    sessionId,
+    content: "Read app.config.json and fix report.mjs so running `node report.mjs` prints exactly `SelfMe:3000`. Verify it and keep working until the output is exact."
+  }));
+  events.push(createToolExecutionCompletedEvent({
+    sessionId,
+    taskId: "drop-interrupted-underlying-tool-1",
+    toolName: "files",
+    summary: "app.config.json:1-4",
+    rawOutput: '{\n  "name": "SelfMe",\n  "port": 3000\n}'
+  }));
+  events.push(createToolExecutionCompletedEvent({
+    sessionId,
+    taskId: "drop-interrupted-underlying-tool-2",
+    toolName: "edit",
+    summary: "report.mjs:1-2 · updated (2 -> 2 lines)"
+  }));
+  events.push(createToolExecutionCompletedEvent({
+    sessionId,
+    taskId: "drop-interrupted-underlying-tool-3",
+    toolName: "shell",
+    summary: "node report.mjs · failed (1)",
+    rawOutput: "ReferenceError: config is not defined"
+  }));
+  events.push(createTaskStateChangedEvent({
+    sessionId,
+    taskId: "drop-interrupted-underlying-runtime",
+    title: "Respond to user input",
+    state: "cancelled"
+  }));
+  events.push(createUserMessageSubmittedEvent({
+    sessionId,
+    content: "Create new.txt with the content new-task."
+  }));
+
+  const messages = buildContextMessages(events);
+  const recentTaskStateMessage = messages.find((message) => message.role === "system" && message.content.includes("Recent task state:"))?.content ?? "";
+
+  assert.match(recentTaskStateMessage, /Current request: Create new\.txt with the content new-task\./);
+  assert.doesNotMatch(recentTaskStateMessage, /Underlying task:/);
+  assert.doesNotMatch(recentTaskStateMessage, /Target output: SelfMe:3000/);
+  assert.doesNotMatch(recentTaskStateMessage, /Target verification: node report\.mjs/);
+  assert.doesNotMatch(recentTaskStateMessage, /Working files: .*report\.mjs/);
+  assert.doesNotMatch(recentTaskStateMessage, /Working files: .*app\.config\.json/);
+  assert.doesNotMatch(recentTaskStateMessage, /Last failure: node report\.mjs/);
+  assert.doesNotMatch(recentTaskStateMessage, /Failure reason: ReferenceError: config is not defined/);
+}
+
+function verifyContextCompactionDropsInterruptedPendingApprovalAfterExplicitNewRequest() {
+  const sessionId = "compaction-drop-interrupted-pending-approval-after-new-request-session";
+  const events: RuntimeEvent[] = [];
+
+  events.push(createUserMessageSubmittedEvent({
+    sessionId,
+    content: "Rewrite node-todo and keep working until it is ready."
+  }));
+  events.push(createToolExecutionCompletedEvent({
+    sessionId,
+    taskId: "drop-interrupted-pending-approval-tool-1",
+    toolName: "edit",
+    summary: "node-todo/app.js:1-3 · updated (3 -> 3 lines)"
+  }));
+  events.push(createApprovalRequestedEvent({
+    sessionId,
+    taskId: "drop-interrupted-pending-approval-task",
+    toolName: "edit",
+    input: {
+      path: "node-todo/views/index.ejs",
+      startLine: 3,
+      endLine: 3,
+      replacement: '<input name="title" maxlength="100" />'
+    },
+    reason: "Edit node-todo/views/index.ejs",
+    risk: "high"
+  }));
+  events.push(createTaskStateChangedEvent({
+    sessionId,
+    taskId: "drop-interrupted-pending-approval-runtime",
+    title: "Respond to user input",
+    state: "cancelled"
+  }));
+  events.push(createUserMessageSubmittedEvent({
+    sessionId,
+    content: "Create new.txt with the content new-task."
+  }));
+
+  const messages = buildContextMessages(events);
+  const recentTaskStateMessage = messages.find((message) => message.role === "system" && message.content.includes("Recent task state:"))?.content ?? "";
+
+  assert.match(recentTaskStateMessage, /Current request: Create new\.txt with the content new-task\./);
+  assert.doesNotMatch(recentTaskStateMessage, /Underlying task: Rewrite node-todo and keep working until it is ready\./);
+  assert.doesNotMatch(recentTaskStateMessage, /Pending approval: edit · node-todo\/views\/index\.ejs:3-3/);
+  assert.doesNotMatch(recentTaskStateMessage, /Working files: .*node-todo\/app\.js/);
+  assert.doesNotMatch(recentTaskStateMessage, /node-todo\/views\/index\.ejs/);
+}
+
+function verifyContextCompactionDropsVerifierShiftAfterExplicitNewRequest() {
+  const sessionId = "compaction-drop-verifier-shift-after-new-request-session";
+  const events: RuntimeEvent[] = [];
+
+  events.push(createUserMessageSubmittedEvent({
+    sessionId,
+    content: "看看项目，然后直接优化 node-todo：把 node-todo/app.js 的端口改成 process.env.PORT，再给 node-todo/views/index.ejs 的 title input 加上 maxlength 100，并运行 `node node-todo/verify-exact.mjs` 验证，直到输出 exactly `ready`。"
+  }));
+  events.push(createToolExecutionCompletedEvent({
+    sessionId,
+    taskId: "drop-verifier-shift-tool-1",
+    toolName: "edit",
+    summary: "node-todo/app.js:1-1 · updated (1 -> 1 lines)"
+  }));
+  events.push(createToolExecutionCompletedEvent({
+    sessionId,
+    taskId: "drop-verifier-shift-tool-2",
+    toolName: "shell",
+    summary: "node node-todo/verify-exact.mjs · completed",
+    rawOutput: "app-only"
+  }));
+  events.push(createToolExecutionCompletedEvent({
+    sessionId,
+    taskId: "drop-verifier-shift-tool-3",
+    toolName: "edit",
+    summary: "node-todo/views/index.ejs:1-1 · updated (1 -> 1 lines)"
+  }));
+  events.push(createToolExecutionCompletedEvent({
+    sessionId,
+    taskId: "drop-verifier-shift-tool-4",
+    toolName: "shell",
+    summary: "node node-todo/verify-exact.mjs · completed",
+    rawOutput: "ready!"
+  }));
+  events.push(createAssistantCheckpointRecordedEvent({
+    sessionId,
+    taskId: "drop-verifier-shift-checkpoint",
+    kind: "pending_next_step",
+    content: "I already finished the app and view work; the only remaining exact-output gap is in node-todo/verify-exact.mjs.",
+    targetPath: "node-todo/verify-exact.mjs"
+  }));
+  events.push(createTaskStateChangedEvent({
+    sessionId,
+    taskId: "drop-verifier-shift-runtime",
+    title: "Respond to user input",
+    state: "cancelled"
+  }));
+  events.push(createUserMessageSubmittedEvent({
+    sessionId,
+    content: "Create new.txt with the content new-task."
+  }));
+
+  const messages = buildContextMessages(events);
+  const recentTaskStateMessage = messages.find((message) => message.role === "system" && message.content.includes("Recent task state:"))?.content ?? "";
+
+  assert.match(recentTaskStateMessage, /Current request: Create new\.txt with the content new-task\./);
+  assert.doesNotMatch(recentTaskStateMessage, /Underlying task: 看看项目，然后直接优化 node-todo：把 node-todo\/app\.js 的端口改成 process\.env\.PORT，再给 node-todo\/views\/index\.ejs 的 title input 加上 maxlength 100，并运行 `node node-todo\/verify-exact\.mjs` 验证，直到输出 exactly `ready`。/);
+  assert.doesNotMatch(recentTaskStateMessage, /Target output: ready/);
+  assert.doesNotMatch(recentTaskStateMessage, /Target verification: node node-todo\/verify-exact\.mjs/);
+  assert.doesNotMatch(recentTaskStateMessage, /Pending next step: I already finished the app and view work; the only remaining exact-output gap is in node-todo\/verify-exact\.mjs\./);
+  assert.doesNotMatch(recentTaskStateMessage, /Working files: .*node-todo\/app\.js/);
+  assert.doesNotMatch(recentTaskStateMessage, /Working files: .*node-todo\/views\/index\.ejs/);
+  assert.doesNotMatch(recentTaskStateMessage, /Last verification: node node-todo\/verify-exact\.mjs/);
+  assert.doesNotMatch(recentTaskStateMessage, /Last observed output: ready!/);
+}
+
+function verifyContextCompactionDropsVerifierApprovalAfterExplicitNewRequest() {
+  const sessionId = "compaction-drop-verifier-approval-after-new-request-session";
+  const events: RuntimeEvent[] = [];
+
+  events.push(createUserMessageSubmittedEvent({
+    sessionId,
+    content: "看看项目，然后直接优化 node-todo：把 node-todo/app.js 的端口改成 process.env.PORT，再给 node-todo/views/index.ejs 的 title input 加上 maxlength 100，并运行 `node node-todo/verify-exact.mjs` 验证，直到输出 exactly `ready`。"
+  }));
+  events.push(createToolExecutionCompletedEvent({
+    sessionId,
+    taskId: "drop-verifier-approval-tool-1",
+    toolName: "edit",
+    summary: "node-todo/app.js:1-1 · updated (1 -> 1 lines)"
+  }));
+  events.push(createToolExecutionCompletedEvent({
+    sessionId,
+    taskId: "drop-verifier-approval-tool-2",
+    toolName: "shell",
+    summary: "node node-todo/verify-exact.mjs · completed",
+    rawOutput: "app-only"
+  }));
+  events.push(createToolExecutionCompletedEvent({
+    sessionId,
+    taskId: "drop-verifier-approval-tool-3",
+    toolName: "edit",
+    summary: "node-todo/views/index.ejs:1-1 · updated (1 -> 1 lines)"
+  }));
+  events.push(createToolExecutionCompletedEvent({
+    sessionId,
+    taskId: "drop-verifier-approval-tool-4",
+    toolName: "shell",
+    summary: "node node-todo/verify-exact.mjs · completed",
+    rawOutput: "ready!"
+  }));
+  events.push(createToolExecutionCompletedEvent({
+    sessionId,
+    taskId: "drop-verifier-approval-tool-5",
+    toolName: "files",
+    summary: "node-todo/verify-exact.mjs:1-20"
+  }));
+  events.push(createApprovalRequestedEvent({
+    sessionId,
+    taskId: "drop-verifier-approval-task",
+    toolName: "edit",
+    input: {
+      path: "node-todo/verify-exact.mjs",
+      startLine: 7,
+      endLine: 7,
+      replacement: '  console.log("ready");'
+    },
+    reason: "Edit node-todo/verify-exact.mjs",
+    risk: "high"
+  }));
+  events.push(createTaskStateChangedEvent({
+    sessionId,
+    taskId: "drop-verifier-approval-runtime",
+    title: "Respond to user input",
+    state: "cancelled"
+  }));
+  events.push(createUserMessageSubmittedEvent({
+    sessionId,
+    content: "Create new.txt with the content new-task."
+  }));
+
+  const messages = buildContextMessages(events);
+  const recentTaskStateMessage = messages.find((message) => message.role === "system" && message.content.includes("Recent task state:"))?.content ?? "";
+
+  assert.match(recentTaskStateMessage, /Current request: Create new\.txt with the content new-task\./);
+  assert.doesNotMatch(recentTaskStateMessage, /Underlying task: 看看项目，然后直接优化 node-todo：把 node-todo\/app\.js 的端口改成 process\.env\.PORT，再给 node-todo\/views\/index\.ejs 的 title input 加上 maxlength 100，并运行 `node node-todo\/verify-exact\.mjs` 验证，直到输出 exactly `ready`。/);
+  assert.doesNotMatch(recentTaskStateMessage, /Target output: ready/);
+  assert.doesNotMatch(recentTaskStateMessage, /Target verification: node node-todo\/verify-exact\.mjs/);
+  assert.doesNotMatch(recentTaskStateMessage, /Pending approval: edit · node-todo\/verify-exact\.mjs:7-7/);
+  assert.doesNotMatch(recentTaskStateMessage, /Working files: .*node-todo\/verify-exact\.mjs/);
+  assert.doesNotMatch(recentTaskStateMessage, /Last verification: node node-todo\/verify-exact\.mjs/);
+  assert.doesNotMatch(recentTaskStateMessage, /Last observed output: ready!/);
+}
+
+function verifyContextCompactionDropsApprovedProposalExecutionAfterExplicitNewRequest() {
+  const sessionId = "compaction-drop-approved-proposal-execution-after-new-request-session";
+  const events: RuntimeEvent[] = [];
+
+  events.push(createUserMessageSubmittedEvent({
+    sessionId,
+    content: "先看看 node-todo，但先别改。"
+  }));
+  events.push(createAssistantDeltaEvent({
+    sessionId,
+    taskId: "drop-approved-proposal-execution-turn",
+    delta: "我先看了 node-todo；如果你愿意，我下一步可以直接优化 node-todo/app.js 和 node-todo/views/index.ejs。"
+  }));
+  events.push(createAssistantCompletedEvent({
+    sessionId,
+    taskId: "drop-approved-proposal-execution-turn",
+    model: "regression-stub"
+  }));
+  events.push(createUserMessageSubmittedEvent({
+    sessionId,
+    content: "可以"
+  }));
+  events.push(createToolExecutionCompletedEvent({
+    sessionId,
+    taskId: "drop-approved-proposal-execution-tool-1",
+    toolName: "edit",
+    summary: "node-todo/app.js:1-1 · updated (1 -> 1 lines)"
+  }));
+  events.push(createAssistantCheckpointRecordedEvent({
+    sessionId,
+    taskId: "drop-approved-proposal-execution-checkpoint",
+    kind: "pending_next_step",
+    content: "I updated node-todo/app.js and will continue with node-todo/views/index.ejs next.",
+    targetPath: "node-todo/views/index.ejs"
+  }));
+  events.push(createTaskStateChangedEvent({
+    sessionId,
+    taskId: "drop-approved-proposal-execution-runtime",
+    title: "Respond to user input",
+    state: "cancelled"
+  }));
+  events.push(createUserMessageSubmittedEvent({
+    sessionId,
+    content: "Create new.txt with the content new-task."
+  }));
+
+  const messages = buildContextMessages(events);
+  const recentTaskStateMessage = messages.find((message) => message.role === "system" && message.content.includes("Recent task state:"))?.content ?? "";
+
+  assert.match(recentTaskStateMessage, /Current request: Create new\.txt with the content new-task\./);
+  assert.doesNotMatch(recentTaskStateMessage, /Underlying task: 我先看了 node-todo；如果你愿意，我下一步可以直接优化 node-todo\/app\.js 和 node-todo\/views\/index\.ejs。/);
+  assert.doesNotMatch(recentTaskStateMessage, /Pending next step: I updated node-todo\/app\.js and will continue with node-todo\/views\/index\.ejs next\./);
+  assert.doesNotMatch(recentTaskStateMessage, /Working files: .*node-todo\/app\.js/);
+  assert.doesNotMatch(recentTaskStateMessage, /Working files: .*node-todo\/views\/index\.ejs/);
+  assert.doesNotMatch(recentTaskStateMessage, /Target output:/);
+  assert.doesNotMatch(recentTaskStateMessage, /Target verification:/);
+}
+
+function verifyContextCompactionDropsApprovedProposalApprovalWaitAfterExplicitNewRequest() {
+  const sessionId = "compaction-drop-approved-proposal-approval-wait-after-new-request-session";
+  const events: RuntimeEvent[] = [];
+
+  events.push(createUserMessageSubmittedEvent({
+    sessionId,
+    content: "先看看 node-todo，但先别改。"
+  }));
+  events.push(createAssistantDeltaEvent({
+    sessionId,
+    taskId: "drop-approved-proposal-approval-wait-turn",
+    delta: "我先看了 node-todo；如果你愿意，我下一步可以直接优化 node-todo/app.js 和 node-todo/views/index.ejs，并运行 `node node-todo/verify-setup.mjs` 验证直到输出 exactly `ready`。"
+  }));
+  events.push(createAssistantCompletedEvent({
+    sessionId,
+    taskId: "drop-approved-proposal-approval-wait-turn",
+    model: "regression-stub"
+  }));
+  events.push(createUserMessageSubmittedEvent({
+    sessionId,
+    content: "可以"
+  }));
+  events.push(createToolExecutionCompletedEvent({
+    sessionId,
+    taskId: "drop-approved-proposal-approval-wait-tool-1",
+    toolName: "edit",
+    summary: "node-todo/app.js:1-1 · updated (1 -> 1 lines)"
+  }));
+  events.push(createToolExecutionCompletedEvent({
+    sessionId,
+    taskId: "drop-approved-proposal-approval-wait-tool-2",
+    toolName: "shell",
+    summary: "node node-todo/verify-setup.mjs · completed",
+    rawOutput: "app-only"
+  }));
+  events.push(createToolExecutionCompletedEvent({
+    sessionId,
+    taskId: "drop-approved-proposal-approval-wait-tool-3",
+    toolName: "files",
+    summary: "node-todo/views/index.ejs:1-3"
+  }));
+  events.push(createApprovalRequestedEvent({
+    sessionId,
+    taskId: "drop-approved-proposal-approval-wait-task",
+    toolName: "edit",
+    input: {
+      path: "node-todo/views/index.ejs",
+      startLine: 1,
+      endLine: 1,
+      replacement: '<input name="title" maxlength="100" />'
+    },
+    reason: "Edit node-todo/views/index.ejs",
+    risk: "high"
+  }));
+  events.push(createTaskStateChangedEvent({
+    sessionId,
+    taskId: "drop-approved-proposal-approval-wait-runtime",
+    title: "Respond to user input",
+    state: "cancelled"
+  }));
+  events.push(createUserMessageSubmittedEvent({
+    sessionId,
+    content: "Create new.txt with the content new-task."
+  }));
+
+  const messages = buildContextMessages(events);
+  const recentTaskStateMessage = messages.find((message) => message.role === "system" && message.content.includes("Recent task state:"))?.content ?? "";
+
+  assert.match(recentTaskStateMessage, /Current request: Create new\.txt with the content new-task\./);
+  assert.doesNotMatch(recentTaskStateMessage, /Underlying task: 我先看了 node-todo；如果你愿意，我下一步可以直接优化 node-todo\/app\.js 和 node-todo\/views\/index\.ejs，并运行 `node node-todo\/verify-setup\.mjs` 验证直到输出 exactly `ready`。/);
+  assert.doesNotMatch(recentTaskStateMessage, /Target output: ready/);
+  assert.doesNotMatch(recentTaskStateMessage, /Target verification: node node-todo\/verify-setup\.mjs/);
+  assert.doesNotMatch(recentTaskStateMessage, /Pending approval: edit · node-todo\/views\/index\.ejs:1-1/);
+  assert.doesNotMatch(recentTaskStateMessage, /Working files: .*node-todo\/app\.js/);
+  assert.doesNotMatch(recentTaskStateMessage, /Working files: .*node-todo\/views\/index\.ejs/);
+  assert.doesNotMatch(recentTaskStateMessage, /Last verification: node node-todo\/verify-setup\.mjs/);
+  assert.doesNotMatch(recentTaskStateMessage, /Last observed output: app-only/);
+}
+
+function verifyContextCompactionDropsApprovedProposalVerifierShiftAfterExplicitNewRequest() {
+  const sessionId = "compaction-drop-approved-proposal-verifier-shift-after-new-request-session";
+  const events: RuntimeEvent[] = [];
+
+  events.push(createUserMessageSubmittedEvent({
+    sessionId,
+    content: "先看看 node-todo，但先别改。"
+  }));
+  events.push(createAssistantDeltaEvent({
+    sessionId,
+    taskId: "drop-approved-proposal-verifier-shift-turn",
+    delta: "我先看了 node-todo；如果你愿意，我下一步可以直接优化 node-todo/app.js 和 node-todo/views/index.ejs，并运行 `node node-todo/verify-exact.mjs` 验证直到输出 exactly `ready`。"
+  }));
+  events.push(createAssistantCompletedEvent({
+    sessionId,
+    taskId: "drop-approved-proposal-verifier-shift-turn",
+    model: "regression-stub"
+  }));
+  events.push(createUserMessageSubmittedEvent({
+    sessionId,
+    content: "可以"
+  }));
+  events.push(createToolExecutionCompletedEvent({
+    sessionId,
+    taskId: "drop-approved-proposal-verifier-shift-tool-1",
+    toolName: "edit",
+    summary: "node-todo/app.js:1-1 · updated (1 -> 1 lines)"
+  }));
+  events.push(createToolExecutionCompletedEvent({
+    sessionId,
+    taskId: "drop-approved-proposal-verifier-shift-tool-2",
+    toolName: "shell",
+    summary: "node node-todo/verify-exact.mjs · completed",
+    rawOutput: "app-only"
+  }));
+  events.push(createToolExecutionCompletedEvent({
+    sessionId,
+    taskId: "drop-approved-proposal-verifier-shift-tool-3",
+    toolName: "edit",
+    summary: "node-todo/views/index.ejs:1-1 · updated (1 -> 1 lines)"
+  }));
+  events.push(createToolExecutionCompletedEvent({
+    sessionId,
+    taskId: "drop-approved-proposal-verifier-shift-tool-4",
+    toolName: "shell",
+    summary: "node node-todo/verify-exact.mjs · completed",
+    rawOutput: "ready!"
+  }));
+  events.push(createAssistantCheckpointRecordedEvent({
+    sessionId,
+    taskId: "drop-approved-proposal-verifier-shift-checkpoint",
+    kind: "pending_next_step",
+    content: "I already finished node-todo/app.js and node-todo/views/index.ejs; the remaining exact-output gap is now in node-todo/verify-exact.mjs.",
+    targetPath: "node-todo/verify-exact.mjs"
+  }));
+  events.push(createTaskStateChangedEvent({
+    sessionId,
+    taskId: "drop-approved-proposal-verifier-shift-runtime",
+    title: "Respond to user input",
+    state: "cancelled"
+  }));
+  events.push(createUserMessageSubmittedEvent({
+    sessionId,
+    content: "Create new.txt with the content new-task."
+  }));
+
+  const messages = buildContextMessages(events);
+  const recentTaskStateMessage = messages.find((message) => message.role === "system" && message.content.includes("Recent task state:"))?.content ?? "";
+
+  assert.match(recentTaskStateMessage, /Current request: Create new\.txt with the content new-task\./);
+  assert.doesNotMatch(recentTaskStateMessage, /Underlying task: 我先看了 node-todo；如果你愿意，我下一步可以直接优化 node-todo\/app\.js 和 node-todo\/views\/index\.ejs，并运行 `node node-todo\/verify-exact\.mjs` 验证直到输出 exactly `ready`。/);
+  assert.doesNotMatch(recentTaskStateMessage, /Target output: ready/);
+  assert.doesNotMatch(recentTaskStateMessage, /Target verification: node node-todo\/verify-exact\.mjs/);
+  assert.doesNotMatch(recentTaskStateMessage, /Pending next step: I already finished node-todo\/app\.js and node-todo\/views\/index\.ejs; the remaining exact-output gap is now in node-todo\/verify-exact\.mjs\./);
+  assert.doesNotMatch(recentTaskStateMessage, /Working files: .*node-todo\/app\.js/);
+  assert.doesNotMatch(recentTaskStateMessage, /Working files: .*node-todo\/views\/index\.ejs/);
+  assert.doesNotMatch(recentTaskStateMessage, /Last verification: node node-todo\/verify-exact\.mjs/);
+  assert.doesNotMatch(recentTaskStateMessage, /Last observed output: ready!/);
+}
+
+function verifyContextCompactionDropsApprovedProposalVerifierApprovalAfterExplicitNewRequest() {
+  const sessionId = "compaction-drop-approved-proposal-verifier-approval-after-new-request-session";
+  const events: RuntimeEvent[] = [];
+
+  events.push(createUserMessageSubmittedEvent({
+    sessionId,
+    content: "先看看 node-todo，但先别改。"
+  }));
+  events.push(createAssistantDeltaEvent({
+    sessionId,
+    taskId: "drop-approved-proposal-verifier-approval-turn",
+    delta: "我先看了 node-todo；如果你愿意，我下一步可以直接优化 node-todo/app.js 和 node-todo/views/index.ejs，并运行 `node node-todo/verify-exact.mjs` 验证直到输出 exactly `ready`。"
+  }));
+  events.push(createAssistantCompletedEvent({
+    sessionId,
+    taskId: "drop-approved-proposal-verifier-approval-turn",
+    model: "regression-stub"
+  }));
+  events.push(createUserMessageSubmittedEvent({
+    sessionId,
+    content: "可以"
+  }));
+  events.push(createToolExecutionCompletedEvent({
+    sessionId,
+    taskId: "drop-approved-proposal-verifier-approval-tool-1",
+    toolName: "edit",
+    summary: "node-todo/app.js:1-1 · updated (1 -> 1 lines)"
+  }));
+  events.push(createToolExecutionCompletedEvent({
+    sessionId,
+    taskId: "drop-approved-proposal-verifier-approval-tool-2",
+    toolName: "shell",
+    summary: "node node-todo/verify-exact.mjs · completed",
+    rawOutput: "app-only"
+  }));
+  events.push(createToolExecutionCompletedEvent({
+    sessionId,
+    taskId: "drop-approved-proposal-verifier-approval-tool-3",
+    toolName: "edit",
+    summary: "node-todo/views/index.ejs:1-1 · updated (1 -> 1 lines)"
+  }));
+  events.push(createToolExecutionCompletedEvent({
+    sessionId,
+    taskId: "drop-approved-proposal-verifier-approval-tool-4",
+    toolName: "shell",
+    summary: "node node-todo/verify-exact.mjs · completed",
+    rawOutput: "ready!"
+  }));
+  events.push(createToolExecutionCompletedEvent({
+    sessionId,
+    taskId: "drop-approved-proposal-verifier-approval-tool-5",
+    toolName: "files",
+    summary: "node-todo/verify-exact.mjs:1-20"
+  }));
+  events.push(createApprovalRequestedEvent({
+    sessionId,
+    taskId: "drop-approved-proposal-verifier-approval-task",
+    toolName: "edit",
+    input: {
+      path: "node-todo/verify-exact.mjs",
+      startLine: 7,
+      endLine: 7,
+      replacement: '  console.log("ready");'
+    },
+    reason: "Edit node-todo/verify-exact.mjs",
+    risk: "high"
+  }));
+  events.push(createTaskStateChangedEvent({
+    sessionId,
+    taskId: "drop-approved-proposal-verifier-approval-runtime",
+    title: "Respond to user input",
+    state: "cancelled"
+  }));
+  events.push(createUserMessageSubmittedEvent({
+    sessionId,
+    content: "Create new.txt with the content new-task."
+  }));
+
+  const messages = buildContextMessages(events);
+  const recentTaskStateMessage = messages.find((message) => message.role === "system" && message.content.includes("Recent task state:"))?.content ?? "";
+
+  assert.match(recentTaskStateMessage, /Current request: Create new\.txt with the content new-task\./);
+  assert.doesNotMatch(recentTaskStateMessage, /Underlying task: 我先看了 node-todo；如果你愿意，我下一步可以直接优化 node-todo\/app\.js 和 node-todo\/views\/index\.ejs，并运行 `node node-todo\/verify-exact\.mjs` 验证直到输出 exactly `ready`。/);
+  assert.doesNotMatch(recentTaskStateMessage, /Target output: ready/);
+  assert.doesNotMatch(recentTaskStateMessage, /Target verification: node node-todo\/verify-exact\.mjs/);
+  assert.doesNotMatch(recentTaskStateMessage, /Pending approval: edit · node-todo\/verify-exact\.mjs:7-7/);
+  assert.doesNotMatch(recentTaskStateMessage, /Working files: .*node-todo\/verify-exact\.mjs/);
+  assert.doesNotMatch(recentTaskStateMessage, /Last verification: node node-todo\/verify-exact\.mjs/);
+  assert.doesNotMatch(recentTaskStateMessage, /Last observed output: ready!/);
+}
+
 function verifyContextCompactionCarriesUnderlyingTaskThroughResumeFollowUp() {
   const sessionId = "compaction-resume-underlying-task-session";
   const events: RuntimeEvent[] = [];
@@ -58668,6 +66868,54 @@ function verifyContextCompactionCarriesUnderlyingTaskThroughResumeFollowUp() {
   const recentTaskStateMessage = messages.find((message) => message.role === "system" && message.content.includes("Recent task state:"))?.content ?? "";
 
   assert.match(recentTaskStateMessage, /Current request: 继续/);
+  assert.match(
+    recentTaskStateMessage,
+    /Underlying task: Read app\.config\.json and fix report\.mjs so running `node report\.mjs` prints exactly `SelfMe:3000`\. Verify it and keep working until the output is exact\./
+  );
+  assert.match(recentTaskStateMessage, /Target output: SelfMe:3000/);
+  assert.match(recentTaskStateMessage, /Target verification: node report\.mjs/);
+  assert.match(recentTaskStateMessage, /Working files: report\.mjs, app\.config\.json|Working files: app\.config\.json, report\.mjs/);
+  assert.match(recentTaskStateMessage, /Last failure: node report\.mjs · failed \(1\)/);
+  assert.match(recentTaskStateMessage, /Failure reason: ReferenceError: config is not defined/);
+}
+
+function verifyContextCompactionCarriesRepeatedColloquialContinueThroughResumeFollowUp() {
+  const sessionId = "compaction-resume-repeated-colloquial-continue-session";
+  const events: RuntimeEvent[] = [];
+
+  events.push(createUserMessageSubmittedEvent({
+    sessionId,
+    content: "Read app.config.json and fix report.mjs so running `node report.mjs` prints exactly `SelfMe:3000`. Verify it and keep working until the output is exact."
+  }));
+  events.push(createToolExecutionCompletedEvent({
+    sessionId,
+    taskId: "resume-repeated-colloquial-tool-1",
+    toolName: "files",
+    summary: "app.config.json:1-4",
+    rawOutput: '{\n  "name": "SelfMe",\n  "port": 3000\n}'
+  }));
+  events.push(createToolExecutionCompletedEvent({
+    sessionId,
+    taskId: "resume-repeated-colloquial-tool-2",
+    toolName: "edit",
+    summary: "report.mjs:1-2 · updated (2 -> 2 lines)"
+  }));
+  events.push(createToolExecutionCompletedEvent({
+    sessionId,
+    taskId: "resume-repeated-colloquial-tool-3",
+    toolName: "shell",
+    summary: "node report.mjs · failed (1)",
+    rawOutput: "ReferenceError: config is not defined"
+  }));
+  events.push(createUserMessageSubmittedEvent({
+    sessionId,
+    content: "继续 继续 干"
+  }));
+
+  const messages = buildContextMessages(events);
+  const recentTaskStateMessage = messages.find((message) => message.role === "system" && message.content.includes("Recent task state:"))?.content ?? "";
+
+  assert.match(recentTaskStateMessage, /Current request: 继续 继续 干/);
   assert.match(
     recentTaskStateMessage,
     /Underlying task: Read app\.config\.json and fix report\.mjs so running `node report\.mjs` prints exactly `SelfMe:3000`\. Verify it and keep working until the output is exact\./
@@ -58947,6 +67195,359 @@ function verifyContextCompactionCarriesApprovedProposalVerifierShiftThroughResum
   assert.doesNotMatch(recentTaskStateMessage, /Underlying task: 先看看 node-todo，但先别改。/);
 }
 
+function verifyContextCompactionCarriesApprovedProposalVerifierApprovalThroughResumeFollowUp() {
+  const sessionId = "compaction-approved-proposal-verifier-approval-resume-follow-up-session";
+  const events: RuntimeEvent[] = [];
+
+  events.push(createUserMessageSubmittedEvent({
+    sessionId,
+    content: "先看看 node-todo，但先别改。"
+  }));
+  events.push(createAssistantDeltaEvent({
+    sessionId,
+    taskId: "approved-proposal-verifier-approval-resume-turn",
+    delta: "我先看了 node-todo；如果你愿意，我下一步可以直接优化 node-todo/app.js 和 node-todo/views/index.ejs，并运行 `node node-todo/verify-exact.mjs` 验证直到输出 exactly `ready`。"
+  }));
+  events.push(createAssistantCompletedEvent({
+    sessionId,
+    taskId: "approved-proposal-verifier-approval-resume-turn",
+    model: "regression-stub"
+  }));
+  events.push(createUserMessageSubmittedEvent({
+    sessionId,
+    content: "可以"
+  }));
+  events.push(createToolExecutionCompletedEvent({
+    sessionId,
+    taskId: "approved-proposal-verifier-approval-resume-tool-1",
+    toolName: "edit",
+    summary: "node-todo/app.js:1-1 · updated (1 -> 1 lines)"
+  }));
+  events.push(createToolExecutionCompletedEvent({
+    sessionId,
+    taskId: "approved-proposal-verifier-approval-resume-tool-2",
+    toolName: "shell",
+    summary: "node node-todo/verify-exact.mjs · completed",
+    rawOutput: "app-only"
+  }));
+  events.push(createToolExecutionCompletedEvent({
+    sessionId,
+    taskId: "approved-proposal-verifier-approval-resume-tool-3",
+    toolName: "edit",
+    summary: "node-todo/views/index.ejs:1-1 · updated (1 -> 1 lines)"
+  }));
+  events.push(createToolExecutionCompletedEvent({
+    sessionId,
+    taskId: "approved-proposal-verifier-approval-resume-tool-4",
+    toolName: "shell",
+    summary: "node node-todo/verify-exact.mjs · completed",
+    rawOutput: "ready!"
+  }));
+  events.push(createToolExecutionCompletedEvent({
+    sessionId,
+    taskId: "approved-proposal-verifier-approval-resume-tool-5",
+    toolName: "files",
+    summary: "node-todo/verify-exact.mjs:1-20"
+  }));
+  events.push(createApprovalRequestedEvent({
+    sessionId,
+    taskId: "approved-proposal-verifier-approval-resume-task",
+    toolName: "edit",
+    input: {
+      path: "node-todo/verify-exact.mjs",
+      startLine: 7,
+      endLine: 7,
+      replacement: '  console.log("ready");'
+    },
+    reason: "Edit node-todo/verify-exact.mjs",
+    risk: "high"
+  }));
+  events.push(createTaskStateChangedEvent({
+    sessionId,
+    taskId: "approved-proposal-verifier-approval-resume-runtime",
+    title: "Respond to user input",
+    state: "cancelled"
+  }));
+  events.push(createUserMessageSubmittedEvent({
+    sessionId,
+    content: "还能继续吗"
+  }));
+
+  const messages = buildContextMessages(events);
+  const recentTaskStateMessage = messages.find((message) => message.role === "system" && message.content.includes("Recent task state:"))?.content ?? "";
+
+  assert.match(recentTaskStateMessage, /Current request: 还能继续吗/);
+  assert.match(recentTaskStateMessage, /Underlying task: 我先看了 node-todo；如果你愿意，我下一步可以直接优化 node-todo\/app\.js 和 node-todo\/views\/index\.ejs，并运行 `node node-todo\/verify-exact\.mjs` 验证直到输出 exactly `ready`。/);
+  assert.match(recentTaskStateMessage, /Target output: ready/);
+  assert.match(recentTaskStateMessage, /Target verification: node node-todo\/verify-exact\.mjs/);
+  assert.match(recentTaskStateMessage, /Pending approval: edit · node-todo\/verify-exact\.mjs:7-7/);
+  assert.match(recentTaskStateMessage, /Last verification: node node-todo\/verify-exact\.mjs/);
+  assert.match(recentTaskStateMessage, /Last observed output: ready!/);
+  assert.doesNotMatch(recentTaskStateMessage, /Underlying task: 先看看 node-todo，但先别改。/);
+}
+
+function verifyContextCompactionCarriesApprovedProposalVerifierApprovalThroughAffirmativeResume() {
+  const sessionId = "compaction-approved-proposal-verifier-approval-affirmative-resume-session";
+  const events: RuntimeEvent[] = [];
+
+  events.push(createUserMessageSubmittedEvent({
+    sessionId,
+    content: "先看看 node-todo，但先别改。"
+  }));
+  events.push(createAssistantDeltaEvent({
+    sessionId,
+    taskId: "approved-proposal-verifier-approval-affirmative-turn",
+    delta: "我先看了 node-todo；如果你愿意，我下一步可以直接优化 node-todo/app.js 和 node-todo/views/index.ejs，并运行 `node node-todo/verify-exact.mjs` 验证直到输出 exactly `ready`。"
+  }));
+  events.push(createAssistantCompletedEvent({
+    sessionId,
+    taskId: "approved-proposal-verifier-approval-affirmative-turn",
+    model: "regression-stub"
+  }));
+  events.push(createUserMessageSubmittedEvent({
+    sessionId,
+    content: "可以"
+  }));
+  events.push(createToolExecutionCompletedEvent({
+    sessionId,
+    taskId: "approved-proposal-verifier-approval-affirmative-tool-1",
+    toolName: "edit",
+    summary: "node-todo/app.js:1-1 · updated (1 -> 1 lines)"
+  }));
+  events.push(createToolExecutionCompletedEvent({
+    sessionId,
+    taskId: "approved-proposal-verifier-approval-affirmative-tool-2",
+    toolName: "shell",
+    summary: "node node-todo/verify-exact.mjs · completed",
+    rawOutput: "app-only"
+  }));
+  events.push(createToolExecutionCompletedEvent({
+    sessionId,
+    taskId: "approved-proposal-verifier-approval-affirmative-tool-3",
+    toolName: "edit",
+    summary: "node-todo/views/index.ejs:1-1 · updated (1 -> 1 lines)"
+  }));
+  events.push(createToolExecutionCompletedEvent({
+    sessionId,
+    taskId: "approved-proposal-verifier-approval-affirmative-tool-4",
+    toolName: "shell",
+    summary: "node node-todo/verify-exact.mjs · completed",
+    rawOutput: "ready!"
+  }));
+  events.push(createToolExecutionCompletedEvent({
+    sessionId,
+    taskId: "approved-proposal-verifier-approval-affirmative-tool-5",
+    toolName: "files",
+    summary: "node-todo/verify-exact.mjs:1-20"
+  }));
+  events.push(createApprovalRequestedEvent({
+    sessionId,
+    taskId: "approved-proposal-verifier-approval-affirmative-task",
+    toolName: "edit",
+    input: {
+      path: "node-todo/verify-exact.mjs",
+      startLine: 7,
+      endLine: 7,
+      replacement: '  console.log("ready");'
+    },
+    reason: "Edit node-todo/verify-exact.mjs",
+    risk: "high"
+  }));
+  events.push(createTaskStateChangedEvent({
+    sessionId,
+    taskId: "approved-proposal-verifier-approval-affirmative-runtime",
+    title: "Respond to user input",
+    state: "cancelled"
+  }));
+  events.push(createUserMessageSubmittedEvent({
+    sessionId,
+    content: "可以"
+  }));
+
+  const messages = buildContextMessages(events);
+  const recentTaskStateMessage = messages.find((message) => message.role === "system" && message.content.includes("Recent task state:"))?.content ?? "";
+
+  assert.match(recentTaskStateMessage, /Current request: 可以/);
+  assert.match(recentTaskStateMessage, /Underlying task: 我先看了 node-todo；如果你愿意，我下一步可以直接优化 node-todo\/app\.js 和 node-todo\/views\/index\.ejs，并运行 `node node-todo\/verify-exact\.mjs` 验证直到输出 exactly `ready`。/);
+  assert.match(recentTaskStateMessage, /Target output: ready/);
+  assert.match(recentTaskStateMessage, /Target verification: node node-todo\/verify-exact\.mjs/);
+  assert.match(recentTaskStateMessage, /Pending approval: edit · node-todo\/verify-exact\.mjs:7-7/);
+  assert.match(recentTaskStateMessage, /Last verification: node node-todo\/verify-exact\.mjs/);
+  assert.match(recentTaskStateMessage, /Last observed output: ready!/);
+  assert.doesNotMatch(recentTaskStateMessage, /Underlying task: 先看看 node-todo，但先别改。/);
+}
+
+function verifyContextCompactionCarriesApprovedProposalVerifierApprovalThroughBroadFollowUp() {
+  const sessionId = "compaction-approved-proposal-verifier-approval-broad-follow-up-session";
+  const events: RuntimeEvent[] = [];
+
+  events.push(createUserMessageSubmittedEvent({
+    sessionId,
+    content: "先看看 node-todo，但先别改。"
+  }));
+  events.push(createAssistantDeltaEvent({
+    sessionId,
+    taskId: "approved-proposal-verifier-approval-turn",
+    delta: "我先看了 node-todo；如果你愿意，我下一步可以直接优化 node-todo/app.js 和 node-todo/views/index.ejs，并运行 `node node-todo/verify-exact.mjs` 验证直到输出 exactly `ready`。"
+  }));
+  events.push(createAssistantCompletedEvent({
+    sessionId,
+    taskId: "approved-proposal-verifier-approval-turn",
+    model: "regression-stub"
+  }));
+  events.push(createUserMessageSubmittedEvent({
+    sessionId,
+    content: "可以"
+  }));
+  events.push(createToolExecutionCompletedEvent({
+    sessionId,
+    taskId: "approved-proposal-verifier-approval-tool-1",
+    toolName: "edit",
+    summary: "node-todo/app.js:1-1 · updated (1 -> 1 lines)"
+  }));
+  events.push(createToolExecutionCompletedEvent({
+    sessionId,
+    taskId: "approved-proposal-verifier-approval-tool-2",
+    toolName: "shell",
+    summary: "node node-todo/verify-exact.mjs · completed",
+    rawOutput: "app-only"
+  }));
+  events.push(createToolExecutionCompletedEvent({
+    sessionId,
+    taskId: "approved-proposal-verifier-approval-tool-3",
+    toolName: "edit",
+    summary: "node-todo/views/index.ejs:1-1 · updated (1 -> 1 lines)"
+  }));
+  events.push(createToolExecutionCompletedEvent({
+    sessionId,
+    taskId: "approved-proposal-verifier-approval-tool-4",
+    toolName: "shell",
+    summary: "node node-todo/verify-exact.mjs · completed",
+    rawOutput: "ready!"
+  }));
+  events.push(createToolExecutionCompletedEvent({
+    sessionId,
+    taskId: "approved-proposal-verifier-approval-tool-5",
+    toolName: "files",
+    summary: "node-todo/verify-exact.mjs:1-20"
+  }));
+  events.push(createApprovalRequestedEvent({
+    sessionId,
+    taskId: "approved-proposal-verifier-approval-task",
+    toolName: "edit",
+    input: {
+      path: "node-todo/verify-exact.mjs",
+      startLine: 7,
+      endLine: 7,
+      replacement: '  console.log("ready");'
+    },
+    reason: "Edit node-todo/verify-exact.mjs",
+    risk: "high"
+  }));
+  events.push(createUserMessageSubmittedEvent({
+    sessionId,
+    content: "帮我优化下"
+  }));
+
+  const messages = buildContextMessages(events);
+  const recentTaskStateMessage = messages.find((message) => message.role === "system" && message.content.includes("Recent task state:"))?.content ?? "";
+
+  assert.match(recentTaskStateMessage, /Current request: 帮我优化下/);
+  assert.match(recentTaskStateMessage, /Underlying task: 我先看了 node-todo；如果你愿意，我下一步可以直接优化 node-todo\/app\.js 和 node-todo\/views\/index\.ejs，并运行 `node node-todo\/verify-exact\.mjs` 验证直到输出 exactly `ready`。/);
+  assert.match(recentTaskStateMessage, /Target output: ready/);
+  assert.match(recentTaskStateMessage, /Target verification: node node-todo\/verify-exact\.mjs/);
+  assert.match(recentTaskStateMessage, /Working files: .*node-todo\/verify-exact\.mjs/);
+  assert.match(recentTaskStateMessage, /Pending approval: edit · node-todo\/verify-exact\.mjs:7-7/);
+  assert.match(recentTaskStateMessage, /Last verification: node node-todo\/verify-exact\.mjs/);
+  assert.match(recentTaskStateMessage, /Last observed output: ready!/);
+  assert.doesNotMatch(recentTaskStateMessage, /Underlying task: 先看看 node-todo，但先别改。/);
+}
+
+function verifyContextCompactionCarriesApprovedProposalVerifierApprovalThroughInspectionFollowUp() {
+  const sessionId = "compaction-approved-proposal-verifier-approval-inspection-follow-up-session";
+  const events: RuntimeEvent[] = [];
+
+  events.push(createUserMessageSubmittedEvent({
+    sessionId,
+    content: "先看看 node-todo，但先别改。"
+  }));
+  events.push(createAssistantDeltaEvent({
+    sessionId,
+    taskId: "approved-proposal-verifier-approval-inspection-turn",
+    delta: "我先看了 node-todo；如果你愿意，我下一步可以直接优化 node-todo/app.js 和 node-todo/views/index.ejs，并运行 `node node-todo/verify-exact.mjs` 验证直到输出 exactly `ready`。"
+  }));
+  events.push(createAssistantCompletedEvent({
+    sessionId,
+    taskId: "approved-proposal-verifier-approval-inspection-turn",
+    model: "regression-stub"
+  }));
+  events.push(createUserMessageSubmittedEvent({
+    sessionId,
+    content: "可以"
+  }));
+  events.push(createToolExecutionCompletedEvent({
+    sessionId,
+    taskId: "approved-proposal-verifier-approval-inspection-tool-1",
+    toolName: "edit",
+    summary: "node-todo/app.js:1-1 · updated (1 -> 1 lines)"
+  }));
+  events.push(createToolExecutionCompletedEvent({
+    sessionId,
+    taskId: "approved-proposal-verifier-approval-inspection-tool-2",
+    toolName: "shell",
+    summary: "node node-todo/verify-exact.mjs · completed",
+    rawOutput: "app-only"
+  }));
+  events.push(createToolExecutionCompletedEvent({
+    sessionId,
+    taskId: "approved-proposal-verifier-approval-inspection-tool-3",
+    toolName: "edit",
+    summary: "node-todo/views/index.ejs:1-1 · updated (1 -> 1 lines)"
+  }));
+  events.push(createToolExecutionCompletedEvent({
+    sessionId,
+    taskId: "approved-proposal-verifier-approval-inspection-tool-4",
+    toolName: "shell",
+    summary: "node node-todo/verify-exact.mjs · completed",
+    rawOutput: "ready!"
+  }));
+  events.push(createToolExecutionCompletedEvent({
+    sessionId,
+    taskId: "approved-proposal-verifier-approval-inspection-tool-5",
+    toolName: "files",
+    summary: "node-todo/verify-exact.mjs:1-20"
+  }));
+  events.push(createApprovalRequestedEvent({
+    sessionId,
+    taskId: "approved-proposal-verifier-approval-inspection-task",
+    toolName: "edit",
+    input: {
+      path: "node-todo/verify-exact.mjs",
+      startLine: 7,
+      endLine: 7,
+      replacement: '  console.log("ready");'
+    },
+    reason: "Edit node-todo/verify-exact.mjs",
+    risk: "high"
+  }));
+  events.push(createUserMessageSubmittedEvent({
+    sessionId,
+    content: "帮我看看项目"
+  }));
+
+  const messages = buildContextMessages(events);
+  const recentTaskStateMessage = messages.find((message) => message.role === "system" && message.content.includes("Recent task state:"))?.content ?? "";
+
+  assert.match(recentTaskStateMessage, /Current request: 帮我看看项目/);
+  assert.match(recentTaskStateMessage, /Underlying task: 我先看了 node-todo；如果你愿意，我下一步可以直接优化 node-todo\/app\.js 和 node-todo\/views\/index\.ejs，并运行 `node node-todo\/verify-exact\.mjs` 验证直到输出 exactly `ready`。/);
+  assert.match(recentTaskStateMessage, /Target output: ready/);
+  assert.match(recentTaskStateMessage, /Target verification: node node-todo\/verify-exact\.mjs/);
+  assert.match(recentTaskStateMessage, /Pending approval: edit · node-todo\/verify-exact\.mjs:7-7/);
+  assert.match(recentTaskStateMessage, /Last verification: node node-todo\/verify-exact\.mjs/);
+  assert.match(recentTaskStateMessage, /Last observed output: ready!/);
+  assert.doesNotMatch(recentTaskStateMessage, /Underlying task: 先看看 node-todo，但先别改。/);
+}
+
 function verifyContextCompactionCarriesHiddenPendingNextStepCheckpointThroughResumeFollowUp() {
   const sessionId = "compaction-resume-hidden-pending-next-step-session";
   const events: RuntimeEvent[] = [];
@@ -59047,6 +67648,48 @@ function verifyContextCompactionCarriesHiddenCommandPendingNextStepCheckpointThr
   assert.match(recentTaskStateMessage, /Target verification: npm test/);
   assert.match(recentTaskStateMessage, /Working files: node-todo\/package\.json/);
   assert.match(recentTaskStateMessage, /Pending next step: I updated node-todo\/package\.json and will run npm test next\./);
+}
+
+function verifyContextCompactionDropsCommandPendingNextStepAfterExplicitNewRequest() {
+  const sessionId = "compaction-drop-hidden-command-pending-next-step-after-new-request-session";
+  const events: RuntimeEvent[] = [];
+
+  events.push(createUserMessageSubmittedEvent({
+    sessionId,
+    content: "Update node-todo/package.json and run `npm test` before finishing."
+  }));
+  events.push(createToolExecutionCompletedEvent({
+    sessionId,
+    taskId: "drop-hidden-command-pending-next-tool-1",
+    toolName: "edit",
+    summary: "node-todo/package.json:4-4 · updated (7 -> 8 lines)"
+  }));
+  events.push(createAssistantCheckpointRecordedEvent({
+    sessionId,
+    taskId: "drop-hidden-command-pending-next-turn",
+    kind: "pending_next_step",
+    content: "I updated node-todo/package.json and will run npm test next.",
+    targetPath: "npm test"
+  }));
+  events.push(createTaskStateChangedEvent({
+    sessionId,
+    taskId: "drop-hidden-command-pending-next-runtime",
+    title: "Respond to user input",
+    state: "cancelled"
+  }));
+  events.push(createUserMessageSubmittedEvent({
+    sessionId,
+    content: "Create new.txt with the content new-task."
+  }));
+
+  const messages = buildContextMessages(events);
+  const recentTaskStateMessage = messages.find((message) => message.role === "system" && message.content.includes("Recent task state:"))?.content ?? "";
+
+  assert.match(recentTaskStateMessage, /Current request: Create new\.txt with the content new-task\./);
+  assert.doesNotMatch(recentTaskStateMessage, /Underlying task: Update node-todo\/package\.json and run `npm test` before finishing\./);
+  assert.doesNotMatch(recentTaskStateMessage, /Target verification: npm test/);
+  assert.doesNotMatch(recentTaskStateMessage, /Working files: node-todo\/package\.json/);
+  assert.doesNotMatch(recentTaskStateMessage, /Pending next step: I updated node-todo\/package\.json and will run npm test next\./);
 }
 
 function verifyContextCompactionPreservesNestedProjectPendingNextStep() {
