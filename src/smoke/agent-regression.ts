@@ -378,6 +378,30 @@ async function main() {
   );
   await writeFile(join(workspace, "greet.mjs"), 'console.log("Hello, SelfMe!");\n', "utf8");
 
+  await writeFile(join(workspace, "retry-shell.mjs"), 'console.log("not-ready");\n', "utf8");
+  console.log("task: reuse approval for the same verification command within one task");
+  const approvalsBeforeRepeatedShellVerification = approvals.length;
+  const repeatedShellVerificationResult = await runAgentTask({
+    bus,
+    transcriptStore,
+    sessionId: session.sessionId,
+    prompt: "Fix retry-shell.mjs so running `node retry-shell.mjs --verify` prints exactly `SelfMe`. Start by running the verification, then keep working until it is exact."
+  });
+
+  const retryShellContent = await readFile(join(workspace, "retry-shell.mjs"), "utf8");
+  assert.equal(retryShellContent, 'console.log("SelfMe");\n');
+  assert.match(repeatedShellVerificationResult.assistantText, /SelfMe/);
+  assert.equal(
+    repeatedShellVerificationResult.toolSummaries.filter((summary) => summary.startsWith("node retry-shell.mjs --verify · completed")).length,
+    2,
+    "expected the same verification command to run before and after the repair"
+  );
+  assert.equal(
+    approvals.length - approvalsBeforeRepeatedShellVerification,
+    2,
+    "expected one approval for the verification command and one for the repair edit, without a duplicate approval for the exact same verification retry"
+  );
+
   console.log("task: complete cross-file config and script chain");
   const crossFileChainResult = await runAgentTask({
     bus,
@@ -1137,6 +1161,7 @@ async function main() {
   assert.match(runnerStageContent, /\.\/lib\/render-stage-label\.mjs/);
   assert.match(stageSummaryContinuationResult.assistantText, /SelfMe \[stage\]/);
   assert.deepEqual(stageSummaryContinuationResult.assistantTurns, [
+    "Created src/lib/render-stage-label.mjs. Next I will run runner-stage, fix any import issue, and verify the final output.",
     "Created src/lib/render-stage-label.mjs, repaired src/runner-stage.mjs, and confirmed it prints exactly SelfMe [stage]."
   ]);
   assert.ok(
@@ -1179,6 +1204,7 @@ async function main() {
   assert.match(runnerStageEchoContent, /\.\/lib\/render-stage-echo\.mjs/);
   assert.match(duplicateStageSummaryResult.assistantText, /SelfMe \[echo\]/);
   assert.deepEqual(duplicateStageSummaryResult.assistantTurns, [
+    "Created src/lib/render-stage-echo.mjs. Next I will run runner-stage-echo, fix any import issue, and verify the final output.",
     "Created src/lib/render-stage-echo.mjs, repaired src/runner-stage-echo.mjs, and confirmed it prints exactly SelfMe [echo]."
   ]);
   assert.ok(
@@ -1221,6 +1247,8 @@ async function main() {
   assert.match(runnerStageProgressContent, /\.\/lib\/render-stage-progress\.mjs/);
   assert.match(multiStageSummaryResult.assistantText, /SelfMe \[local\]/);
   assert.deepEqual(multiStageSummaryResult.assistantTurns, [
+    "Created src/lib/render-stage-progress.mjs. Next I will run runner-stage-progress, fix any import issue, and verify the current output.",
+    "Repaired src/runner-stage-progress.mjs import. Next I will rerun it and tighten the helper output if it is still not exact.",
     "Repaired src/lib/render-stage-progress.mjs and confirmed src/runner-stage-progress.mjs now prints exactly SelfMe [local]."
   ]);
   assert.ok(
@@ -4369,6 +4397,7 @@ async function main() {
   await verifyHelpCommandAvailableWhileBusy();
   await verifyResumeFollowUpAfterStop();
   await verifyBareContinueResumesInterruptedTask();
+  await verifyBareContinueResumesInterruptedTask("按计划继续吧");
   await verifyRepeatedColloquialContinueResumesInterruptedTask();
   await verifyBareAffirmativeResumesInterruptedTask();
   await verifyExplicitNewTaskDoesNotResumeInterruptedTask();
@@ -4533,7 +4562,7 @@ async function main() {
   await verifyNaturalLanguageApprovalShortcuts();
   await verifyPendingNextStepContextGuidesMultiTargetContinuation();
   await verifyAssistantStageSummaryPromotesExplicitNextTarget();
-  await verifyDeferredStageCheckpointDoesNotEmitAssistantCompletion();
+  await verifyDeferredStageCheckpointEmitsVisibleProgress();
   await verifyBusyPhaseReturnsToAssistantDuringSameTaskContinuation();
   await verifyTerminalShellSuccessDoesNotRequireExtraAssistantPass();
   await verifyLongCompletionToneWithPendingWorkStillContinues();
@@ -4636,6 +4665,7 @@ async function main() {
   await verifyTerminalLoopAutoContinuesAfterRepeatedStallBeforeCommandOnlyShell();
   await verifyTerminalLoopStopAndResumeRepeatedStallCommandOnlyShell();
   await verifyTerminalLoopStopAndResumeRepeatedStallCommandOnlyShellBroadOptimizationFollowUp();
+  await verifyTerminalLoopExplicitNewTaskDoesNotResumeRepeatedStallCommandOnlyShell();
   await verifyTerminalLoopAutoContinuesAcrossMultipleRepeatedStallSlicesBeforeCommandOnlyShell();
   await verifyTerminalLoopStopAndResumeRepeatedStallAcrossMultipleSlicesBeforeCommandOnlyShell();
   await verifyTerminalLoopContinuesAfterExplanationOnlyReply();
@@ -17630,7 +17660,7 @@ async function verifyResumeFollowUpAfterStop() {
   );
 }
 
-async function verifyBareContinueResumesInterruptedTask() {
+async function verifyBareContinueResumesInterruptedTask(followUp = "继续") {
   const root = await mkdtemp(join(tmpdir(), "selfme-agent-bare-continue-stop-"));
   const workspace = join(root, "workspace");
   const transcriptPath = join(root, "transcript.jsonl");
@@ -17652,7 +17682,7 @@ async function verifyBareContinueResumesInterruptedTask() {
         return;
       }
 
-      if (input.content.startsWith('The user replied "继续" and wants to continue the most recent unfinished task.')) {
+      if (input.content.startsWith(`The user replied "${followUp}" and wants to continue the most recent unfinished task.`)) {
         yield {
           delta: toolCall("write", {
             path: "continue.txt",
@@ -17662,7 +17692,7 @@ async function verifyBareContinueResumesInterruptedTask() {
         return;
       }
 
-      if (input.content.startsWith('Original user request: The user replied "继续" and wants to continue the most recent unfinished task.')) {
+      if (input.content.startsWith(`Original user request: The user replied "${followUp}" and wants to continue the most recent unfinished task.`)) {
         yield { delta: "Created continue.txt and resumed the interrupted task." };
         return;
       }
@@ -17727,7 +17757,7 @@ async function verifyBareContinueResumesInterruptedTask() {
     bus,
     transcriptStore,
     sessionId: session.sessionId,
-    prompt: "继续"
+    prompt: followUp
   });
 
   const resumedContent = await readFile(join(workspace, "continue.txt"), "utf8");
@@ -40823,6 +40853,8 @@ async function verifyNaturalLanguageApprovalShortcuts() {
 
     const runtimeError = await runtimeErrorPromise;
     assert.match(runtimeError.payload.message, /Multiple approvals are pending/);
+    assert.match(runtimeError.payload.message, /write · multi-a\.txt/);
+    assert.match(runtimeError.payload.message, /write · multi-b\.txt/);
 
     bus.emit(createTerminalCommandInvokedEvent({
       sessionId: session.sessionId,
@@ -40970,8 +41002,16 @@ async function verifyPendingNextStepContextGuidesMultiTargetContinuation() {
 
     async *streamResponse(input: ProviderStreamInput): AsyncIterable<ProviderStreamChunk> {
       const originalPrompt = "Optimize node-todo by updating node-todo/app.js to use process.env.PORT and updating node-todo/views/index.ejs so the title input has maxlength 100. Do the changes directly.";
+      const systemContext = (input.contextMessages ?? [])
+        .filter((message) => message.role === "system")
+        .map((message) => message.content)
+        .join("\n\n");
 
       if (input.content === originalPrompt) {
+        assert.match(
+          systemContext,
+          /Completion contract: complete every requested mutation target before answering \(node-todo\/app\.js, node-todo\/views\/index\.ejs\)\./
+        );
         yield {
           delta: toolCall("edit", {
             path: "node-todo/app.js",
@@ -40989,6 +41029,10 @@ async function verifyPendingNextStepContextGuidesMultiTargetContinuation() {
 
         if (toolName === "edit" && /node-todo\/app\.js/.test(summary)) {
           if (input.content.includes("The original request contains multiple concrete file changes.")) {
+            assert.match(
+              systemContext,
+              /Completion contract: complete every requested mutation target before answering \(node-todo\/app\.js, node-todo\/views\/index\.ejs\)\./
+            );
             const recentTaskState = input.contextMessages?.find((message) =>
               message.role === "system" && message.content.includes("Recent task state:")
             )?.content ?? "";
@@ -41204,7 +41248,7 @@ async function verifyAssistantStageSummaryPromotesExplicitNextTarget() {
   );
 }
 
-async function verifyDeferredStageCheckpointDoesNotEmitAssistantCompletion() {
+async function verifyDeferredStageCheckpointEmitsVisibleProgress() {
   const root = await mkdtemp(join(tmpdir(), "selfme-agent-hidden-stage-completion-"));
   const workspace = join(root, "workspace");
   const transcriptPath = join(root, "transcript.jsonl");
@@ -41318,6 +41362,7 @@ async function verifyDeferredStageCheckpointDoesNotEmitAssistantCompletion() {
   });
 
   assert.deepEqual(result.assistantTurns, [
+    "I updated node-todo/app.js and will continue with node-todo/views/index.ejs next.",
     "Completed the requested updates in node-todo/app.js and node-todo/views/index.ejs."
   ]);
 }
@@ -58860,6 +58905,218 @@ async function verifyTerminalLoopStopAndResumeRepeatedStallCommandOnlyShellBroad
   await verifyTerminalLoopStopAndResumeRepeatedStallCommandOnlyShellWithFollowUp("帮我优化下");
 }
 
+async function verifyTerminalLoopExplicitNewTaskDoesNotResumeRepeatedStallCommandOnlyShell() {
+  const root = await mkdtemp(join(tmpdir(), "selfme-agent-terminal-loop-command-only-stall-new-task-"));
+  const workspace = join(root, "workspace");
+  const transcriptPath = join(root, "transcript.jsonl");
+  const logsPath = join(root, "logs.jsonl");
+  const sessionId = "terminal-loop-command-only-stall-new-task";
+  const originalPrompt = "Read beta-a.txt, beta-b.txt, and package.json, then run `npm test` until it prints exactly `ready`, fixing whatever is needed before finishing.";
+  await mkdir(workspace, { recursive: true });
+  await writeFile(join(workspace, "beta-a.txt"), "beta-a\n", "utf8");
+  await writeFile(join(workspace, "beta-b.txt"), "beta-b\n", "utf8");
+  await writeFile(
+    join(workspace, "package.json"),
+    '{\n  "name": "terminal-command-only-stall-new-task",\n  "version": "1.0.0",\n  "scripts": {\n    "test": "node verify-terminal-commandless-stall-new-task.mjs"\n  }\n}\n',
+    "utf8"
+  );
+  await writeFile(join(workspace, "verify-terminal-commandless-stall-new-task.mjs"), 'console.log("pending");\n', "utf8");
+
+  class TerminalLoopCommandOnlyStallNewTaskProvider implements ProviderClient {
+    readonly name = "terminal-loop-command-only-stall-new-task-provider";
+    private repeatedShellCount = 0;
+
+    async *streamResponse(input: ProviderStreamInput): AsyncIterable<ProviderStreamChunk> {
+      if (input.content === originalPrompt) {
+        yield { delta: toolCall("files", { path: "beta-a.txt", startLine: 1, endLine: 20 }) };
+        return;
+      }
+
+      if (input.content === "Create new.txt with the content new-task.") {
+        yield { delta: toolCall("write", { path: "new.txt", content: "new-task\n" }) };
+        return;
+      }
+
+      if (input.content.startsWith("The user replied ") && input.content.includes("wants to continue the most recent unfinished task.")) {
+        assert.fail("explicit new task should not be rewritten into a terminal repeated-stall command-only resume follow-up");
+      }
+
+      if (input.content.startsWith("Original user request: Create new.txt with the content new-task.")) {
+        yield { delta: "Created new.txt instead of resuming the interrupted terminal repeated-stall command-only chain." };
+        return;
+      }
+
+      if (input.content.startsWith(`Original user request: ${originalPrompt}`)) {
+        const toolName = extractLine(input.content, "Tool:") ?? extractLine(input.content, "Latest tool:");
+        const summary = extractLine(input.content, "Summary:") ?? extractLine(input.content, "Latest summary:") ?? "";
+
+        if (toolName === "files" && /beta-a\\.txt/.test(summary)) {
+          yield { delta: toolCall("files", { path: "beta-b.txt", startLine: 1, endLine: 20 }) };
+          return;
+        }
+
+        if (toolName === "files" && /beta-b\\.txt/.test(summary)) {
+          yield { delta: toolCall("files", { path: "package.json", startLine: 1, endLine: 20 }) };
+          return;
+        }
+
+        if (toolName === "files" && /package\\.json/.test(summary)) {
+          yield { delta: toolCall("shell", { command: "npm test" }) };
+          return;
+        }
+
+        if (toolName === "shell" && /npm test · completed/.test(summary)) {
+          this.repeatedShellCount += 1;
+          if (this.repeatedShellCount <= 2) {
+            yield { delta: toolCall("shell", { command: "npm test" }) };
+            return;
+          }
+        }
+      }
+
+      if (
+        !input.content.startsWith("Original user request:")
+        && input.content.includes("The task stalled after repeated identical progress signals but the task context is still actionable.")
+      ) {
+        assert.match(input.content, /Latest stall kind: repeated identical shell results\\./);
+        assert.match(input.content, /Pending next step target: npm test/);
+        assert.match(input.content, /Latest tool in context: shell/);
+        yield { delta: "I already know npm test is looping on the same result and need to inspect the hidden verifier next." };
+        await waitForProviderDelay(input.signal, 10_000);
+        yield {
+          delta: toolCall("files", {
+            path: "verify-terminal-commandless-stall-new-task.mjs",
+            startLine: 1,
+            endLine: 20
+          })
+        };
+        return;
+      }
+
+      yield { delta: "ok" };
+    }
+  }
+
+  const bus = new EventBus();
+  const transcriptStore = new TranscriptStore(transcriptPath);
+  const logStore = new LogStore(logsPath);
+  await transcriptStore.ensureInitialized();
+  await logStore.ensureInitialized();
+
+  const session = createDefaultSessionRecord(workspace, VERSION);
+  session.sessionId = sessionId;
+  session.model = "regression-stub";
+
+  const runtime = new AgentRuntime({
+    bus,
+    provider: new TerminalLoopCommandOnlyStallNewTaskProvider(),
+    tools: new InMemoryToolRegistry(),
+    session,
+    transcriptStore,
+    logStore
+  });
+  await runtime.start();
+
+  const editor = new EditorController();
+  const panel = new TerminalPanelController();
+  const terminal = new TerminalEventLoop({ bus, editor, panel, sessionId });
+  const originalExit = process.exit;
+  const existingDataListeners = process.stdin.listeners("data") as Array<(...args: any[]) => void>;
+
+  (process as typeof process & { exit: (code?: number) => never }).exit = ((code?: number) => {
+    throw new Error(`EXIT:${code ?? 0}`);
+  }) as typeof process.exit;
+
+  try {
+    terminal.start();
+    const initialCompletion = waitForAssistantTaskCompletion(bus, sessionId);
+    const continuationSummary = waitForAssistantDeltaContaining(
+      bus,
+      sessionId,
+      /I already know npm test is looping on the same result and need to inspect the hidden verifier next\\./
+    );
+    process.stdin.emit("data", Buffer.from(`${originalPrompt}\r`));
+
+    await continuationSummary;
+    await waitForBusyPhase(bus, sessionId, "assistant");
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    process.stdin.emit("data", "\\u001b");
+
+    const cancelledTask = await initialCompletion;
+    assert.equal(cancelledTask.payload.state, "cancelled");
+
+    const interruptedEvents = await transcriptStore.readEventsBySession(sessionId);
+    assert.ok(
+      interruptedEvents.filter((event) =>
+        event.type === "tool.execution.completed" && event.payload.summary.startsWith("npm test · completed")
+      ).length >= 3,
+      "terminal repeated-stall new-task interruption should preserve the stalled npm test loop before stop"
+    );
+    assert.ok(
+      interruptedEvents.some((event) =>
+        event.type === "assistant.delta.received"
+        && /I already know npm test is looping on the same result and need to inspect the hidden verifier next\\./.test(event.payload.delta)
+      ),
+      "terminal repeated-stall new-task interruption should preserve the narrowed verifier handoff before stop"
+    );
+    assert.equal(
+      interruptedEvents.some((event) =>
+        event.type === "tool.execution.completed"
+        && event.payload.summary.startsWith("verify-terminal-commandless-stall-new-task.mjs:1-1")
+      ),
+      false,
+      "terminal repeated-stall new-task interruption should stop before reading the hidden verifier"
+    );
+
+    const newTaskCompletion = waitForAssistantTaskCompletion(bus, sessionId);
+    process.stdin.emit("data", Buffer.from("Create new.txt with the content new-task.\r"));
+    const newTask = await newTaskCompletion;
+    const newTaskEvents = await transcriptStore.readEventsBySession(sessionId);
+    const newTaskAssistantText = collectAssistantText(newTaskEvents, newTask.taskId ?? "");
+    const newContent = await readFile(join(workspace, "new.txt"), "utf8");
+    const verifyContent = await readFile(join(workspace, "verify-terminal-commandless-stall-new-task.mjs"), "utf8");
+
+    assert.equal(newTask.payload.state, "completed");
+    assert.equal(editor.getState().value, "", "explicit new task after terminal repeated-stall interruption should clear the editor buffer");
+    assert.equal(newContent, "new-task\n");
+    assert.doesNotMatch(verifyContent, /ready/);
+    assert.match(newTaskAssistantText, /Created new\\.txt|new task|已处理 `new\\.txt`|已完成/u);
+    assert.ok(
+      newTaskEvents.some((event) =>
+        event.type === "tool.execution.completed"
+        && event.payload.summary.startsWith("new.txt · created")
+        && event.taskId === newTask.taskId
+      ),
+      "explicit new task should create new.txt instead of resuming the interrupted terminal repeated-stall command-only chain"
+    );
+    assert.equal(
+      newTaskEvents.some((event) =>
+        event.type === "tool.execution.completed"
+        && (
+          event.payload.summary.startsWith("verify-terminal-commandless-stall-new-task.mjs:1-1")
+          || event.payload.summary.startsWith("npm test · completed")
+        )
+        && event.taskId === newTask.taskId
+      ),
+      false,
+      "explicit new task should not continue the interrupted terminal repeated-stall command-only repair chain"
+    );
+  } finally {
+    process.exit = originalExit;
+    try {
+      bus.emit(createTerminalCommandInvokedEvent({ sessionId, content: "/exit" }));
+    } catch (error) {
+      assert.match(String(error), /EXIT:0/);
+    }
+
+    for (const listener of process.stdin.listeners("data") as Array<(...args: any[]) => void>) {
+      if (!existingDataListeners.includes(listener)) {
+        process.stdin.off("data", listener);
+      }
+    }
+  }
+}
+
 async function verifyTerminalLoopStopAndResumeRepeatedStallCommandOnlyShellWithFollowUp(
   followUpPrompt: "还能继续吗" | "帮我优化下"
 ) {
@@ -68017,6 +68274,12 @@ function resolveProviderResponse(content: string, contextMessages: ProviderStrea
     });
   }
 
+  if (content.startsWith("Fix retry-shell.mjs so running `node retry-shell.mjs --verify` prints exactly `SelfMe`.")) {
+    return toolCall("shell", {
+      command: "node retry-shell.mjs --verify"
+    });
+  }
+
   if (content.startsWith("Read node-todo/app.js and tell me what you want to improve next")) {
     return toolCall("files", {
       path: "node-todo/app.js",
@@ -68088,6 +68351,7 @@ function resolveProviderResponse(content: string, contextMessages: ProviderStrea
   if (content === "直接优化 node-todo 项目：把 node-todo/app.js 的端口改成 process.env.PORT，再给 node-todo/views/index.ejs 的 title input 加上 maxlength 100。") {
     assert.match(systemContext, /Current task execution guidance:/);
     assert.match(systemContext, /Preferred starting file target: node-todo\/app\.js/);
+    assert.match(systemContext, /Completion contract: complete every requested mutation target before answering \(node-todo\/app\.js, node-todo\/views\/index\.ejs\)\./);
     return toolCall("files", {
       path: "node-todo/app.js",
       startLine: 1,
@@ -69070,6 +69334,30 @@ function resolveProviderResponse(content: string, contextMessages: ProviderStrea
 
     if (toolName === "edit" && /node-todo\/views\/index\.ejs/.test(summary)) {
       return "I optimized node-todo/app.js to use process.env.PORT and updated node-todo/views/index.ejs so the title input now has maxlength 100.";
+    }
+  }
+
+  if (content.startsWith("Original user request: Fix retry-shell.mjs so running `node retry-shell.mjs --verify` prints exactly `SelfMe`.")) {
+    const toolName = extractLine(content, "Tool:") ?? extractLine(content, "Latest tool:");
+    const summary = extractLine(content, "Summary:") ?? extractLine(content, "Latest summary:") ?? "";
+
+    if (toolName === "shell" && /node retry-shell\.mjs --verify/.test(summary)) {
+      if (extractLatestRawOutputBlock(content).includes("SelfMe")) {
+        return "Verified retry-shell.mjs now prints exactly SelfMe.";
+      }
+
+      return toolCall("edit", {
+        path: "retry-shell.mjs",
+        startLine: 1,
+        endLine: 1,
+        replacement: 'console.log("SelfMe");'
+      });
+    }
+
+    if (toolName === "edit" && /retry-shell\.mjs/.test(summary)) {
+      return toolCall("shell", {
+        command: "node retry-shell.mjs --verify"
+      });
     }
   }
 

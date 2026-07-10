@@ -30,6 +30,7 @@ When a task is already in flight and the interruption context is still actionabl
 That rule especially applies to:
 
 - `还能继续吗`
+- `按计划继续吧`
 - `帮我优化下`
 - `帮我看看项目`
 - bare affirmative follow-ups after an approved proposal or approval wait
@@ -63,7 +64,7 @@ That rule especially applies to:
 - broad inspect: `帮我看看项目`
 - bare affirmative: `可以`
 - ambiguous continuation
-  examples: `继续`, `继续吧`, `继续 继续 干`
+  examples: `继续`, `继续吧`, `按计划继续吧`, `继续 继续 干`
 - genuinely new request
 
 ### 4. Resume target
@@ -118,6 +119,7 @@ Current smoke coverage in `src/smoke/agent-regression.ts` is strong in these fam
 - explicit new-task cutover after interrupted step-limit command-only tasks
 - explicit new-task cutover after interrupted assistant-pass command-only tasks
 - explicit new-task cutover after interrupted tool-recovery command-only tasks
+- explicit new-task cutover after interrupted repeated-stall command-only tasks
 
 Broad follow-up parity is now intentionally covered for most stop/resume families:
 

@@ -459,9 +459,15 @@ export class AgentRuntime {
     }
 
     if (pendingApprovals.length > 1) {
+      const approvalTargets = pendingApprovals
+        .map((pending) => {
+          const target = renderApprovalTarget(pending.request.toolName, pending.request.input);
+          return target ? `${pending.request.toolName} · ${target}` : pending.request.toolName;
+        })
+        .join(", ");
       const runtimeError = createRuntimeErrorRaisedEvent({
         sessionId,
-        message: "Multiple approvals are pending. Use /approve <approval-id> or /deny <approval-id>."
+        message: `Multiple approvals are pending: ${approvalTargets}. Use /approve <approval-id> or /deny <approval-id>.`
       });
       this.input.bus.emit(runtimeError);
       return true;
@@ -714,6 +720,7 @@ export class AgentRuntime {
           sessionId,
           taskId: responseTaskId,
           content: nextPrompt,
+          originalRequest,
           preferredLanguage,
           suppressMessageEmission,
           signal: activeRun.controller.signal
@@ -723,36 +730,18 @@ export class AgentRuntime {
           malformedToolCallRetryCount += 1;
 
           if (malformedToolCallRetryCount > MAX_MALFORMED_TOOL_CALL_RETRIES) {
-            const recoveryTargetPath = resolveContinuationTargetFromPromptOrContext(
-              originalRequest,
-              nextPrompt,
-              lastToolResult
-            );
-
-            await this.recordContinuationPendingCheckpoint({
+            const recoveryPrompt = await this.tryBuildToolRecoveryContinuation({
               sessionId,
               taskId: responseTaskId,
               originalRequest,
               nextPrompt,
-              previousToolResult: lastToolResult
+              previousToolResult: lastToolResult,
+              continuationBudget: autoToolRecoveryContinuationBudget,
+              recoveryKind: "malformed tool call"
             });
 
-            if (
-              recoveryTargetPath
-              && shouldAutoContinueCurrentTask(originalRequest, recoveryTargetPath)
-              && shouldConsumeAutoContinuationBudget(
-                autoToolRecoveryContinuationBudget,
-                recoveryTargetPath,
-                MAX_AUTO_TOOL_RECOVERY_CONTINUATIONS_PER_TARGET,
-                MAX_AUTO_TOOL_RECOVERY_CONTINUATIONS_TOTAL
-              )
-            ) {
-              nextPrompt = buildToolRecoveryAutoContinuationPrompt({
-                originalRequest,
-                nextPrompt,
-                previousToolResult: lastToolResult,
-                recoveryKind: "malformed tool call"
-              });
+            if (recoveryPrompt) {
+              nextPrompt = recoveryPrompt;
               malformedToolCallRetryCount = 0;
               unknownToolRetryCount = 0;
               invalidToolInputRetryCount = 0;
@@ -892,36 +881,18 @@ export class AgentRuntime {
           unknownToolRetryCount += 1;
 
           if (unknownToolRetryCount > MAX_UNKNOWN_TOOL_RETRIES) {
-            const recoveryTargetPath = resolveContinuationTargetFromPromptOrContext(
-              originalRequest,
-              nextPrompt,
-              lastToolResult
-            );
-
-            await this.recordContinuationPendingCheckpoint({
+            const recoveryPrompt = await this.tryBuildToolRecoveryContinuation({
               sessionId,
               taskId: responseTaskId,
               originalRequest,
               nextPrompt,
-              previousToolResult: lastToolResult
+              previousToolResult: lastToolResult,
+              continuationBudget: autoToolRecoveryContinuationBudget,
+              recoveryKind: `unknown tool ${assistantPass.toolCall.tool}`
             });
 
-            if (
-              recoveryTargetPath
-              && shouldAutoContinueCurrentTask(originalRequest, recoveryTargetPath)
-              && shouldConsumeAutoContinuationBudget(
-                autoToolRecoveryContinuationBudget,
-                recoveryTargetPath,
-                MAX_AUTO_TOOL_RECOVERY_CONTINUATIONS_PER_TARGET,
-                MAX_AUTO_TOOL_RECOVERY_CONTINUATIONS_TOTAL
-              )
-            ) {
-              nextPrompt = buildToolRecoveryAutoContinuationPrompt({
-                originalRequest,
-                nextPrompt,
-                previousToolResult: lastToolResult,
-                recoveryKind: `unknown tool ${assistantPass.toolCall.tool}`
-              });
+            if (recoveryPrompt) {
+              nextPrompt = recoveryPrompt;
               malformedToolCallRetryCount = 0;
               unknownToolRetryCount = 0;
               invalidToolInputRetryCount = 0;
@@ -950,36 +921,18 @@ export class AgentRuntime {
           invalidToolInputRetryCount += 1;
 
           if (invalidToolInputRetryCount > MAX_INVALID_TOOL_INPUT_RETRIES) {
-            const recoveryTargetPath = resolveContinuationTargetFromPromptOrContext(
-              originalRequest,
-              nextPrompt,
-              lastToolResult
-            );
-
-            await this.recordContinuationPendingCheckpoint({
+            const recoveryPrompt = await this.tryBuildToolRecoveryContinuation({
               sessionId,
               taskId: responseTaskId,
               originalRequest,
               nextPrompt,
-              previousToolResult: lastToolResult
+              previousToolResult: lastToolResult,
+              continuationBudget: autoToolRecoveryContinuationBudget,
+              recoveryKind: `invalid ${requestedTool.name} input`
             });
 
-            if (
-              recoveryTargetPath
-              && shouldAutoContinueCurrentTask(originalRequest, recoveryTargetPath)
-              && shouldConsumeAutoContinuationBudget(
-                autoToolRecoveryContinuationBudget,
-                recoveryTargetPath,
-                MAX_AUTO_TOOL_RECOVERY_CONTINUATIONS_PER_TARGET,
-                MAX_AUTO_TOOL_RECOVERY_CONTINUATIONS_TOTAL
-              )
-            ) {
-              nextPrompt = buildToolRecoveryAutoContinuationPrompt({
-                originalRequest,
-                nextPrompt,
-                previousToolResult: lastToolResult,
-                recoveryKind: `invalid ${requestedTool.name} input`
-              });
+            if (recoveryPrompt) {
+              nextPrompt = recoveryPrompt;
               malformedToolCallRetryCount = 0;
               unknownToolRetryCount = 0;
               invalidToolInputRetryCount = 0;
@@ -1177,6 +1130,50 @@ export class AgentRuntime {
     await this.input.transcriptStore.appendEvent(runtimeError);
 
     await this.completeRuntimeTask(sessionId, taskId, "failed");
+  }
+
+  private async tryBuildToolRecoveryContinuation(input: {
+    sessionId: string;
+    taskId: string;
+    originalRequest: string;
+    nextPrompt: string;
+    previousToolResult?: RuntimeToolResult;
+    continuationBudget: AutoContinuationBudgetState;
+    recoveryKind: string;
+  }) {
+    const targetPath = resolveContinuationTargetFromPromptOrContext(
+      input.originalRequest,
+      input.nextPrompt,
+      input.previousToolResult
+    );
+
+    await this.recordContinuationPendingCheckpoint({
+      sessionId: input.sessionId,
+      taskId: input.taskId,
+      originalRequest: input.originalRequest,
+      nextPrompt: input.nextPrompt,
+      previousToolResult: input.previousToolResult
+    });
+
+    if (
+      !targetPath
+      || !shouldAutoContinueCurrentTask(input.originalRequest, targetPath)
+      || !shouldConsumeAutoContinuationBudget(
+        input.continuationBudget,
+        targetPath,
+        MAX_AUTO_TOOL_RECOVERY_CONTINUATIONS_PER_TARGET,
+        MAX_AUTO_TOOL_RECOVERY_CONTINUATIONS_TOTAL
+      )
+    ) {
+      return undefined;
+    }
+
+    return buildToolRecoveryAutoContinuationPrompt({
+      originalRequest: input.originalRequest,
+      nextPrompt: input.nextPrompt,
+      previousToolResult: input.previousToolResult,
+      recoveryKind: input.recoveryKind
+    });
   }
 
   private async recordStepLimitPendingCheckpoint(input: {
@@ -1448,9 +1445,7 @@ export class AgentRuntime {
       nextDeferredAssistantStageSignature = signature;
     }
 
-    const shouldEmitDeferredDelta = !isDeferredStage;
-
-    if (!input.messageWasEmitted && shouldEmitDeferredDelta && input.messageText.trim().length > 0) {
+    if (!input.messageWasEmitted && input.messageText.trim().length > 0) {
       const nextEvent = createAssistantDeltaEvent({
         sessionId: input.sessionId,
         taskId: input.taskId,
@@ -1580,6 +1575,7 @@ export class AgentRuntime {
     sessionId: string;
     taskId: string;
     content: string;
+    originalRequest: string;
     preferredLanguage: PreferredReplyLanguage;
     suppressMessageEmission: boolean;
     signal: AbortSignal;
@@ -1592,7 +1588,8 @@ export class AgentRuntime {
     this.input.bus.emit(startedEvent);
 
     const historyEvents = await this.input.transcriptStore.readEventsBySession(input.sessionId);
-    const currentTaskExecutionGuidance = buildCurrentTaskExecutionGuidance(input.content);
+    // Keep task-level completion requirements present across every continuation pass.
+    const currentTaskExecutionGuidance = buildCurrentTaskExecutionGuidance(input.originalRequest);
     const contextMessages = [
       {
         role: "system" as const,
@@ -1612,7 +1609,7 @@ export class AgentRuntime {
     let visibleMessageEmitted = false;
     let pendingPrefix = "";
     const deferVisibleEmission = input.content.startsWith("Original user request:")
-      || looksLikeActionableTaskRequest(input.content);
+      || looksLikeActionableTaskRequest(input.originalRequest);
 
     for await (const chunk of this.input.provider.streamResponse({
       content: input.content,
@@ -1645,7 +1642,7 @@ export class AgentRuntime {
       }
 
       if (mode === "message") {
-        const sanitizedPendingMessage = sanitizeAssistantMessageForRuntime(input.content, pendingPrefix);
+        const sanitizedPendingMessage = sanitizeAssistantMessageForRuntime(input.originalRequest, pendingPrefix);
 
         if (
           !input.suppressMessageEmission
@@ -1676,7 +1673,7 @@ export class AgentRuntime {
     }
 
     if (streamedVisible) {
-      const sanitizedMessage = sanitizeAssistantMessageForRuntime(input.content, buffer);
+      const sanitizedMessage = sanitizeAssistantMessageForRuntime(input.originalRequest, buffer);
       return {
         kind: "message" as const,
         messageText: sanitizedMessage,
@@ -1694,7 +1691,7 @@ export class AgentRuntime {
         };
       }
 
-      const sanitizedMessage = sanitizeAssistantMessageForRuntime(input.content, buffer);
+      const sanitizedMessage = sanitizeAssistantMessageForRuntime(input.originalRequest, buffer);
 
       if (!input.suppressMessageEmission && sanitizedMessage.trim().length > 0) {
         const nextEvent = createAssistantDeltaEvent({
@@ -2135,6 +2132,12 @@ function hasTaskApprovalGrant(
       && (knownPaths.get(taskId)?.has(normalizeApprovalPath(targetPath)) ?? false);
   }
 
+  const shellCommand = getShellApprovalCommand(tool, input);
+
+  if (shellCommand) {
+    return grantSet.has(`shell:${shellCommand}`);
+  }
+
   return false;
 }
 
@@ -2148,6 +2151,14 @@ function grantTaskApproval(
   const targetPath = getWorkspaceWritePath(tool, input);
 
   if (!targetPath) {
+    const shellCommand = getShellApprovalCommand(tool, input);
+
+    if (shellCommand) {
+      const grantSet = grants.get(taskId) ?? new Set<string>();
+      grantSet.add(`shell:${shellCommand}`);
+      grants.set(taskId, grantSet);
+    }
+
     return;
   }
 
@@ -2164,6 +2175,16 @@ function getWorkspaceWritePath(tool: ToolImplementation, input: unknown) {
 
   return "path" in input && typeof input.path === "string"
     ? input.path
+    : undefined;
+}
+
+function getShellApprovalCommand(tool: ToolImplementation, input: unknown) {
+  if (tool.name !== "shell" || !input || typeof input !== "object") {
+    return undefined;
+  }
+
+  return "command" in input && typeof input.command === "string"
+    ? input.command.trim()
     : undefined;
 }
 
@@ -4844,17 +4865,22 @@ function classifyRunnableFollowUp(content: string): RunnableFollowUp | undefined
 }
 
 function isResumeFollowUp(content: string) {
-  const normalized = content.trim();
+  const normalized = content.trim().replace(/[，。!！?？]+$/u, "").trim();
 
   if (!normalized || normalized.startsWith("/")) {
     return false;
   }
 
-  if (normalized.length > 24) {
+  if (normalized.length > 32) {
     return false;
   }
 
-  return /^(还能继续吗|能继续吗|继续吗|还能接着做吗|能接着做吗|接着来|接着做|继续做|继续搞|继续弄|继续干)$/iu.test(normalized);
+  if (/^(还能继续吗|能继续吗|继续吗|还能接着做吗|能接着做吗|接着来|接着做|继续做|继续搞|继续弄|继续干)$/iu.test(normalized)) {
+    return true;
+  }
+
+  return /^(?:(?:那就|(?:那)?你(?:就)?|就|请|麻烦你)?(?:(?:按(?:照)?|照)(?:你(?:的)?|原)?计划)?\s*)?(?:继续|接着)(?:来|做|搞|弄|干|处理|推进|往下(?:做|处理|推进)?)?(?:吧|吗)?$/iu.test(normalized)
+    || /^(?:please\s+)?(?:keep going|carry on|continue working)$/iu.test(normalized);
 }
 
 function isAffirmativeFollowUp(content: string) {
@@ -5521,7 +5547,17 @@ function buildCurrentTaskExecutionGuidance(originalRequest: string) {
     return undefined;
   }
 
-  const firstExplicitMutationTarget = extractExplicitRequestedMutationTargets(taskContent)[0];
+  const explicitMutationTargets = extractExplicitRequestedMutationTargets(taskContent);
+  const verificationCommand = extractVerificationCommandFromTaskRequest(taskContent);
+  const completionContract = [
+    explicitMutationTargets.length >= 2
+      ? `Completion contract: complete every requested mutation target before answering (${explicitMutationTargets.join(", ")}).`
+      : "",
+    verificationCommand
+      ? `Completion contract: run ${verificationCommand} after the relevant changes before answering.`
+      : ""
+  ].filter(Boolean);
+  const firstExplicitMutationTarget = explicitMutationTargets[0];
   const firstExplicitFileTarget = extractExplicitFileTargets(taskContent)[0];
   const preferredStartingFile = firstExplicitMutationTarget ?? firstExplicitFileTarget;
 
@@ -5530,6 +5566,7 @@ function buildCurrentTaskExecutionGuidance(originalRequest: string) {
       "Current task execution guidance:",
       "The request already names a concrete file target.",
       `Preferred starting file target: ${preferredStartingFile}`,
+      ...completionContract,
       "Do not start with a workspace-wide listing or unrelated project scan before reading or editing that target, unless the path is ambiguous or missing."
     ].join("\n");
   }
@@ -5556,6 +5593,7 @@ function buildCurrentTaskExecutionGuidance(originalRequest: string) {
     "Current task execution guidance:",
     "The request already names a concrete project target.",
     `Preferred starting project entry: ${preferredProjectEntry}`,
+    ...completionContract,
     "Do not start with a workspace-wide listing or unrelated project scan before reading that project entry, unless the path is ambiguous or missing.",
     "If that entry is only a thin manifest, continue into the likely implementation file instead of stopping there."
   ].join("\n");
@@ -7890,7 +7928,8 @@ function extractPendingTargetPathFromContinuationPrompt(content: string) {
   const patterns = [
     /\bPending next step target:\s*([^\n]+)/i,
     /\bLikely target file:\s*([A-Za-z0-9_./-]+\.(?:tsx|json|mjs|cjs|ejs|html|css|js|ts|txt|md|csv))/i,
-    /\bRecent editable working file:\s*([A-Za-z0-9_./-]+\.(?:tsx|json|mjs|cjs|ejs|html|css|js|ts|txt|md|csv))/i
+    /\bRecent editable working file:\s*([A-Za-z0-9_./-]+\.(?:tsx|json|mjs|cjs|ejs|html|css|js|ts|txt|md|csv))/i,
+    /\bWorking file anchor:\s*([A-Za-z0-9_./-]+\.(?:tsx|json|mjs|cjs|ejs|html|css|js|ts|txt|md|csv))/i
   ];
 
   for (const pattern of patterns) {
@@ -8138,52 +8177,6 @@ function shouldAutoContinueCurrentTask(
     || looksLikeSequentialFileInspectionTask(taskContent)
     || looksLikeProjectInspectionRequest(taskContent)
     || looksLikeWholeProjectInspectionRequest(taskContent);
-}
-
-function shouldAutoContinueAfterToolRecovery(
-  originalRequest: string,
-  nextPrompt: string,
-  previousToolResult?: {
-    toolName: string;
-    summary: string;
-    rawOutput?: string;
-    errorMessage?: string;
-  }
-) {
-  const pendingTargetPath = resolveContinuationTargetFromPromptOrContext(
-    originalRequest,
-    nextPrompt,
-    previousToolResult
-  );
-
-  if (!pendingTargetPath) {
-    return false;
-  }
-
-  return shouldAutoContinueCurrentTask(originalRequest, pendingTargetPath);
-}
-
-function shouldAutoContinueAfterRepeatedStall(
-  originalRequest: string,
-  nextPrompt: string,
-  previousToolResult?: {
-    toolName: string;
-    summary: string;
-    rawOutput?: string;
-    errorMessage?: string;
-  }
-) {
-  const pendingTargetPath = resolveContinuationTargetFromPromptOrContext(
-    originalRequest,
-    nextPrompt,
-    previousToolResult
-  );
-
-  if (!pendingTargetPath) {
-    return false;
-  }
-
-  return shouldAutoContinueCurrentTask(originalRequest, pendingTargetPath);
 }
 
 function looksLikePathScopedCompletionForMultiTargetRequest(
