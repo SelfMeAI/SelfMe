@@ -48,6 +48,7 @@ const MAX_REPEATED_IDENTICAL_ASSISTANT_MESSAGES = 2;
 const MAX_MALFORMED_TOOL_CALL_RETRIES = 1;
 const MAX_UNKNOWN_TOOL_RETRIES = 1;
 const MAX_INVALID_TOOL_INPUT_RETRIES = 1;
+const DEFAULT_ASSISTANT_PASS_TIMEOUT_MS = 90_000;
 const TOOL_CALL_OPEN = "<tool_call>";
 const TOOL_CALL_CLOSE = "</tool_call>";
 const TOOL_CALL_DENIED_PROMPT = "The requested tool action was denied by the user. Continue without that action. If you can still help, answer directly. If another tool is needed, return exactly one tool call block.";
@@ -141,6 +142,7 @@ export class AgentRuntime {
   private readonly taskOriginalRequests = new Map<string, string>();
   private readonly taskKnownPaths = new Map<string, Set<string>>();
   private readonly taskLatestEditablePaths = new Map<string, string>();
+  private readonly assistantPassTimeoutMs: number;
   private activeRun?: ActiveRunState;
   private readonly pendingUserTurns = new Map<string, AbortController>();
 
@@ -152,8 +154,11 @@ export class AgentRuntime {
       session: SessionRecord;
       transcriptStore: TranscriptStore;
       logStore: LogStore;
+      assistantPassTimeoutMs?: number;
     }
-  ) {}
+  ) {
+    this.assistantPassTimeoutMs = normalizeAssistantPassTimeout(input.assistantPassTimeoutMs);
+  }
 
   async start() {
     this.emitBusyState(this.input.session.sessionId, false, "idle");
@@ -674,6 +679,10 @@ export class AgentRuntime {
       let toolStepCount = 0;
 
       while (true) {
+        if (activeRun.controller.signal.aborted) {
+          throw createAbortError();
+        }
+
         if (assistantPassCount === maxAssistantPasses) {
           const pendingTargetPath = extractPendingTargetPathFromContinuationPrompt(nextPrompt)
             ?? derivePendingTargetPathFromContinuationContext({
@@ -1489,11 +1498,10 @@ export class AgentRuntime {
       && shouldTightenTerminalCompletionInsteadOfExtraTool(input.originalRequest, input.previousToolResult)
     ) {
       return {
-        kind: "continue",
-        nextPrompt: buildCompletionTighteningPrompt(
+        kind: "completed",
+        directAnswer: buildDirectTerminalCompletionAnswer(
           input.originalRequest,
-          renderAssistantToolCallForPrompt(input.toolCall),
-          withWorkingFileAnchor(input.previousToolResult, workingFileAnchor),
+          input.previousToolResult,
           input.preferredLanguage
         ),
         repeatedToolResultCount: input.previousRepeatedToolResultCount,
@@ -1610,66 +1618,100 @@ export class AgentRuntime {
     let pendingPrefix = "";
     const deferVisibleEmission = input.content.startsWith("Original user request:")
       || looksLikeActionableTaskRequest(input.originalRequest);
+    const passTimeoutController = new AbortController();
+    const passSignal = AbortSignal.any([input.signal, passTimeoutController.signal]);
+    let passTimedOut = false;
+    const passTimeout = setTimeout(() => {
+      passTimedOut = true;
+      passTimeoutController.abort();
+    }, this.assistantPassTimeoutMs);
 
-    for await (const chunk of this.input.provider.streamResponse({
+    const streamIterator = this.input.provider.streamResponse({
       content: input.content,
       contextMessages,
-      signal: input.signal
-    })) {
-      buffer += chunk.delta;
+      signal: passSignal
+    })[Symbol.asyncIterator]();
 
-      if (streamedVisible) {
-        if (input.suppressMessageEmission || deferVisibleEmission) {
-          continue;
+    try {
+      while (true) {
+        const next = await awaitProviderStreamNext(streamIterator, passSignal);
+
+        if (next.done) {
+          break;
         }
 
-        const nextEvent = createAssistantDeltaEvent({
-          sessionId: input.sessionId,
-          taskId: input.taskId,
-          delta: chunk.delta
-        });
-        this.input.bus.emit(nextEvent);
-        await this.input.transcriptStore.appendEvent(nextEvent);
-        visibleMessageEmitted = true;
-        continue;
-      }
+        const chunk = next.value;
+        buffer += chunk.delta;
 
-      pendingPrefix += chunk.delta;
-      const mode = classifyAssistantBuffer(pendingPrefix);
+        if (streamedVisible) {
+          if (input.suppressMessageEmission || deferVisibleEmission) {
+            continue;
+          }
 
-      if (mode === "tool") {
-        continue;
-      }
-
-      if (mode === "message") {
-        const sanitizedPendingMessage = sanitizeAssistantMessageForRuntime(input.originalRequest, pendingPrefix);
-
-        if (
-          !input.suppressMessageEmission
-          && !deferVisibleEmission
-          && (
-            (looksLikeLowValueAcknowledgementPrefix(pendingPrefix) && sanitizedPendingMessage.trim().length === 0)
-            || looksLikePendingLowValueAcknowledgementPrefix(pendingPrefix)
-          )
-        ) {
-          continue;
-        }
-
-        streamedVisible = true;
-
-        if (!input.suppressMessageEmission && !deferVisibleEmission) {
           const nextEvent = createAssistantDeltaEvent({
             sessionId: input.sessionId,
             taskId: input.taskId,
-            delta: sanitizedPendingMessage
+            delta: chunk.delta
           });
           this.input.bus.emit(nextEvent);
           await this.input.transcriptStore.appendEvent(nextEvent);
-          visibleMessageEmitted = sanitizedPendingMessage.trim().length > 0;
+          visibleMessageEmitted = true;
+          continue;
         }
 
-        pendingPrefix = "";
+        pendingPrefix += chunk.delta;
+        const mode = classifyAssistantBuffer(pendingPrefix);
+
+        if (mode === "tool") {
+          continue;
+        }
+
+        if (mode === "message") {
+          const sanitizedPendingMessage = sanitizeAssistantMessageForRuntime(input.originalRequest, pendingPrefix);
+
+          if (
+            !input.suppressMessageEmission
+            && !deferVisibleEmission
+            && (
+              (looksLikeLowValueAcknowledgementPrefix(pendingPrefix) && sanitizedPendingMessage.trim().length === 0)
+              || looksLikePendingLowValueAcknowledgementPrefix(pendingPrefix)
+            )
+          ) {
+            continue;
+          }
+
+          streamedVisible = true;
+
+          if (!input.suppressMessageEmission && !deferVisibleEmission) {
+            const nextEvent = createAssistantDeltaEvent({
+              sessionId: input.sessionId,
+              taskId: input.taskId,
+              delta: sanitizedPendingMessage
+            });
+            this.input.bus.emit(nextEvent);
+            await this.input.transcriptStore.appendEvent(nextEvent);
+            visibleMessageEmitted = sanitizedPendingMessage.trim().length > 0;
+          }
+
+          pendingPrefix = "";
+        }
       }
+    } catch (error) {
+      if (passTimedOut) {
+        throw createAssistantPassTimeoutError(this.assistantPassTimeoutMs);
+      }
+
+      throw error;
+    } finally {
+      clearTimeout(passTimeout);
+
+      if (passSignal.aborted) {
+        closeProviderStreamIterator(streamIterator);
+      }
+    }
+
+    if (passTimedOut) {
+      throw createAssistantPassTimeoutError(this.assistantPassTimeoutMs);
     }
 
     if (streamedVisible) {
@@ -1738,6 +1780,7 @@ export class AgentRuntime {
       const decision = await this.requestApproval({
         sessionId: input.sessionId,
         taskId: toolTaskId,
+        activeTaskId: input.rootTaskId,
         tool: input.tool,
         input: input.input,
         signal: input.signal
@@ -1779,11 +1822,12 @@ export class AgentRuntime {
   private async requestApproval(input: {
     sessionId: string;
     taskId: string;
+    activeTaskId: string;
     tool: ToolImplementation;
     input: unknown;
     signal: AbortSignal;
   }) {
-    this.setActivePhase(input.taskId, "approval");
+    this.setActivePhase(input.activeTaskId, "approval");
     const approvalDescriptor = input.tool.buildApproval?.(input.input) ?? buildDefaultApprovalDescriptor(input.tool, input.input);
     const waitingApprovalTask = createTaskStateChangedEvent({
       sessionId: input.sessionId,
@@ -1806,16 +1850,26 @@ export class AgentRuntime {
       input: input.input,
       autoContinue: true
     });
-    this.setActivePendingApproval(input.taskId, approval.payload.approvalId);
+    this.setActivePendingApproval(input.activeTaskId, approval.payload.approvalId);
 
-    const decisionPromise = this.waitForApprovalResolution(approval.payload.approvalId, input.signal);
+    // Attach both outcomes before emitting approval: a synchronous stop can resolve or abort it immediately.
+    const decisionPromise = this.waitForApprovalResolution(approval.payload.approvalId, input.signal).then(
+      (decision) => ({ kind: "decision" as const, decision }),
+      (error) => ({ kind: "error" as const, error })
+    );
 
     this.input.bus.emit(waitingApprovalTask);
     this.input.bus.emit(approval);
     await this.input.transcriptStore.appendEvent(waitingApprovalTask);
     await this.input.transcriptStore.appendEvent(approval);
 
-    return await decisionPromise;
+    const result = await decisionPromise;
+
+    if (result.kind === "error") {
+      throw result.error;
+    }
+
+    return result.decision;
   }
 
   private async waitForApprovalResolution(approvalId: string, signal: AbortSignal) {
@@ -2391,6 +2445,59 @@ function createAbortError() {
   const error = new Error("Request aborted");
   error.name = "AbortError";
   return error;
+}
+
+function createAssistantPassTimeoutError(timeoutMs: number) {
+  return new Error(`Model response timed out after ${Math.ceil(timeoutMs / 1000)} seconds.`);
+}
+
+function awaitProviderStreamNext<T>(iterator: AsyncIterator<T>, signal: AbortSignal) {
+  if (signal.aborted) {
+    return Promise.reject(createAbortError()) as Promise<IteratorResult<T>>;
+  }
+
+  return new Promise<IteratorResult<T>>((resolve, reject) => {
+    let settled = false;
+    const settle = (callback: () => void) => {
+      if (settled) {
+        return;
+      }
+
+      settled = true;
+      signal.removeEventListener("abort", onAbort);
+      callback();
+    };
+    const onAbort = () => {
+      settle(() => reject(createAbortError()));
+    };
+
+    signal.addEventListener("abort", onAbort, { once: true });
+
+    Promise.resolve(iterator.next()).then(
+      (result) => settle(() => resolve(result)),
+      (error) => settle(() => reject(error))
+    );
+  });
+}
+
+function closeProviderStreamIterator(iterator: AsyncIterator<unknown>) {
+  try {
+    const closing = iterator.return?.();
+
+    if (closing) {
+      void Promise.resolve(closing).catch(() => undefined);
+    }
+  } catch {
+    // A provider cleanup failure must not hide the original stop or timeout reason.
+  }
+}
+
+function normalizeAssistantPassTimeout(timeoutMs?: number) {
+  if (!Number.isFinite(timeoutMs) || (timeoutMs ?? 0) < 10) {
+    return DEFAULT_ASSISTANT_PASS_TIMEOUT_MS;
+  }
+
+  return Math.floor(timeoutMs!);
 }
 
 function isAbortError(error: unknown) {
@@ -4158,6 +4265,17 @@ function extractVerificationCommandFromTaskRequest(content: string) {
   return commandValues.at(-1);
 }
 
+function extractRequiredFirstCommand(content: string) {
+  const taskContent = extractEmbeddedTaskContent(content);
+  const match = taskContent.match(/\b(?:first|firstly)\s+(?:run|execute)\s+`([^`]+)`/i)
+    ?? taskContent.match(/(?:先|首先)\s*(?:运行|执行)\s*`([^`]+)`/u);
+  const command = match?.[1]?.trim();
+
+  return command && /^(?:node|pnpm|npm|yarn|bun|deno|python|python3|sh|bash|tsx)\b/i.test(command)
+    ? command
+    : undefined;
+}
+
 function extractObservedShellOutput(rawOutput?: string) {
   if (!rawOutput) {
     return undefined;
@@ -5549,9 +5667,13 @@ function buildCurrentTaskExecutionGuidance(originalRequest: string) {
 
   const explicitMutationTargets = extractExplicitRequestedMutationTargets(taskContent);
   const verificationCommand = extractVerificationCommandFromTaskRequest(taskContent);
+  const requiredFirstCommand = extractRequiredFirstCommand(taskContent);
   const completionContract = [
     explicitMutationTargets.length >= 2
       ? `Completion contract: complete every requested mutation target before answering (${explicitMutationTargets.join(", ")}).`
+      : "",
+    explicitMutationTargets.length >= 2
+      ? "Work tracking: after a requested target has a successful edit, treat that requested change as complete. Do not reapply the same change unless a later tool result shows the target is still incorrect."
       : "",
     verificationCommand
       ? `Completion contract: run ${verificationCommand} after the relevant changes before answering.`
@@ -5560,6 +5682,16 @@ function buildCurrentTaskExecutionGuidance(originalRequest: string) {
   const firstExplicitMutationTarget = explicitMutationTargets[0];
   const firstExplicitFileTarget = extractExplicitFileTargets(taskContent)[0];
   const preferredStartingFile = firstExplicitMutationTarget ?? firstExplicitFileTarget;
+
+  if (requiredFirstCommand) {
+    return [
+      "Current task execution guidance:",
+      `Required first tool action: run ${requiredFirstCommand} as one standalone shell command.`,
+      "Do not combine that command with file inspection, another shell command, or a mutation.",
+      "Use its actual result before choosing the next read, edit, or write step.",
+      ...completionContract
+    ].join("\n");
+  }
 
   if (preferredStartingFile) {
     return [

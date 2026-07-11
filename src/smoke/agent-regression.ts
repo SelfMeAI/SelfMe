@@ -4360,6 +4360,9 @@ async function main() {
 
   assert.ok(approvals.length >= 2, "expected at least two approvals to be auto-approved");
 
+  await verifyFirstCommandGuidanceUsesStandaloneShell();
+  await verifyVerifiedMutationAutoFinalizesWithoutExtraTool();
+  await verifyAssistantPassTimeoutFailsPromptly();
   await verifyRepeatedIdenticalToolResultsAbortAsStalled();
   await verifyResumeAfterRepeatedFilesStall();
   await verifyRepeatedProjectListingStallAutoContinuesIntoProjectEntry();
@@ -4783,6 +4786,237 @@ async function runAgentTask(input: {
     toolSummaries,
     runtimeErrors
   };
+}
+
+async function verifyAssistantPassTimeoutFailsPromptly() {
+  const root = await mkdtemp(join(tmpdir(), "selfme-agent-assistant-pass-timeout-"));
+  const workspace = join(root, "workspace");
+  const transcriptPath = join(root, "transcript.jsonl");
+  const logsPath = join(root, "logs.jsonl");
+  await mkdir(workspace, { recursive: true });
+
+  class HangingProvider implements ProviderClient {
+    readonly name = "hanging-provider";
+
+    async *streamResponse(_input: ProviderStreamInput): AsyncIterable<ProviderStreamChunk> {
+      // Deliberately ignore AbortSignal: runtime must still enforce its own deadline.
+      await new Promise<void>(() => undefined);
+      yield { delta: "This response should never arrive." };
+    }
+  }
+
+  const bus = new EventBus();
+  const transcriptStore = new TranscriptStore(transcriptPath);
+  const logStore = new LogStore(logsPath);
+  await transcriptStore.ensureInitialized();
+  await logStore.ensureInitialized();
+
+  const session = createDefaultSessionRecord(workspace, VERSION);
+  session.model = "regression-stub";
+  const runtime = new AgentRuntime({
+    bus,
+    provider: new HangingProvider(),
+    tools: new InMemoryToolRegistry(),
+    session,
+    transcriptStore,
+    logStore,
+    assistantPassTimeoutMs: 30
+  });
+  await runtime.start();
+
+  console.log("task: fail a stalled model pass with a clear timeout instead of hanging");
+  const startedAt = Date.now();
+  const result = await runAgentTask({
+    bus,
+    transcriptStore,
+    sessionId: session.sessionId,
+    prompt: "Read greet.mjs.",
+    expectedState: "failed"
+  });
+
+  assert.ok(Date.now() - startedAt < 1_000, "short configured model-pass timeout should fail promptly");
+  assert.ok(
+    result.runtimeErrors.some((message) => message.includes("Model response timed out after 1 seconds.")),
+    "stalled model pass should report a clear timeout instead of an ambiguous cancellation"
+  );
+}
+
+async function verifyFirstCommandGuidanceUsesStandaloneShell() {
+  const root = await mkdtemp(join(tmpdir(), "selfme-agent-first-command-guidance-"));
+  const workspace = join(root, "workspace");
+  const transcriptPath = join(root, "transcript.jsonl");
+  const logsPath = join(root, "logs.jsonl");
+  const originalPrompt = "First run `node preflight.mjs` to observe its output. Then tell me whether it prints exactly `ready`.";
+  await mkdir(workspace, { recursive: true });
+  await writeFile(join(workspace, "preflight.mjs"), 'console.log("ready");\n', "utf8");
+
+  class FirstCommandProvider implements ProviderClient {
+    readonly name = "first-command-provider";
+
+    async *streamResponse(input: ProviderStreamInput): AsyncIterable<ProviderStreamChunk> {
+      if (input.content === originalPrompt) {
+        const guidance = input.contextMessages
+          ?.find((message) => message.role === "system" && message.content.includes("Required first tool action:"))
+          ?.content;
+
+        assert.match(guidance ?? "", /Required first tool action: run node preflight\.mjs as one standalone shell command\./);
+        assert.match(guidance ?? "", /Do not combine that command with file inspection, another shell command, or a mutation\./);
+        yield {
+          delta: toolCall("shell", {
+            command: "node preflight.mjs"
+          })
+        };
+        return;
+      }
+
+      throw new Error(`First-command provider received an unexpected continuation:\n${input.content}`);
+    }
+  }
+
+  const bus = new EventBus();
+  const transcriptStore = new TranscriptStore(transcriptPath);
+  const logStore = new LogStore(logsPath);
+  await transcriptStore.ensureInitialized();
+  await logStore.ensureInitialized();
+
+  const session = createDefaultSessionRecord(workspace, VERSION);
+  session.model = "regression-stub";
+  const runtime = new AgentRuntime({
+    bus,
+    provider: new FirstCommandProvider(),
+    tools: new InMemoryToolRegistry(),
+    session,
+    transcriptStore,
+    logStore
+  });
+  await runtime.start();
+
+  console.log("task: honor an explicit first command as a standalone shell action");
+  const result = await runAgentTask({
+    bus,
+    transcriptStore,
+    sessionId: session.sessionId,
+    prompt: originalPrompt
+  });
+
+  assert.deepEqual(result.toolSummaries, ["node preflight.mjs · completed"]);
+  assert.match(result.assistantText, /ready/i);
+}
+
+async function verifyVerifiedMutationAutoFinalizesWithoutExtraTool() {
+  const root = await mkdtemp(join(tmpdir(), "selfme-agent-verified-mutation-completion-"));
+  const workspace = join(root, "workspace");
+  const transcriptPath = join(root, "transcript.jsonl");
+  const logsPath = join(root, "logs.jsonl");
+  const originalPrompt = "Update multi-output-report.mjs so it prints exactly `SelfMe:ready`, then run `node verify-multi-output.mjs` and keep working until it prints exactly `ready`.";
+  await mkdir(workspace, { recursive: true });
+  await writeFile(join(workspace, "multi-output-report.mjs"), 'console.log("pending");\n', "utf8");
+  await writeFile(
+    join(workspace, "verify-multi-output.mjs"),
+    [
+      'import { readFileSync } from "node:fs";',
+      'const report = readFileSync(new URL("./multi-output-report.mjs", import.meta.url), "utf8");',
+      'if (!report.includes("SelfMe:ready")) {',
+      '  console.error("not-ready");',
+      '  process.exit(1);',
+      '}',
+      'console.log("ready");',
+      ''
+    ].join("\n"),
+    "utf8"
+  );
+
+  class VerifiedMutationProvider implements ProviderClient {
+    readonly name = "verified-mutation-provider";
+
+    async *streamResponse(input: ProviderStreamInput): AsyncIterable<ProviderStreamChunk> {
+      if (input.content === originalPrompt) {
+        yield {
+          delta: toolCall("edit", {
+            path: "multi-output-report.mjs",
+            startLine: 1,
+            endLine: 1,
+            replacement: 'console.log("SelfMe:ready");'
+          })
+        };
+        return;
+      }
+
+      if (input.content.startsWith(`Original user request: ${originalPrompt}`)) {
+        const toolName = extractLine(input.content, "Tool:") ?? extractLine(input.content, "Latest tool:");
+        const summary = extractLine(input.content, "Summary:") ?? extractLine(input.content, "Latest summary:") ?? "";
+
+        if (toolName === "edit" && summary.startsWith("multi-output-report.mjs:")) {
+          yield {
+            delta: toolCall("shell", {
+              command: "node verify-multi-output.mjs"
+            })
+          };
+          return;
+        }
+
+        if (toolName === "shell" && summary.startsWith("node verify-multi-output.mjs · completed")) {
+          yield {
+            delta: toolCall("files", {
+              path: "verify-multi-output.mjs",
+              startLine: 1,
+              endLine: 20
+            })
+          };
+          return;
+        }
+      }
+
+      throw new Error(`Verified mutation provider received an unexpected continuation:\n${input.content}`);
+    }
+  }
+
+  const bus = new EventBus();
+  const transcriptStore = new TranscriptStore(transcriptPath);
+  const logStore = new LogStore(logsPath);
+  await transcriptStore.ensureInitialized();
+  await logStore.ensureInitialized();
+
+  const session = createDefaultSessionRecord(workspace, VERSION);
+  session.model = "regression-stub";
+  const runtime = new AgentRuntime({
+    bus,
+    provider: new VerifiedMutationProvider(),
+    tools: new InMemoryToolRegistry(),
+    session,
+    transcriptStore,
+    logStore
+  });
+  await runtime.start();
+
+  const offApproval = bus.on("approval.requested", (event) => {
+    bus.emit(createTerminalCommandInvokedEvent({
+      sessionId: event.sessionId,
+      content: `/approve ${event.payload.approvalId}`
+    }));
+  });
+
+  try {
+    console.log("task: auto-finalize a verified mutation task without asking the model for another tool step");
+    const result = await runAgentTask({
+      bus,
+      transcriptStore,
+      sessionId: session.sessionId,
+      prompt: originalPrompt
+    });
+
+    assert.match(result.assistantText, /ready/i);
+    assert.deepEqual(
+      result.toolSummaries,
+      [
+        "multi-output-report.mjs:1-1 · updated (1 -> 1 lines)",
+        "node verify-multi-output.mjs · completed"
+      ],
+      "a passing exact verifier should complete the mutation task before any extra model tool call"
+    );
+  } finally {
+    offApproval();
+  }
 }
 
 async function verifyRepeatedIdenticalToolResultsAbortAsStalled() {
@@ -41012,6 +41246,10 @@ async function verifyPendingNextStepContextGuidesMultiTargetContinuation() {
           systemContext,
           /Completion contract: complete every requested mutation target before answering \(node-todo\/app\.js, node-todo\/views\/index\.ejs\)\./
         );
+        assert.match(
+          systemContext,
+          /Work tracking: after a requested target has a successful edit, treat that requested change as complete\./
+        );
         yield {
           delta: toolCall("edit", {
             path: "node-todo/app.js",
@@ -41032,6 +41270,10 @@ async function verifyPendingNextStepContextGuidesMultiTargetContinuation() {
             assert.match(
               systemContext,
               /Completion contract: complete every requested mutation target before answering \(node-todo\/app\.js, node-todo\/views\/index\.ejs\)\./
+            );
+            assert.match(
+              systemContext,
+              /Work tracking: after a requested target has a successful edit, treat that requested change as complete\./
             );
             const recentTaskState = input.contextMessages?.find((message) =>
               message.role === "system" && message.content.includes("Recent task state:")

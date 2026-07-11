@@ -228,6 +228,28 @@ Run the runtime regression suite:
 pnpm smoke:agent
 ```
 
+Run all local smoke suites:
+
+```bash
+pnpm smoke
+```
+
+Validate the real-task evaluation suite without calling a provider:
+
+```bash
+pnpm eval:agent -- --dry-run
+```
+
+Run the evaluator against an explicitly configured provider and write a report:
+
+```bash
+SELFME_EVAL_PROTOCOL=openai \
+SELFME_EVAL_BASE_URL=https://your-provider.example/v1 \
+SELFME_EVAL_API_KEY=your-key \
+SELFME_EVAL_MODEL=your-model \
+pnpm eval:agent -- --report /tmp/selfme-eval-report.json
+```
+
 The working rule for this repository is strict:
 
 1. find a real runtime failure
@@ -243,6 +265,7 @@ The goal is not to patch isolated demos. The goal is to harden the runtime.
 src/
   app/        bootstrap, lifecycle, event bus
   editor/     input buffer, multiline composition, cursor handling
+  eval/       isolated real-task definitions, runner, and evaluator regressions
   providers/  `local` / openai / anthropic integrations
   runtime/    agent runtime, task intent, context, compaction, commands
   smoke/      regression coverage for runtime behavior
@@ -254,7 +277,7 @@ src/
 
 ## Current Checkpoint
 
-As of `2026-07-07`, the npm package name has been finalized as `selfme`, and the install path is:
+As of `2026-07-11`, the npm package name has been finalized as `selfme`, and the install path is:
 
 ```bash
 npm i -g selfme
@@ -265,6 +288,11 @@ The current development checkpoint is:
 - npm CLI packaging is in place and published under `selfme`
 - terminal UX baseline is established enough to keep runtime work moving
 - `pnpm smoke:agent` is green on the current continuation / resume / multi-step baseline
+- `pnpm smoke` now also runs the isolated evaluator regression suite; the current seven-task real suite is opt-in through explicit environment variables and always writes only to a temporary fixture workspace
+- the initial real-provider baseline covers exact single-file repair, cross-file config repair, and verified two-file project completion; a real `edit -> stop -> 继续 -> verify` project task has also passed twice without repeating completed edits
+- an assistant pass now has a bounded deadline and fails clearly if a provider stream ignores cancellation, instead of leaving the terminal indefinitely in a working state
+- real multi-file work is now evaluated with an explicit approval budget and tool-name trace; after an exact verification succeeds, a model attempt to issue another tool call is closed by the runtime instead of reopening a completed task
+- real-provider repeats now also cover failure-first repair and interruption while an edit approval is pending; the latter must cancel the first approval, resume on `继续`, request approval again, and then verify the result
 - the smoke baseline now includes one terminal-loop end-to-end path, so a typed multi-step prompt can flow through `stdin -> editor -> terminal loop -> runtime` and still continue past a stage summary into the remaining file edit within the same task
 - that terminal-loop coverage now also includes `Esc` stop plus a typed `还能继续吗` resume, and the resumed turn is expected to jump straight back to the pending verification command instead of reopening earlier project files
 - terminal-loop smoke now also covers the narrower `tool-step handoff -> Esc stop -> 还能继续吗` path for command-only verification, so even after a task is first cut off at step budget and already narrowed to pending `npm test`, a later resume still has to jump straight back to that command

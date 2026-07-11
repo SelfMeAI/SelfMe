@@ -283,8 +283,27 @@
           <li><strong>收敛回归：</strong>覆盖 explanation-only、blocking question、broad proposal、completion-sounding reply、repeated result 等中途偏航。</li>
           <li><strong>项目级回归：</strong>覆盖“看看项目”“帮我优化”“直接重写/直接改造”这类宽任务，从 listing 到工作文件再到多文件改造。</li>
           <li><strong>终态回归：</strong>覆盖结果收紧、禁止旧失败复盘、禁止无关旧文件漂移、禁止成功后额外工具调用。</li>
+          <li><strong>真实任务评测：</strong>维护 <code>src/eval/</code> 中隔离 fixture、最终文件断言、真实命令断言、审批预算、工具名轨迹和面向用户的结果说明断言；artifact 失败是硬失败，工具数超出建议预算只记录质量警告，避免模型随机性污染正确性结论。<code>pnpm eval:agent -- --dry-run</code> 只校验定义，不调用 provider，真实运行必须显式提供 <code>SELFME_EVAL_PROTOCOL</code>、<code>SELFME_EVAL_BASE_URL</code>、<code>SELFME_EVAL_API_KEY</code>、<code>SELFME_EVAL_MODEL</code>，可用 <code>--report</code> 输出 JSON 结果。</li>
+          <li><strong>中断恢复评测：</strong>中断必须发生在真实工具结果之后，再通过新的用户回合发送“继续”；评测既断言最终 artifact，也断言确实启动了 resumed turn，避免把“取消后没再开工”误判为恢复成功。</li>
           <li><strong>人工手测：</strong>只验证 smoke 不容易表达的真实交互质感，不替代 smoke。</li>
         </ul>
+      </section>
+
+      <section class="section">
+        <div class="tag now">Evidence</div>
+        <h2>当前真实基线</h2>
+        <ul>
+          <li>2026-07-11：真实 provider 已通过单文件精确修复、跨文件配置修复和两文件项目完成三个基础任务。它们是隔离 fixture 的结果，不等于泛化能力结论。</li>
+          <li>两次真实 <code>edit -&gt; stop -&gt; 继续 -&gt; verify</code> 项目任务均通过：首个文件编辑后中断，恢复回合继续第二个文件并最终得到 <code>ready</code>；两次均为 5 次工具调用、无 runtime error。</li>
+          <li>真实评测曾暴露 provider 在后续流式响应中停滞的情况。运行时现在为每次模型响应设置有界超时，并且即使 provider 忽略 <code>AbortSignal</code>，也必须以清晰失败结束，不能无限停在 working。</li>
+          <li>多文件单审批预算任务已在修复后连续两次通过：一次走 <code>files -&gt; write -&gt; edit -&gt; shell</code>，7 次工具调用、1 次审批；另一次用一条已审批的 <code>shell</code> 完成变更和验证，2 次工具调用、1 次审批。报告现保留工具名，不能把两条路径混为同一种能力证据。</li>
+          <li>该任务曾在验证已经输出 <code>ready</code> 后继续读文件和重复验证，直到 120 秒总超时。运行时现在识别请求中的最终精确输出契约，并在模型试图对已验证任务再次调用工具时直接收口；修复后两次都正常完成。</li>
+          <li>“先失败再修复”任务在修复后连续两次通过：独立执行失败验证、读取配置和工作文件、一次编辑审批、重新验证 <code>ready</code>，分别为 5 次工具调用、约 24 秒和 18 秒。显式首步命令现在会作为独立 shell action，不能与读取或修改混合。</li>
+          <li>“审批等待中中断再继续”任务连续两次通过：第一次 <code>edit</code> 审批被取消，<code>继续</code> 后重新发起审批并完成编辑与验证，分别约 19 秒和 16 秒，均为 2 次审批、无 runtime error。</li>
+        </ul>
+        <div class="rule">
+          这些结果只证明当前任务族已获得真实证据。下一步仍要扩大任务分布和中断位置，不能因为少数通过样本就宣布 agent 已成熟。
+        </div>
       </section>
 
       <section class="section">
@@ -314,13 +333,14 @@
         <div class="tag next">Immediate</div>
         <h2>当前主线</h2>
         <ol>
-          <li>继续补 <strong>T2 / T4 / T5</strong> 相关回归，也就是连续执行、近似成功继续收口、项目级宽任务不跑偏。</li>
-          <li>把“看看项目 -> 直接改造/重写 -> 明确同意 -> 必须真正开工”做成项目级 smoke，而不是只测单文件修复。</li>
-          <li>补多待审批并存时的自然语言审批边界，确保不会误批错误对象。</li>
+          <li>增加真实长项目任务，要求跨越普通工具步数切片、保持工作文件锚点，并在最终验证前不中途改成计划或总结。</li>
+          <li>把上下文压缩接入真实任务评测：在较长任务中压缩后仍要保留未完成文件、审批状态、失败线索和验证命令。</li>
+          <li>继续用不同中断位置、工具路径和重复运行确认恢复稳定性；一次通过不能成为行为承诺。</li>
+          <li>只把真实失败归入 <strong>T2 / T4 / T5 / T7 / T8</strong> 后再补 runtime 回归，避免按单次 transcript 穷举提示词。</li>
         </ol>
       </section>
 
-      <p class="footer">SelfMe Agent Eval Strategy · Updated 2026-06-23</p>
+      <p class="footer">SelfMe Agent Eval Strategy · Updated 2026-07-11</p>
     </main>
   </body>
 </html>
